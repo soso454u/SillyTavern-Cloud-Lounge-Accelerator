@@ -52,6 +52,10 @@ test('builds a standalone worker with the current version and safety handlers', 
     assert.match(source, /allowThirdPartyAssets/);
     assert.match(source, /request\.headers\.has\('range'\)/);
     assert.match(source, /MAX_RESOURCE_BYTES = 16 \* 1024 \* 1024/);
+    assert.match(source, /fetchAndCache\(request, 'force-cache'\)/);
+    assert.match(source, /async function cacheFirst/);
+    assert.match(source, /writesSinceTrim >= 50/);
+    assert.doesNotMatch(source, /staleWhileRevalidate/);
     assert.match(source, /STATIC_EXACT_PATHS/);
     assert.doesNotMatch(source, /importScripts\s*\(/);
 });

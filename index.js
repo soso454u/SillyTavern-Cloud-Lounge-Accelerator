@@ -3,7 +3,7 @@ import { saveSettingsDebounced } from '../../../../script.js';
 
 const MODULE_ID = 'cloud_lounge_accelerator';
 const PLUGIN_ID = 'cloud-lounge-accelerator';
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const API_BASE = `/api/plugins/${PLUGIN_ID}`;
 const ROOT_ID = 'cloud-lounge-accelerator-settings';
 const LOG_PREFIX = '[Cloud Lounge Accelerator]';
@@ -113,7 +113,7 @@ function collectWarmUrls() {
 }
 
 async function warmCurrentInstall() {
-    const result = await sendWorkerMessage('WARM', { urls: collectWarmUrls() }, 45000);
+    const result = await sendWorkerMessage('WARM', { urls: collectWarmUrls() }, 120000);
     await refreshPanel();
     return result;
 }
@@ -139,7 +139,7 @@ function getNavigationMetrics() {
         ttfb: Math.max(0, navigation.responseStart - navigation.requestStart),
         interactive: Math.max(0, navigation.domInteractive - navigation.startTime),
         transferred: navigation.transferSize || 0,
-        protocol: navigation.nextHopProtocol || '未知',
+        protocol: navigation.nextHopProtocol || (navigator.serviceWorker?.controller ? 'Service Worker' : '未知'),
     };
 }
 
@@ -176,6 +176,7 @@ async function getRuntimeState() {
 
 async function refreshPanel() {
     const status = await getRuntimeState().catch(error => ({ state: 'error', label: error.message }));
+    if (status.state === 'active') lastError = '';
     setStatus(lastError || status.label, lastError ? 'error' : status.state);
     const toggle = document.querySelector(`#${ROOT_ID} [data-cloud-enabled]`);
     if (toggle) toggle.checked = settings.enabled && status.state !== 'conflict';

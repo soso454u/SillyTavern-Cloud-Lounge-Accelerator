@@ -1,4 +1,4 @@
-export const ACCELERATOR_VERSION = '1.0.0';
+export const ACCELERATOR_VERSION = '1.0.1';
 export const CACHE_PREFIX = 'cloud-lounge-static-';
 
 export const STATIC_EXACT_PATHS = Object.freeze([
@@ -66,6 +66,7 @@ const PRIVATE_PATH_PREFIXES = ${JSON.stringify(PRIVATE_PATH_PREFIXES)};
 let runtimeHits = 0;
 let runtimeMisses = 0;
 let runtimeWrites = 0;
+let writesSinceTrim = 0;
 let allowThirdPartyAssets = false;
 
 ${policyFunction}
@@ -98,36 +99,39 @@ async function trimCache(cache) {
     }
 }
 
-async function fetchFresh(request) {
-    const freshRequest = new Request(request, { cache: 'no-cache' });
-    const response = await fetch(freshRequest);
+async function fetchAndCache(request, cacheMode = 'no-cache') {
+    const networkRequest = new Request(request, { cache: cacheMode });
+    const response = await fetch(networkRequest);
     const contentLength = Number(response.headers.get('content-length') || 0);
     const withinSizeLimit = !Number.isFinite(contentLength) || contentLength <= 0 || contentLength <= MAX_RESOURCE_BYTES;
     if (response.ok && response.type === 'basic' && withinSizeLimit) {
         const cache = await caches.open(CACHE_NAME);
         await cache.put(request, response.clone());
         runtimeWrites += 1;
-        void trimCache(cache);
+        writesSinceTrim += 1;
+        if (writesSinceTrim >= 50) {
+            writesSinceTrim = 0;
+            await trimCache(cache);
+        }
     }
     return response;
 }
 
-async function staleWhileRevalidate(request, event) {
+async function cacheFirst(request) {
     const cache = await caches.open(CACHE_NAME);
     const cached = await cache.match(request);
     if (cached) {
         runtimeHits += 1;
-        event.waitUntil(fetchFresh(request).catch(() => undefined));
         return cached;
     }
     runtimeMisses += 1;
-    return fetchFresh(request);
+    return fetchAndCache(request);
 }
 
 async function handlePotentialStaticRequest(event) {
     await configReady;
     if (!isEligibleRequest(event.request)) return fetch(event.request);
-    return staleWhileRevalidate(event.request, event);
+    return cacheFirst(event.request);
 }
 
 async function handleNavigation(request) {
@@ -142,6 +146,7 @@ async function handleNavigation(request) {
     const signatureRequest = new Request(new URL(NAVIGATION_SIGNATURE_KEY, self.location.origin));
     const previous = await metadata.match(signatureRequest);
     const previousSignature = previous ? await previous.text() : '';
+    if (previousSignature === signature) return response;
     if (previousSignature && previousSignature !== signature) {
         await caches.delete(CACHE_NAME);
     }
@@ -186,7 +191,9 @@ async function warmUrls(urls) {
                 const request = new Request(new URL(rawUrl, self.location.origin), { credentials: 'same-origin' });
                 const cache = await caches.open(CACHE_NAME);
                 if (await cache.match(request)) continue;
-                await fetchFresh(request);
+                // These URLs were loaded by the current page already. Reuse the
+                // browser HTTP cache instead of downloading all of them again.
+                await fetchAndCache(request, 'force-cache');
                 warmed += 1;
             } catch {
                 // A failed optional asset must not abort the remaining warm-up.
@@ -194,6 +201,7 @@ async function warmUrls(urls) {
         }
     });
     await Promise.all(workers);
+    await trimCache(await caches.open(CACHE_NAME));
     return warmed;
 }
 
