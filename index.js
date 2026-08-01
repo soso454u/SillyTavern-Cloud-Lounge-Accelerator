@@ -11,6 +11,7 @@ import { CacheController } from './modules/cache-controller.js';
 import { ChatOptimizer } from './modules/chat-optimizer.js';
 import { InteractionOptimizer } from './modules/interaction-optimizer.js';
 import { RegexRefreshController } from './modules/regex-refresh.js';
+import { RegexUiAdapter } from './modules/regex-ui-adapter.js';
 import { repairAccelerator } from './modules/repair.js';
 import { StartupOptimizer } from './modules/startup-optimizer.js';
 import { getLegacyChatTruncation, normalizeSettings } from './settings.js';
@@ -32,6 +33,7 @@ let cacheController = null;
 let startupOptimizer = null;
 let chatOptimizer = null;
 let regexRefresh = null;
+let regexUiAdapter = null;
 let interactionOptimizer = null;
 let scheduler = null;
 const runtimeStatus = { chat: '自动', interaction: '自动' };
@@ -81,10 +83,13 @@ function ensureModules() {
     });
     regexRefresh = new RegexRefreshController({
         chat,
+        eventSource,
+        eventTypes: event_types,
         reloadCurrentChat,
         scheduler,
         onStatus: updateRuntimeStatus,
     });
+    regexUiAdapter = new RegexUiAdapter({ onSaved: () => regexRefresh.noteChange() });
     interactionOptimizer = new InteractionOptimizer({ onStatus: updateRuntimeStatus });
 }
 
@@ -104,7 +109,10 @@ async function startEnabledModules({ skipCache = false, forceCache = false } = {
     }
     if (settings.interactionOptimization) await interactionOptimizer.start();
     if (!appReady) return;
-    if (settings.chatOptimization) await regexRefresh.start();
+    if (settings.chatOptimization) {
+        const refreshReady = await regexRefresh.start();
+        if (refreshReady) await regexUiAdapter.start();
+    }
     if (settings.pageAcceleration && !skipCache) {
         try {
             await cacheController.startAfterLogin({ force: forceCache });
@@ -118,6 +126,7 @@ async function startEnabledModules({ skipCache = false, forceCache = false } = {
 
 async function stopOptimizationModules({ stopCache = false } = {}) {
     startupOptimizer?.stop();
+    regexUiAdapter?.stop();
     regexRefresh?.stop();
     await chatOptimizer?.stop();
     interactionOptimizer?.stop();
@@ -148,8 +157,12 @@ async function changeSetting(key, enabled) {
             startupOptimizer.start({ startupFeatures: settings.pageAcceleration });
             await chatStart;
             legacyTruncation = null;
-            if (appReady) await regexRefresh.start();
+            if (appReady) {
+                const refreshReady = await regexRefresh.start();
+                if (refreshReady) await regexUiAdapter.start();
+            }
         } else {
+            regexUiAdapter.stop();
             regexRefresh.stop();
             await chatOptimizer.stop();
             if (!settings.pageAcceleration) startupOptimizer.stop();
@@ -229,6 +242,7 @@ async function cleanup() {
     startupOptimizer = null;
     chatOptimizer = null;
     regexRefresh = null;
+    regexUiAdapter = null;
     interactionOptimizer = null;
 }
 

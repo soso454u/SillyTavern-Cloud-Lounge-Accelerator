@@ -1,4 +1,4 @@
-export const CLIENT_VERSION = '2.0.1';
+export const CLIENT_VERSION = '2.0.2';
 
 export const CHAT_REQUEST_PATHS = Object.freeze(['/api/chats/get', '/api/chats/group/get']);
 

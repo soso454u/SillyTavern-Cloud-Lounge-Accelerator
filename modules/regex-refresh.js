@@ -1,4 +1,5 @@
 import { estimateRenderComplexity, getAdaptiveBatchSize, prioritizeMessageDescriptors } from '../client-core.js';
+import { createRegexSnapshot, diffRegexSnapshots, planRegexRefresh } from './regex-impact.js';
 
 const CONTROL_SELECTOR = [
     '.regex_editor',
@@ -9,17 +10,25 @@ const CONTROL_SELECTOR = [
     '#regex_preset_apply',
 ].join(',');
 
+const LOG_PREFIX = '[Cloud Lounge Accelerator]';
+
 export class RegexRefreshController {
-    constructor({ chat, reloadCurrentChat, scheduler, onStatus = null }) {
+    constructor({ chat, eventSource, eventTypes, reloadCurrentChat, scheduler, onStatus = null }) {
         this.chat = chat;
+        this.eventSource = eventSource;
+        this.eventTypes = eventTypes;
         this.reloadCurrentChat = reloadCurrentChat;
         this.scheduler = scheduler;
         this.onStatus = onStatus;
         this.started = false;
-        this.signature = '';
+        this.engine = null;
+        this.compileRegex = null;
+        this.snapshot = null;
+        this.pendingBaseSnapshot = null;
         this.editorWasOpen = false;
         this.dirty = false;
         this.refreshing = false;
+        this.refreshCheckRequested = false;
         this.checkTimer = null;
         this.flushTimer = null;
         this.observer = null;
@@ -27,52 +36,86 @@ export class RegexRefreshController {
     }
 
     async start() {
-        if (this.started) return;
+        if (this.started) return true;
+        try {
+            const [engine, utils] = await Promise.all([
+                import('../../../regex/engine.js'),
+                import('../../../../utils.js'),
+            ]);
+            this.engine = engine;
+            this.compileRegex = utils.regexFromString;
+            this.snapshot = this.readSnapshot();
+        } catch (error) {
+            console.debug(LOG_PREFIX, '正则影响分析不可用', error);
+            return false;
+        }
         this.started = true;
         document.addEventListener('input', this.onInteraction, false);
         document.addEventListener('change', this.onInteraction, false);
         document.addEventListener('click', this.onInteraction, false);
         document.addEventListener('cla-regex-dirty', this.onInteraction, false);
-        this.observer = new MutationObserver(() => {
+        this.observer = new MutationObserver(records => {
             const editorOpen = Boolean(document.querySelector('.regex_editor'));
-            if (this.editorWasOpen && !editorOpen) this.queueSignatureCheck(250);
+            if (this.editorWasOpen && !editorOpen) this.queueSnapshotCheck(250, false);
             this.editorWasOpen = editorOpen;
+            const listChanged = records.some(record => {
+                const target = record.target instanceof Element ? record.target : record.target.parentElement;
+                return Boolean(target?.closest?.('#saved_regex_scripts, #saved_scoped_scripts, #saved_preset_scripts'));
+            });
+            if (listChanged) this.queueSnapshotCheck(350, false);
         });
         this.observer.observe(document.body, { childList: true, subtree: true });
-        this.signature = await this.readSignature().catch(() => '');
+        return true;
+    }
+
+    readSnapshot() {
+        const types = Object.values(this.engine?.SCRIPT_TYPES || {});
+        const globalType = this.engine?.SCRIPT_TYPES?.GLOBAL;
+        return createRegexSnapshot(types.map(type => {
+            const scripts = this.engine.getScriptsByType?.(type) || [];
+            const allowed = this.engine.getScriptsByType?.(type, { allowedOnly: true }) || [];
+            return {
+                type,
+                scripts,
+                scopeActive: type === globalType || scripts.length === 0 || allowed.length > 0,
+            };
+        }));
     }
 
     onInteraction(event) {
         const target = event.target instanceof Element ? event.target : null;
-        if (event.type === 'cla-regex-dirty' || target?.closest(CONTROL_SELECTOR)) this.queueSignatureCheck();
+        if (event.type === 'cla-regex-dirty') {
+            this.queueSnapshotCheck(60, true);
+        } else if (target?.closest(CONTROL_SELECTOR)) {
+            this.queueSnapshotCheck(450, false);
+        }
     }
 
-    queueSignatureCheck(delay = 400) {
+    noteChange() {
+        this.queueSnapshotCheck(20, true);
+    }
+
+    queueSnapshotCheck(delay = 400, requestRefresh = false) {
+        this.refreshCheckRequested ||= requestRefresh;
         clearTimeout(this.checkTimer);
-        this.checkTimer = setTimeout(async () => {
+        this.checkTimer = setTimeout(() => {
             if (!this.started) return;
             try {
-                const next = await this.readSignature();
-                if (next && this.signature && next !== this.signature) this.markDirty();
-                this.signature = next;
+                const next = this.readSnapshot();
+                const refreshRequested = this.refreshCheckRequested;
+                this.refreshCheckRequested = false;
+                if (refreshRequested) {
+                    this.pendingBaseSnapshot ||= this.snapshot;
+                    this.snapshot = next;
+                    const difference = diffRegexSnapshots(this.pendingBaseSnapshot, this.snapshot);
+                    if (difference.changes.length || difference.reordered || difference.scopeChanged || difference.moved) this.markDirty();
+                } else {
+                    this.snapshot = next;
+                }
             } catch (error) {
-                console.debug('[Cloud Lounge Accelerator] 正则状态检查失败', error);
+                console.debug(LOG_PREFIX, '正则状态检查失败', error);
             }
         }, delay);
-    }
-
-    async readSignature() {
-        const engine = await import('../../../regex/engine.js');
-        const types = Object.values(engine.SCRIPT_TYPES || {});
-        return JSON.stringify(types.map(type => (engine.getScriptsByType?.(type) || []).map(script => ({
-            id: script.id,
-            disabled: script.disabled,
-            findRegex: script.findRegex,
-            replaceString: script.replaceString,
-            placement: script.placement,
-            markdownOnly: script.markdownOnly,
-            promptOnly: script.promptOnly,
-        }))));
     }
 
     markDirty() {
@@ -83,13 +126,17 @@ export class RegexRefreshController {
                 this.markDirty();
                 return;
             }
-            void this.reapply({ automatic: true });
+            const before = this.pendingBaseSnapshot;
+            const after = this.snapshot;
+            this.pendingBaseSnapshot = null;
+            void this.reapply({ automatic: true, before, after });
         }, 650);
     }
 
-    getDescriptors() {
+    getDescriptors(targetIds = null) {
         const root = document.querySelector('#chat');
         if (!root) return [];
+        const targets = targetIds ? new Set(targetIds) : null;
         const rootRect = root.getBoundingClientRect();
         const elements = [...root.querySelectorAll('.mes[mesid]')];
         const recent = new Set(elements.slice(-5));
@@ -107,10 +154,20 @@ export class RegexRefreshController {
                     richElements: element.querySelectorAll('details, table, pre, svg, iframe').length,
                 }),
             };
-        }).filter(item => Number.isInteger(item.messageId) && this.chat[item.messageId]));
+        }).filter(item => Number.isInteger(item.messageId)
+            && this.chat[item.messageId]
+            && (!targets || targets.has(item.messageId))));
     }
 
-    async reapply({ automatic = false } = {}) {
+    getMessageSources(descriptors) {
+        return descriptors.map(({ messageId }) => ({
+            id: messageId,
+            text: String(this.chat[messageId]?.mes || ''),
+            placement: this.chat[messageId]?.is_user ? 1 : 2,
+        }));
+    }
+
+    async reapply({ automatic = false, before = null, after = null } = {}) {
         if (this.refreshing) return { skipped: true };
         this.refreshing = true;
         this.dirty = false;
@@ -118,11 +175,25 @@ export class RegexRefreshController {
         const startedAt = performance.now();
         let completed = 0;
         let failed = 0;
+        let plan = { mode: 'all', targetIds: [], reason: 'manual' };
         try {
             const api = await import('../../../../../script.js');
             if (typeof api.updateMessageBlock !== 'function') throw new Error('当前酒馆不支持局部消息刷新');
-            const descriptors = this.getDescriptors();
-            if (!descriptors.length) return { completed: 0, failed: 0, elapsedMs: 0 };
+            const displayed = this.getDescriptors();
+            if (!displayed.length) return { completed: 0, failed: 0, elapsedMs: 0, mode: 'none' };
+            if (automatic) {
+                plan = planRegexRefresh({
+                    before,
+                    after,
+                    messages: this.getMessageSources(displayed),
+                    compileRegex: this.compileRegex,
+                });
+                if (plan.mode === 'none' || (plan.mode === 'matched' && !plan.targetIds.length)) {
+                    this.onStatus?.('chat', '自动');
+                    return { completed: 0, failed: 0, elapsedMs: performance.now() - startedAt, ...plan };
+                }
+            }
+            const descriptors = plan.mode === 'matched' ? this.getDescriptors(plan.targetIds) : displayed;
             let batch = 4;
             let previousFrameMs = 0;
             for (let cursor = 0; cursor < descriptors.length;) {
@@ -137,9 +208,12 @@ export class RegexRefreshController {
                     const descriptor = descriptors[cursor];
                     try {
                         api.updateMessageBlock(descriptor.messageId, this.chat[descriptor.messageId], { rerenderMessage: true });
+                        if (this.eventTypes?.MESSAGE_UPDATED) {
+                            await this.eventSource?.emit?.(this.eventTypes.MESSAGE_UPDATED, descriptor.messageId);
+                        }
                     } catch (error) {
                         failed += 1;
-                        console.debug('[Cloud Lounge Accelerator] 局部刷新消息失败', descriptor.messageId, error);
+                        console.debug(LOG_PREFIX, '局部刷新消息失败', descriptor.messageId, error);
                     }
                     completed += 1;
                     if (performance.now() - frameStart >= 11) {
@@ -151,13 +225,13 @@ export class RegexRefreshController {
             }
             if (failed > 0) await this.reloadCurrentChat();
             this.onStatus?.('chat', failed ? '已回退完整刷新' : '自动');
-            return { completed, failed, elapsedMs: performance.now() - startedAt, automatic };
+            return { completed, failed, elapsedMs: performance.now() - startedAt, automatic, ...plan };
         } catch (error) {
             if (error?.name === 'AbortError') return { cancelled: true, completed, failed };
             await this.reloadCurrentChat();
             this.onStatus?.('chat', '已回退完整刷新');
             if (!automatic) throw error;
-            return { completed, failed: failed + 1, fallback: true, elapsedMs: performance.now() - startedAt };
+            return { completed, failed: failed + 1, fallback: true, elapsedMs: performance.now() - startedAt, ...plan };
         } finally {
             this.refreshing = false;
             if (this.started && this.dirty) this.markDirty();
@@ -178,5 +252,9 @@ export class RegexRefreshController {
         this.checkTimer = null;
         this.flushTimer = null;
         this.dirty = false;
+        this.snapshot = null;
+        this.pendingBaseSnapshot = null;
+        this.engine = null;
+        this.compileRegex = null;
     }
 }
