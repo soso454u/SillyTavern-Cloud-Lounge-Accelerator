@@ -27,7 +27,33 @@ SillyTavern 当前的初始化会依次等待 CSRF token、语言包、扩展发
 https://github.com/soso454u/SillyTavern-Cloud-Lounge-Accelerator
 ```
 
-### 1. 安装服务端部分
+### 推荐：一键自动安装
+
+一键安装器会自动完成“服务端插件 + 全局 UI 扩展 + `enableServerPlugins: true` + 配置备份”。**使用一键安装后，不需要再去酒馆里粘贴 Git 地址安装 UI。**
+
+1Panel Xterminal、Linux 或 macOS：先 `cd` 进入 SillyTavern 根目录，然后执行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/soso454u/SillyTavern-Cloud-Lounge-Accelerator/main/scripts/install.sh | bash
+```
+
+如果当前不在 SillyTavern 根目录，可直接传入路径：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/soso454u/SillyTavern-Cloud-Lounge-Accelerator/main/scripts/install.sh | bash -s -- /path/to/SillyTavern
+```
+
+Windows PowerShell：
+
+```powershell
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/soso454u/SillyTavern-Cloud-Lounge-Accelerator/main/scripts/install.ps1'))) -SillyTavernRoot 'C:\SillyTavern'
+```
+
+安装完成后仍需要手动重启 SillyTavern；安装器不会猜测并操作你的 1Panel 容器名称。完整的路径判断、Windows 命令、更新、卸载和排错请看：[完整使用教程](docs/完整使用教程.md)。
+
+### 手动安装（不使用脚本时）
+
+#### 1. 安装服务端部分
 
 在 1Panel 中进入 SillyTavern 容器终端（或服务器终端），先进入 SillyTavern 根目录，再执行：
 
@@ -61,7 +87,7 @@ SillyTavern/
 └─ config.yaml
 ```
 
-在 SillyTavern 根目录的 `config.yaml` 中，**唯一必须手动确认的配置**是：
+手动安装时，在 SillyTavern 根目录的 `config.yaml` 中，**唯一必须手动确认的配置**是：
 
 ```yaml
 enableServerPlugins: true
@@ -89,7 +115,7 @@ cacheBuster:
 Initializing plugin from .../cloud-lounge-accelerator/server/index.js
 ```
 
-### 2. 安装 UI 扩展
+#### 2. 安装 UI 扩展
 
 推荐直接通过 SillyTavern 安装：
 
@@ -109,7 +135,7 @@ data/<用户>/extensions/cloud-lounge-accelerator/
 
 全局扩展的具体目录可能随 SillyTavern 版本和容器映射不同，通过酒馆内的 Git 安装界面最稳妥。
 
-### 3. 确认 HTTPS
+#### 3. 确认 HTTPS
 
 Service Worker 只能在 HTTPS 或 localhost 上工作。云酒馆必须用正常域名证书访问，不要用裸 `http://IP:端口`。
 
