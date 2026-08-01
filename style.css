@@ -175,6 +175,49 @@
     background: color-mix(in srgb, #ef6262 16%, transparent);
 }
 
+.cla-task-progress {
+    display: grid;
+    grid-template-columns: minmax(8rem, 1fr) auto auto;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.55rem 0.65rem;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 16%, transparent);
+    border-radius: 0.55rem;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 6%, transparent);
+}
+
+.cla-task-progress[hidden] {
+    display: none;
+}
+
+.cla-task-progress progress {
+    width: 100%;
+    min-width: 0;
+    accent-color: #67b7ff;
+}
+
+.cla-task-progress[data-state='done'] progress {
+    accent-color: #49d17d;
+}
+
+.cla-task-progress[data-state='warning'] progress,
+.cla-task-progress[data-state='cancelled'] progress {
+    accent-color: #f8c14c;
+}
+
+.cla-task-progress[data-state='error'] progress {
+    accent-color: #ef6262;
+}
+
+.cla-task-progress small {
+    white-space: nowrap;
+}
+
+.cla-task-cancel {
+    min-width: auto;
+    padding-inline: 0.65rem;
+}
+
 /* Opt-in paint/layout containment for regex-heavy, highly decorated chats.
    Keep the active last message fully visible so streaming and message-height
    measurements continue to behave like stock SillyTavern. */
@@ -197,5 +240,15 @@ body.cla-render-boost-active #chat .mes:focus-within {
 
     .cla-actions {
         padding-bottom: 0.35rem;
+    }
+
+    .cla-task-progress {
+        grid-template-columns: 1fr auto;
+    }
+
+    .cla-task-progress small {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        white-space: normal;
     }
 }

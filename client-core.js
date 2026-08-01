@@ -1,4 +1,4 @@
-export const CLIENT_VERSION = '1.3.0';
+export const CLIENT_VERSION = '1.3.1';
 
 export const CHAT_LIMIT_CHOICES = Object.freeze([10, 15, 20, 30, 50]);
 export const CHAT_REQUEST_PATHS = Object.freeze(['/api/chats/get', '/api/chats/group/get']);
@@ -73,6 +73,40 @@ export function shouldActivateRenderBoost({ enabled, messageCount, threshold }) 
     return enabled === true
         && Number.isFinite(messageCount)
         && messageCount >= clampInteger(threshold, DEFAULT_SETTINGS.renderBoostThreshold, 1, 500);
+}
+
+export function estimateRenderComplexity({ domNodes = 0, htmlLength = 0, richElements = 0 } = {}) {
+    const nodes = Math.max(0, Number(domNodes) || 0);
+    const markup = Math.max(0, Number(htmlLength) || 0);
+    const rich = Math.max(0, Number(richElements) || 0);
+    return Math.round(nodes + markup / 120 + rich * 45);
+}
+
+export function getAdaptiveBatchSize({ complexity = 0, previousFrameMs = 0, currentBatch = 4 } = {}) {
+    const score = Math.max(0, Number(complexity) || 0);
+    const frameMs = Math.max(0, Number(previousFrameMs) || 0);
+    let batch = clampInteger(currentBatch, 4, 1, 6);
+
+    if (score >= 900) batch = 1;
+    else if (score >= 450) batch = Math.min(batch, 2);
+    else if (score >= 220) batch = Math.min(batch, 3);
+
+    if (frameMs > 20) batch = Math.max(1, batch - 2);
+    else if (frameMs > 13) batch = Math.max(1, batch - 1);
+    else if (frameMs > 0 && frameMs < 7 && score < 450) batch = Math.min(6, batch + 1);
+
+    return batch;
+}
+
+export function prioritizeMessageDescriptors(descriptors) {
+    return [...(Array.isArray(descriptors) ? descriptors : [])]
+        .map((descriptor, order) => ({ descriptor, order }))
+        .sort((left, right) => {
+            const leftPriority = left.descriptor?.visible ? 0 : (left.descriptor?.recent ? 1 : 2);
+            const rightPriority = right.descriptor?.visible ? 0 : (right.descriptor?.recent ? 1 : 2);
+            return leftPriority - rightPriority || left.order - right.order;
+        })
+        .map(item => item.descriptor);
 }
 
 export function isChatRequestEntry(entry) {

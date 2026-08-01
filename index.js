@@ -10,8 +10,11 @@ import {
     CHAT_LIMIT_CHOICES,
     CLIENT_VERSION,
     buildChatDiagnostics,
+    estimateRenderComplexity,
     findLatestChatRequest,
+    getAdaptiveBatchSize,
     normalizeSettings,
+    prioritizeMessageDescriptors,
     shouldActivateRenderBoost,
     shouldAutoWarm,
 } from './client-core.js';
@@ -59,6 +62,16 @@ let serverState = 'unknown';
 let serverHealth = null;
 let lastWorkerStats = null;
 let lastError = '';
+let frontendTaskGeneration = 0;
+let chatUiApiPromise = null;
+let frontendTaskState = {
+    status: 'idle',
+    kind: '',
+    label: '',
+    completed: 0,
+    total: 0,
+    elapsedMs: 0,
+};
 
 function loadSettings() {
     settings = normalizeSettings(extension_settings[MODULE_ID]);
@@ -284,14 +297,267 @@ async function removeLocalAcceleration() {
     return { cancelled: false };
 }
 
+function nextAnimationFrame() {
+    return new Promise(resolve => requestAnimationFrame(resolve));
+}
+
+function renderFrontendTaskState() {
+    const container = document.querySelector(`#${ROOT_ID} [data-cloud-task]`);
+    if (!container) return;
+    const progress = container.querySelector('progress');
+    const label = container.querySelector('[data-cloud-task-label]');
+    const cancel = container.querySelector('[data-cloud-task-cancel]');
+    const { status, completed, total, elapsedMs } = frontendTaskState;
+    container.hidden = status === 'idle';
+    container.dataset.state = status;
+    if (progress) {
+        progress.max = Math.max(1, total);
+        progress.value = Math.min(completed, Math.max(1, total));
+    }
+    if (label) {
+        const count = total > 0 ? ` · ${completed} / ${total}` : '';
+        const elapsed = elapsedMs > 0 ? ` · ${formatMilliseconds(elapsedMs)}` : '';
+        label.textContent = `${frontendTaskState.label}${count}${elapsed}`;
+    }
+    if (cancel) cancel.hidden = status !== 'running';
+}
+
+function setFrontendTaskState(taskId, patch) {
+    if (taskId !== frontendTaskGeneration) return false;
+    frontendTaskState = { ...frontendTaskState, ...patch };
+    renderFrontendTaskState();
+    return true;
+}
+
+function beginFrontendTask(label, total = 0, kind = '') {
+    frontendTaskGeneration += 1;
+    frontendTaskState = {
+        status: 'running',
+        kind,
+        label,
+        completed: 0,
+        total,
+        elapsedMs: 0,
+    };
+    renderFrontendTaskState();
+    return frontendTaskGeneration;
+}
+
+function cancelFrontendTask(label = '任务已取消') {
+    frontendTaskGeneration += 1;
+    frontendTaskState = {
+        ...frontendTaskState,
+        status: 'cancelled',
+        label,
+    };
+    renderFrontendTaskState();
+}
+
+async function getChatUiApi() {
+    chatUiApiPromise ||= import('../../../../script.js');
+    return chatUiApiPromise;
+}
+
+function getMessageRenderDetails() {
+    const chatElement = document.querySelector('#chat');
+    if (!chatElement) return [];
+    const chatRect = chatElement.getBoundingClientRect();
+    const elements = [...chatElement.querySelectorAll('.mes[mesid]')];
+    const recentIds = new Set(elements.slice(-5).map(element => Number(element.getAttribute('mesid'))));
+
+    const descriptors = elements.map(element => {
+        const messageId = Number(element.getAttribute('mesid'));
+        const rect = element.getBoundingClientRect();
+        const domNodes = element.querySelectorAll('*').length;
+        const htmlLength = element.innerHTML.length;
+        const richElements = element.querySelectorAll('details, table, pre, svg, iframe').length;
+        return {
+            element,
+            messageId,
+            visible: rect.bottom >= chatRect.top && rect.top <= chatRect.bottom,
+            recent: recentIds.has(messageId),
+            complexity: estimateRenderComplexity({ domNodes, htmlLength, richElements }),
+        };
+    }).filter(item => Number.isInteger(item.messageId) && chat[item.messageId]);
+
+    return prioritizeMessageDescriptors(descriptors);
+}
+
 async function reapplyRegexRendering() {
+    const api = await getChatUiApi();
+    if (typeof api.updateMessageBlock !== 'function') {
+        throw new Error('当前 SillyTavern 版本不支持局部消息刷新，请使用“完整重载（高级）”');
+    }
+
+    const descriptors = getMessageRenderDetails();
+    if (!descriptors.length) throw new Error('当前聊天没有可刷新的已显示消息');
+
+    const taskId = beginFrontendTask('正在原地重新应用正则', descriptors.length, 'regexRefresh');
+    const startedAt = performance.now();
+    let completed = 0;
+    let failed = 0;
+    let batchSize = 4;
+    let previousFrameMs = 0;
+
+    while (completed < descriptors.length) {
+        await nextAnimationFrame();
+        if (taskId !== frontendTaskGeneration) return { cancelled: true, completed, total: descriptors.length };
+
+        const frameStartedAt = performance.now();
+        const nextComplexity = descriptors[completed]?.complexity || 0;
+        batchSize = getAdaptiveBatchSize({
+            complexity: nextComplexity,
+            previousFrameMs,
+            currentBatch: batchSize,
+        });
+        let processedThisFrame = 0;
+
+        while (completed < descriptors.length && processedThisFrame < batchSize) {
+            if (taskId !== frontendTaskGeneration) return { cancelled: true, completed, total: descriptors.length };
+            const descriptor = descriptors[completed];
+            try {
+                api.updateMessageBlock(descriptor.messageId, chat[descriptor.messageId], { rerenderMessage: true });
+            } catch (error) {
+                failed += 1;
+                console.warn(LOG_PREFIX, `局部刷新消息 ${descriptor.messageId} 失败`, error);
+            }
+            completed += 1;
+            processedThisFrame += 1;
+            if (performance.now() - frameStartedAt >= 12) break;
+        }
+
+        previousFrameMs = performance.now() - frameStartedAt;
+        setFrontendTaskState(taskId, {
+            completed,
+            elapsedMs: performance.now() - startedAt,
+        });
+    }
+
+    const elapsedMs = performance.now() - startedAt;
+    setFrontendTaskState(taskId, {
+        status: failed ? 'warning' : 'done',
+        label: failed ? `局部刷新完成，${failed} 条失败` : '局部刷新完成',
+        completed,
+        elapsedMs,
+    });
+    scheduleChatDiagnosticCapture();
+    return { cancelled: false, completed, failed, total: descriptors.length, elapsedMs };
+}
+
+async function fullReloadRegexRendering() {
+    const confirmed = globalThis.confirm(
+        '完整重载会清空正则编译缓存、重新请求并渲染当前聊天，期间可能出现短暂空白。\n\n仅在局部刷新无效或正则状态异常时使用。是否继续？',
+    );
+    if (!confirmed) return { cancelled: true };
+
+    const taskId = beginFrontendTask('正在完整重载聊天', 0, 'fullReload');
+    const startedAt = performance.now();
     try {
         const regexEngine = await import('../../regex/engine.js');
         regexEngine.RegexProvider?.instance?.clear?.();
     } catch (error) {
         console.debug(LOG_PREFIX, '当前版本没有可清理的正则编译缓存', error);
     }
-    await reloadCurrentChat();
+    if (taskId !== frontendTaskGeneration) return { cancelled: true };
+    try {
+        await reloadCurrentChat();
+    } catch (error) {
+        setFrontendTaskState(taskId, {
+            status: 'error',
+            label: error instanceof Error ? error.message : String(error),
+            elapsedMs: performance.now() - startedAt,
+        });
+        throw error;
+    }
+    const elapsedMs = performance.now() - startedAt;
+    setFrontendTaskState(taskId, {
+        status: 'done',
+        label: '完整重载完成',
+        completed: 1,
+        total: 1,
+        elapsedMs,
+    });
+    return { cancelled: false, elapsedMs };
+}
+
+function getVisibleMessageAnchor() {
+    const chatElement = document.querySelector('#chat');
+    if (!chatElement) return null;
+    const chatRect = chatElement.getBoundingClientRect();
+    const element = [...chatElement.querySelectorAll('.mes[mesid]')].find(message => {
+        const rect = message.getBoundingClientRect();
+        return rect.bottom >= chatRect.top && rect.top <= chatRect.bottom;
+    });
+    if (!element) return null;
+    const messageId = Number(element.getAttribute('mesid'));
+    return Number.isInteger(messageId) ? { messageId, top: element.getBoundingClientRect().top } : null;
+}
+
+async function loadEarlierMessagesSmoothly(limit = 10) {
+    const api = await getChatUiApi();
+    if (typeof api.showMoreMessages !== 'function') {
+        throw new Error('当前 SillyTavern 版本不支持官方“显示更多”接口');
+    }
+    const first = document.querySelector('#chat .mes[mesid]');
+    const firstId = Number(first?.getAttribute('mesid'));
+    if (!Number.isInteger(firstId) || firstId <= 0) return { empty: true, cancelled: false, completed: 0 };
+
+    const total = Math.min(limit, firstId);
+    const taskId = beginFrontendTask('正在平滑加载更早消息', total, 'loadEarlier');
+    const startedAt = performance.now();
+    let completed = 0;
+    let batchSize = settings?.heavyBeautifyMode ? 1 : 2;
+    let previousFrameMs = 0;
+
+    while (completed < total) {
+        if (taskId !== frontendTaskGeneration) return { cancelled: true, completed, total };
+        const anchor = getVisibleMessageAnchor();
+        const count = Math.min(batchSize, total - completed);
+        const frameStartedAt = performance.now();
+        try {
+            await api.showMoreMessages(count);
+        } catch (error) {
+            setFrontendTaskState(taskId, {
+                status: 'error',
+                label: error instanceof Error ? error.message : String(error),
+                elapsedMs: performance.now() - startedAt,
+            });
+            throw error;
+        }
+        await nextAnimationFrame();
+        if (taskId !== frontendTaskGeneration) return { cancelled: true, completed, total };
+
+        if (anchor) {
+            const anchorElement = document.querySelector(`#chat .mes[mesid="${anchor.messageId}"]`);
+            const chatElement = document.querySelector('#chat');
+            if (anchorElement && chatElement) {
+                const delta = anchorElement.getBoundingClientRect().top - anchor.top;
+                if (Math.abs(delta) > 0.5) chatElement.scrollTop += delta;
+            }
+        }
+
+        completed += count;
+        previousFrameMs = performance.now() - frameStartedAt;
+        batchSize = Math.min(3, getAdaptiveBatchSize({
+            complexity: getChatComplexity().renderComplexity,
+            previousFrameMs,
+            currentBatch: batchSize,
+        }));
+        setFrontendTaskState(taskId, {
+            completed,
+            elapsedMs: performance.now() - startedAt,
+        });
+    }
+
+    const elapsedMs = performance.now() - startedAt;
+    setFrontendTaskState(taskId, {
+        status: 'done',
+        label: '更早消息加载完成',
+        completed,
+        elapsedMs,
+    });
+    scheduleChatDiagnosticCapture();
+    return { empty: false, cancelled: false, completed, total, elapsedMs };
 }
 
 async function getPowerUserSettings() {
@@ -396,11 +662,23 @@ function nodeContainsMessage(node) {
 
 function getChatComplexity() {
     const chatElement = document.querySelector('#chat');
+    const domNodes = chatElement?.querySelectorAll('*').length || 0;
+    const htmlLength = chatElement?.innerHTML.length || 0;
+    const richElements = chatElement?.querySelectorAll('details, table, pre, svg, iframe').length || 0;
     return {
         displayedMessages: chatElement?.querySelectorAll('.mes').length || 0,
         totalMessages: Array.isArray(chat) ? chat.length : 0,
-        domNodes: chatElement?.querySelectorAll('*').length || 0,
+        domNodes,
+        htmlLength,
+        richElements,
+        renderComplexity: estimateRenderComplexity({ domNodes, htmlLength, richElements }),
     };
+}
+
+function formatRenderComplexity(value) {
+    if (!Number.isFinite(value)) return '—';
+    const level = value >= 1800 ? '重' : (value >= 700 ? '中' : '轻');
+    return `${level} · ${Math.round(value).toLocaleString()}`;
 }
 
 function updateChatDiagnosticFields() {
@@ -411,6 +689,7 @@ function updateChatDiagnosticFields() {
         displayedMessages: String(latestChatDiagnostics.displayedMessages),
         totalMessages: String(latestChatDiagnostics.totalMessages),
         domNodes: latestChatDiagnostics.domNodes.toLocaleString(),
+        renderComplexity: formatRenderComplexity(latestChatDiagnostics.renderComplexity),
         firstContent: formatMilliseconds(latestChatDiagnostics.firstContentMs),
         frontendWork: formatMilliseconds(latestChatDiagnostics.frontendMs),
         totalLoad: formatMilliseconds(latestChatDiagnostics.totalLoadMs),
@@ -444,7 +723,7 @@ function captureChatDiagnostics({ includeTiming = true } = {}) {
         longTasks: recentLongTasks,
     });
     latestChatDiagnostics = includeTiming || !latestChatDiagnostics
-        ? timing
+        ? { ...timing, ...complexity }
         : { ...latestChatDiagnostics, ...complexity, measuredAt: now };
     updateChatDiagnosticFields();
 }
@@ -494,7 +773,12 @@ function startChatDiagnostics() {
         }
     }
 
-    chatChangedHandler = () => scheduleChatDiagnosticCapture({ includeTiming: true });
+    chatChangedHandler = () => {
+        if (frontendTaskState.status === 'running' && frontendTaskState.kind !== 'fullReload') {
+            cancelFrontendTask('聊天已切换，任务已取消');
+        }
+        scheduleChatDiagnosticCapture({ includeTiming: true });
+    };
     eventSource.on(event_types.CHAT_CHANGED, chatChangedHandler);
     captureChatDiagnostics({ includeTiming: false });
 }
@@ -636,7 +920,11 @@ function makeMetric(label, key) {
     return item;
 }
 
-function makeButton(label, iconClass, handler, { danger = false, needsServer = false } = {}) {
+function makeButton(label, iconClass, handler, {
+    danger = false,
+    needsServer = false,
+    lockWhileRunning = true,
+} = {}) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'menu_button cla-action';
@@ -651,7 +939,7 @@ function makeButton(label, iconClass, handler, { danger = false, needsServer = f
     }
     button.append(text);
     button.addEventListener('click', async () => {
-        button.disabled = true;
+        if (lockWhileRunning) button.disabled = true;
         lastError = '';
         try {
             await handler();
@@ -659,7 +947,7 @@ function makeButton(label, iconClass, handler, { danger = false, needsServer = f
             lastError = error instanceof Error ? error.message : String(error);
             console.error(LOG_PREFIX, error);
         } finally {
-            button.disabled = false;
+            if (lockWhileRunning) button.disabled = false;
             await refreshPanel();
         }
     });
@@ -805,14 +1093,52 @@ function mountPanel() {
 
     const frontendActions = document.createElement('div');
     frontendActions.className = 'cla-actions';
-    frontendActions.append(makeButton('重新应用正则', 'fa-solid fa-wand-magic-sparkles', async () => {
-        await reapplyRegexRendering();
-        globalThis.toastr?.success?.('已重新应用正则并渲染当前聊天', '云酒馆加速器');
-    }));
+    frontendActions.append(
+        makeButton('重新应用正则', 'fa-solid fa-wand-magic-sparkles', async () => {
+            const result = await reapplyRegexRendering();
+            if (result.cancelled) return;
+            const message = result.failed
+                ? `已刷新 ${result.completed} 条，其中 ${result.failed} 条失败`
+                : `已原地刷新 ${result.completed} 条，用时 ${formatMilliseconds(result.elapsedMs)}`;
+            globalThis.toastr?.[result.failed ? 'warning' : 'success']?.(message, '云酒馆加速器');
+        }, { lockWhileRunning: false }),
+        makeButton('平滑加载更早 10 条', 'fa-solid fa-clock-rotate-left', async () => {
+            const result = await loadEarlierMessagesSmoothly(10);
+            if (result.cancelled) return;
+            if (result.empty) {
+                globalThis.toastr?.info?.('已经显示到聊天开头', '云酒馆加速器');
+                return;
+            }
+            globalThis.toastr?.success?.(`已加载更早的 ${result.completed} 条消息`, '云酒馆加速器');
+        }),
+        makeButton('完整重载（高级）', 'fa-solid fa-triangle-exclamation', async () => {
+            const result = await fullReloadRegexRendering();
+            if (!result.cancelled) {
+                globalThis.toastr?.success?.(`完整重载完成，用时 ${formatMilliseconds(result.elapsedMs)}`, '云酒馆加速器');
+            }
+        }, { danger: true }),
+    );
+
+    const taskProgress = document.createElement('div');
+    taskProgress.className = 'cla-task-progress';
+    taskProgress.dataset.cloudTask = '';
+    taskProgress.hidden = true;
+    const taskProgressBar = document.createElement('progress');
+    taskProgressBar.max = 1;
+    taskProgressBar.value = 0;
+    const taskProgressLabel = document.createElement('small');
+    taskProgressLabel.dataset.cloudTaskLabel = '';
+    const taskCancel = document.createElement('button');
+    taskCancel.type = 'button';
+    taskCancel.className = 'menu_button cla-task-cancel';
+    taskCancel.dataset.cloudTaskCancel = '';
+    taskCancel.textContent = '取消';
+    taskCancel.addEventListener('click', () => cancelFrontendTask());
+    taskProgress.append(taskProgressBar, taskProgressLabel, taskCancel);
 
     const regexNote = document.createElement('small');
     regexNote.className = 'cla-note cla-warning-note';
-    regexNote.textContent = '“重新应用正则”仅在修改正则后旧消息没有更新时使用；它会清理编译缓存并重绘当前聊天，不是日常加速按钮。';
+    regexNote.textContent = '“重新应用正则”会保留聊天页面，按视口优先分帧刷新已显示消息，默认不清缓存、不重新请求聊天；再次点击会取消旧刷新并开始新刷新。只有异常时才使用高级完整重载。';
 
     const diagnosticsTitle = makeSectionTitle('聊天加载诊断', '仅使用浏览器 Performance API 与官方聊天事件，不缓存聊天，也不接管官方渲染和滚动。');
     const chatMetrics = document.createElement('div');
@@ -823,6 +1149,7 @@ function mountPanel() {
         makeMetric('本次显示', 'displayedMessages'),
         makeMetric('聊天总数', 'totalMessages'),
         makeMetric('聊天 DOM 节点', 'domNodes'),
+        makeMetric('美化复杂度', 'renderComplexity'),
         makeMetric('首批内容出现', 'firstContent'),
         makeMetric('前端处理估算', 'frontendWork'),
         makeMetric('完整加载', 'totalLoad'),
@@ -935,6 +1262,7 @@ function mountPanel() {
         longChatSwitch.row,
         limitRow,
         frontendActions,
+        taskProgress,
         regexNote,
         diagnosticsTitle,
         chatMetrics,
@@ -950,6 +1278,7 @@ function mountPanel() {
     );
     root.append(header, body);
     host.append(root);
+    renderFrontendTaskState();
     return true;
 }
 
@@ -1021,6 +1350,16 @@ export function onUpdate() {
 function cleanupUi() {
     activated = false;
     appReadyWorkStarted = false;
+    frontendTaskGeneration += 1;
+    frontendTaskState = {
+        status: 'idle',
+        kind: '',
+        label: '',
+        completed: 0,
+        total: 0,
+        elapsedMs: 0,
+    };
+    chatUiApiPromise = null;
     cancelScheduledWarmup();
     stopRenderObserver();
     stopChatDiagnostics();
