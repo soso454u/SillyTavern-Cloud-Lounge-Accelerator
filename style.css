@@ -93,14 +93,30 @@
 
 .cla-actions {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 0.55rem;
+    max-width: 100%;
+    overflow-x: auto;
+    padding-bottom: 0.2rem;
+    scrollbar-width: thin;
 }
 
 .cla-action {
     display: inline-flex;
+    flex: 0 0 auto;
     align-items: center;
+    justify-content: center;
     gap: 0.4rem;
+    min-width: max-content;
+    white-space: nowrap;
+    word-break: keep-all;
+    writing-mode: horizontal-tb;
+}
+
+.cla-action > span {
+    display: inline-block;
+    white-space: nowrap;
+    word-break: keep-all;
 }
 
 .cla-action-danger {
@@ -117,7 +133,7 @@
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
-    .cla-actions .menu_button {
-        flex: 1 1 auto;
+    .cla-actions {
+        padding-bottom: 0.35rem;
     }
 }

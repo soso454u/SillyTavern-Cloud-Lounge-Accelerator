@@ -3,7 +3,7 @@ import { saveSettingsDebounced } from '../../../../script.js';
 
 const MODULE_ID = 'cloud_lounge_accelerator';
 const PLUGIN_ID = 'cloud-lounge-accelerator';
-const VERSION = '1.0.2';
+const VERSION = '1.0.3';
 const API_BASE = `/api/plugins/${PLUGIN_ID}`;
 const CACHE_PREFIX = 'cloud-lounge-static-';
 const ROOT_ID = 'cloud-lounge-accelerator-settings';
