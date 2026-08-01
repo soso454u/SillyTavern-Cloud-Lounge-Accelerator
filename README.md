@@ -6,6 +6,17 @@
 
 一键安装会同时安装界面扩展和服务端加速。安装完成后，请手动重启 SillyTavern。
 
+
+### 只安装 UI 扩展
+
+进入 SillyTavern 的“扩展 → 安装扩展”，粘贴：
+
+```text
+https://github.com/soso454u/SillyTavern-Cloud-Lounge-Accelerator
+```
+
+安装后即可使用启动、聊天、正则与界面操作优化。
+
 ### Linux、macOS、1Panel Xterminal
 
 先进入 SillyTavern 根目录：
@@ -92,16 +103,6 @@ curl -fsSL https://raw.githubusercontent.com/soso454u/SillyTavern-Cloud-Lounge-A
 静态缓存必须使用 HTTPS 或 localhost。纯 UI 模式不要求服务器权限，也不会因服务端插件缺失而报错。
 
 ## 手动安装
-
-### 只安装 UI 扩展
-
-进入 SillyTavern 的“扩展 → 安装扩展”，粘贴：
-
-```text
-https://github.com/soso454u/SillyTavern-Cloud-Lounge-Accelerator
-```
-
-安装后即可使用启动、聊天、正则与界面操作优化。
 
 ### 增加服务端静态缓存
 
