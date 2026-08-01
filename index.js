@@ -1,23 +1,37 @@
 import { extension_settings } from '../../../extensions.js';
-import { saveSettingsDebounced } from '../../../../script.js';
+import { reloadCurrentChat, saveSettingsDebounced } from '../../../../script.js';
 
 const MODULE_ID = 'cloud_lounge_accelerator';
 const PLUGIN_ID = 'cloud-lounge-accelerator';
-const VERSION = '1.0.3';
+const VERSION = '1.1.0';
 const API_BASE = `/api/plugins/${PLUGIN_ID}`;
 const CACHE_PREFIX = 'cloud-lounge-static-';
 const ROOT_ID = 'cloud-lounge-accelerator-settings';
 const LOG_PREFIX = '[Cloud Lounge Accelerator]';
+const INTERACTIVE_CORE_URLS = Object.freeze([
+    '/scripts/extensions/regex/dropdown.html',
+    '/scripts/extensions/regex/editor.html',
+    '/scripts/extensions/regex/scriptTemplate.html',
+    '/scripts/extensions/regex/debugger.html',
+    '/scripts/extensions/regex/debugger.css',
+    '/scripts/extensions/regex/importTarget.html',
+    '/scripts/extensions/regex/embeddedScripts.html',
+    '/scripts/extensions/regex/presetEmbeddedScripts.html',
+    '/scripts/templates/themeDelete.html',
+    '/scripts/templates/themeImportWarning.html',
+]);
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
     autoWarm: true,
     cacheThirdPartyAssets: false,
+    renderBoost: false,
 });
 
 let settings;
 let initialized = false;
 let panelObserver = null;
 let lastError = '';
+let scheduledWarmup = null;
 
 function loadSettings() {
     settings = Object.assign({}, DEFAULT_SETTINGS, extension_settings[MODULE_ID] || {});
@@ -27,6 +41,10 @@ function loadSettings() {
 function persistSettings() {
     extension_settings[MODULE_ID] = settings;
     saveSettingsDebounced();
+}
+
+function applyRenderBoost() {
+    document.body?.classList.toggle('cla-render-boost', settings?.renderBoost === true);
 }
 
 function isSecureContextAvailable() {
@@ -101,6 +119,7 @@ function collectWarmUrls() {
         new URL('/style.css', location.href).href,
         new URL('/lib.js', location.href).href,
         new URL('/locales/lang.json', location.href).href,
+        ...INTERACTIVE_CORE_URLS.map(path => new URL(path, location.href).href),
     ]);
     for (const entry of performance.getEntriesByType('resource')) {
         try {
@@ -111,6 +130,49 @@ function collectWarmUrls() {
         }
     }
     return [...urls];
+}
+
+function cancelScheduledWarmup() {
+    if (scheduledWarmup === null) return;
+    if (scheduledWarmup.kind === 'idle' && 'cancelIdleCallback' in window) {
+        window.cancelIdleCallback(scheduledWarmup.id);
+    } else if (scheduledWarmup.kind === 'timer') {
+        clearTimeout(scheduledWarmup.id);
+    }
+    scheduledWarmup = null;
+}
+
+function scheduleAutoWarmup() {
+    cancelScheduledWarmup();
+    if (!settings.enabled || !settings.autoWarm || !isSecureContextAvailable()) return;
+
+    const run = async () => {
+        scheduledWarmup = null;
+        if (!settings.enabled || !settings.autoWarm) return;
+        try {
+            await warmCurrentInstall();
+        } catch (error) {
+            // Idle warm-up must never delay or interrupt SillyTavern startup.
+            console.warn(LOG_PREFIX, '后台预热未完成', error);
+        }
+    };
+
+    const queueWhenLoaded = () => {
+        if (!settings.enabled || !settings.autoWarm || scheduledWarmup !== null) return;
+        if ('requestIdleCallback' in window) {
+            const id = window.requestIdleCallback(() => void run(), { timeout: 12000 });
+            scheduledWarmup = { kind: 'idle', id };
+        } else {
+            const id = setTimeout(() => void run(), 6000);
+            scheduledWarmup = { kind: 'timer', id };
+        }
+    };
+
+    if (document.readyState === 'complete') {
+        queueWhenLoaded();
+    } else {
+        window.addEventListener('load', queueWhenLoaded, { once: true });
+    }
 }
 
 async function warmCurrentInstall() {
@@ -154,9 +216,20 @@ async function removeLocalAcceleration() {
 
     settings.enabled = false;
     persistSettings();
+    cancelScheduledWarmup();
     await unregisterWorker({ clear: true });
     lastError = '';
     return { cancelled: false };
+}
+
+async function refreshRegexRendering() {
+    try {
+        const regexEngine = await import('../../regex/engine.js');
+        regexEngine.RegexProvider?.instance?.clear?.();
+    } catch (error) {
+        console.debug(LOG_PREFIX, '当前版本没有可清理的正则编译缓存', error);
+    }
+    await reloadCurrentChat();
 }
 
 function getNavigationMetrics() {
@@ -303,8 +376,9 @@ function mountPanel() {
         try {
             if (settings.enabled) {
                 await registerWorker();
-                if (settings.autoWarm) await warmCurrentInstall();
+                scheduleAutoWarmup();
             } else {
+                cancelScheduledWarmup();
                 await unregisterWorker({ clear: true });
             }
         } catch (error) {
@@ -326,6 +400,7 @@ function mountPanel() {
     autoWarm.addEventListener('change', () => {
         settings.autoWarm = autoWarm.checked;
         persistSettings();
+        settings.autoWarm ? scheduleAutoWarmup() : cancelScheduledWarmup();
     });
     warmRow.append(autoWarm, warmText);
 
@@ -343,7 +418,7 @@ function mountPanel() {
         try {
             if (settings.enabled) {
                 await registerWorker();
-                if (settings.cacheThirdPartyAssets && settings.autoWarm) await warmCurrentInstall();
+                if (settings.cacheThirdPartyAssets && settings.autoWarm) scheduleAutoWarmup();
             }
         } catch (error) {
             lastError = error instanceof Error ? error.message : String(error);
@@ -351,6 +426,20 @@ function mountPanel() {
         await refreshPanel();
     });
     thirdPartyRow.append(thirdParty, thirdPartyText);
+
+    const renderBoostRow = document.createElement('label');
+    renderBoostRow.className = 'checkbox_label cla-switch';
+    const renderBoost = document.createElement('input');
+    renderBoost.type = 'checkbox';
+    renderBoost.checked = settings.renderBoost;
+    const renderBoostText = document.createElement('span');
+    renderBoostText.innerHTML = '<strong>长聊天渲染减负</strong><small>跳过屏幕外复杂消息的布局和绘制；正则美化很多时可开启，如滚动异常再关闭。</small>';
+    renderBoost.addEventListener('change', () => {
+        settings.renderBoost = renderBoost.checked;
+        persistSettings();
+        applyRenderBoost();
+    });
+    renderBoostRow.append(renderBoost, renderBoostText);
 
     const status = document.createElement('div');
     status.className = 'cla-status';
@@ -380,6 +469,10 @@ function mountPanel() {
             const result = await warmCurrentInstall();
             globalThis.toastr?.success?.(`缓存已重建：${result.warmed} 个资源`, '云酒馆加速器');
         }),
+        makeButton('刷新正则渲染', 'fa-solid fa-wand-magic-sparkles', async () => {
+            await refreshRegexRendering();
+            globalThis.toastr?.success?.('已清理正则编译缓存并重新渲染当前聊天', '云酒馆加速器');
+        }),
         makeButton('删除本机加速', '', async () => {
             const result = await removeLocalAcceleration();
             if (!result.cancelled) {
@@ -390,9 +483,9 @@ function mountPanel() {
 
     const note = document.createElement('small');
     note.className = 'cla-note';
-    note.textContent = '页面大改或扩展更新后可点“清空并重建”。首次访问速度还取决于 1Panel 反代和角色库体积。';
+    note.textContent = '正则保存后没有出现在旧消息中，可点“刷新正则渲染”。页面大改或扩展更新后再用“清空并重建”。';
 
-    body.append(intro, enabledRow, warmRow, thirdPartyRow, status, metrics, actions, note);
+    body.append(intro, enabledRow, warmRow, thirdPartyRow, renderBoostRow, status, metrics, actions, note);
     root.append(header, body);
     host.append(root);
 }
@@ -417,11 +510,12 @@ async function initialize() {
     if (initialized) return;
     initialized = true;
     loadSettings();
+    applyRenderBoost();
     await ensurePanel();
     if (!settings.enabled) return;
     try {
         await registerWorker();
-        if (settings.autoWarm) await warmCurrentInstall();
+        scheduleAutoWarmup();
     } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
         console.warn(LOG_PREFIX, lastError);
@@ -442,9 +536,13 @@ export async function onUpdate() {
 }
 
 export async function onDisable() {
+    cancelScheduledWarmup();
+    document.body?.classList.remove('cla-render-boost');
     await unregisterWorker({ clear: true });
 }
 
 export async function onDelete() {
+    cancelScheduledWarmup();
+    document.body?.classList.remove('cla-render-boost');
     await unregisterWorker({ clear: true });
 }

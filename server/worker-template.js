@@ -1,4 +1,4 @@
-export const ACCELERATOR_VERSION = '1.0.3';
+export const ACCELERATOR_VERSION = '1.1.0';
 export const CACHE_PREFIX = 'cloud-lounge-static-';
 
 export const STATIC_EXACT_PATHS = Object.freeze([
@@ -184,7 +184,9 @@ async function warmUrls(urls) {
         }
     });
 
-    const workers = Array.from({ length: Math.min(6, queue.length) }, async () => {
+    // Keep warm-up deliberately below normal browser connection concurrency so
+    // it cannot compete with SillyTavern's visible UI, fonts and chat render.
+    const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
         while (queue.length) {
             const rawUrl = queue.shift();
             try {

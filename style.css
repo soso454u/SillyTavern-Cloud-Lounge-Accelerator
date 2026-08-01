@@ -128,6 +128,20 @@
     background: color-mix(in srgb, #ef6262 16%, transparent);
 }
 
+/* Opt-in paint/layout containment for regex-heavy, highly decorated chats.
+   Keep the active last message fully visible so streaming and message-height
+   measurements continue to behave like stock SillyTavern. */
+body.cla-render-boost #chat .mes:not(.last_mes):not(.selected):not(:focus-within) {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 320px;
+}
+
+body.cla-render-boost #chat .mes.last_mes,
+body.cla-render-boost #chat .mes.selected,
+body.cla-render-boost #chat .mes:focus-within {
+    content-visibility: visible;
+}
+
 @media (max-width: 600px) {
     .cla-metrics {
         grid-template-columns: repeat(2, minmax(0, 1fr));
