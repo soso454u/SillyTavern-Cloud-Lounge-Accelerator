@@ -177,8 +177,23 @@ export class RegexRefreshController {
         let failed = 0;
         let plan = { mode: 'all', targetIds: [], reason: 'manual' };
         try {
-            const api = await import('../../../../../script.js');
-            if (typeof api.updateMessageBlock !== 'function') throw new Error('当前酒馆不支持局部消息刷新');
+            let api = null;
+            try {
+                api = await import('../../../../../script.js');
+            } catch (error) {
+                console.debug(LOG_PREFIX, '局部消息接口加载失败', error);
+            }
+            if (typeof api?.updateMessageBlock !== 'function') {
+                await this.reloadCurrentChat();
+                this.onStatus?.('chat', '已回退完整刷新');
+                return {
+                    completed,
+                    failed: failed + 1,
+                    fallback: true,
+                    elapsedMs: performance.now() - startedAt,
+                    ...plan,
+                };
+            }
             const displayed = this.getDescriptors();
             if (!displayed.length) return { completed: 0, failed: 0, elapsedMs: 0, mode: 'none' };
             if (automatic) {
@@ -199,6 +214,7 @@ export class RegexRefreshController {
             for (let cursor = 0; cursor < descriptors.length;) {
                 await this.scheduler.yield(descriptors[cursor].visible ? 0 : (descriptors[cursor].recent ? 1 : 2));
                 const frameStart = performance.now();
+                const updateEvents = [];
                 batch = getAdaptiveBatchSize({
                     complexity: descriptors[cursor].complexity,
                     previousFrameMs,
@@ -209,7 +225,13 @@ export class RegexRefreshController {
                     try {
                         api.updateMessageBlock(descriptor.messageId, this.chat[descriptor.messageId], { rerenderMessage: true });
                         if (this.eventTypes?.MESSAGE_UPDATED) {
-                            await this.eventSource?.emit?.(this.eventTypes.MESSAGE_UPDATED, descriptor.messageId);
+                            updateEvents.push({
+                                messageId: descriptor.messageId,
+                                promise: Promise.resolve().then(() => this.eventSource?.emit?.(
+                                    this.eventTypes.MESSAGE_UPDATED,
+                                    descriptor.messageId,
+                                )),
+                            });
                         }
                     } catch (error) {
                         failed += 1;
@@ -221,17 +243,23 @@ export class RegexRefreshController {
                         break;
                     }
                 }
+                const eventResults = await Promise.allSettled(updateEvents.map(item => item.promise));
+                eventResults.forEach((result, index) => {
+                    if (result.status === 'fulfilled') return;
+                    failed += 1;
+                    console.debug(LOG_PREFIX, '消息更新事件失败', updateEvents[index].messageId, result.reason);
+                });
                 previousFrameMs = performance.now() - frameStart;
             }
-            if (failed > 0) await this.reloadCurrentChat();
-            this.onStatus?.('chat', failed ? '已回退完整刷新' : '自动');
+            this.onStatus?.('chat', failed ? `${failed} 条刷新失败` : '自动');
             return { completed, failed, elapsedMs: performance.now() - startedAt, automatic, ...plan };
         } catch (error) {
             if (error?.name === 'AbortError') return { cancelled: true, completed, failed };
-            await this.reloadCurrentChat();
-            this.onStatus?.('chat', '已回退完整刷新');
+            failed += 1;
+            this.onStatus?.('chat', `${failed} 条刷新失败`);
+            console.debug(LOG_PREFIX, '精准消息刷新中断', error);
             if (!automatic) throw error;
-            return { completed, failed: failed + 1, fallback: true, elapsedMs: performance.now() - startedAt, ...plan };
+            return { completed, failed, elapsedMs: performance.now() - startedAt, ...plan };
         } finally {
             this.refreshing = false;
             if (this.started && this.dirty) this.markDirty();

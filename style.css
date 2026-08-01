@@ -135,11 +135,6 @@
     pointer-events: none;
 }
 
-body.cla-chat-optimized #chat .mes:not(.cla-render-live):not(:has(:focus, .mes_edit_buttons_visible)) {
-    content-visibility: auto;
-    contain-intrinsic-size: auto 420px;
-}
-
 #chat pre.cla-code-collapsed {
     position: relative;
     max-height: 8rem;
@@ -159,41 +154,6 @@ body.cla-chat-optimized #chat .mes:not(.cla-render-live):not(:has(:focus, .mes_e
     font: 0.8rem/1.2 sans-serif;
 }
 
-.cla-drag-source {
-    opacity: 0.42 !important;
-}
-
-.cla-drag-ghost {
-    overflow: hidden !important;
-    opacity: 0.9;
-    contain: strict;
-    transform-origin: top left;
-    will-change: transform;
-    box-shadow: 0 0.65rem 1.5rem rgb(0 0 0 / 34%);
-}
-
-.cla-drop-indicator {
-    z-index: 2147483647;
-    height: 2px;
-    border-radius: 999px;
-    background: var(--SmartThemeQuoteColor, #65aaff);
-    pointer-events: none;
-    box-shadow: 0 0 0.45rem color-mix(in srgb, var(--SmartThemeQuoteColor, #65aaff) 55%, transparent);
-}
-
-[data-cla-drag-optimized="1"] {
-    touch-action: pan-y;
-}
-
-[data-cla-drag-optimized="1"] .drag-handle {
-    cursor: grab;
-    touch-action: none;
-}
-
-[data-cla-drag-optimized="1"] .drag-handle:active {
-    cursor: grabbing;
-}
-
 @media (max-width: 700px) {
     .cla-switch {
         align-items: flex-start;
@@ -207,12 +167,5 @@ body.cla-chat-optimized #chat .mes:not(.cla-render-live):not(:has(:focus, .mes_e
         max-width: calc(100vw - 2rem);
         overflow: hidden;
         text-overflow: ellipsis;
-    }
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .cla-drag-ghost,
-    .cla-drop-indicator {
-        transition: none !important;
     }
 }

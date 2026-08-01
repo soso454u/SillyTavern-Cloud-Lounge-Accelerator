@@ -25,7 +25,7 @@ test('keeps every published version source in sync', async () => {
         import('../manifest.json', { with: { type: 'json' } }),
         import('../package.json', { with: { type: 'json' } }),
     ]);
-    assert.equal(CLIENT_VERSION, '2.0.3');
+    assert.equal(CLIENT_VERSION, '2.0.4');
     assert.equal(manifest.version, CLIENT_VERSION);
     assert.equal(packageJson.version, CLIENT_VERSION);
     assert.equal(ACCELERATOR_VERSION, CLIENT_VERSION);
@@ -75,11 +75,14 @@ test('detects full HTML documents while keeping the fixed five-message page', ()
     assert.equal(longPlain.maxHtmlLength, 0);
 });
 
-test('skips highlighting only for declared, full-document HTML code blocks', () => {
+test('skips highlighting for full HTML documents even without a language class', () => {
     const html = `<!doctype html><html><head></head><body>${'x'.repeat(4000)}</body></html>`;
     assert.equal(isHeavyHtmlCodeText({ text: html, classNames: ['language-html'] }), true);
-    assert.equal(isHeavyHtmlCodeText({ text: html, classNames: ['language-javascript'] }), false);
-    assert.equal(isHeavyHtmlCodeText({ text: '<!doctype html><html></html>', classNames: ['language-html'] }), false);
+    assert.equal(isHeavyHtmlCodeText({ text: html, classNames: ['language-javascript'] }), true);
+    assert.equal(isHeavyHtmlCodeText({ text: '<!doctype html><html><head></head></html>' }), true);
+    assert.equal(isHeavyHtmlCodeText({ text: `<!doctype html><html>${'x'.repeat(2600)}</html>` }), true);
+    assert.equal(isHeavyHtmlCodeText({ text: '<!doctype html><html></html>' }), false);
+    assert.equal(isHeavyHtmlCodeText({ text: `<div>${'x'.repeat(5000)}</div>` }), false);
 });
 
 test('keeps visible messages, their neighbors, and only a generating tail live', () => {
@@ -116,4 +119,15 @@ test('removes the public safe-mode navigation entry and global takeover wording'
     assert.doesNotMatch(source, /cla-safe/);
     assert.doesNotMatch(source, /location\.assign/);
     assert.doesNotMatch(source, /全局前端接管/);
+});
+
+test('leaves native history scrolling and sortable ownership untouched', async () => {
+    const [chatSource, interactionSource, styles] = await Promise.all([
+        readFile(new URL('../modules/chat-optimizer.js', import.meta.url), 'utf8'),
+        readFile(new URL('../modules/interaction-optimizer.js', import.meta.url), 'utf8'),
+        readFile(new URL('../style.css', import.meta.url), 'utf8'),
+    ]);
+    assert.doesNotMatch(chatSource, /showMoreMessages|onHistoryClick|maybeLoadEarlier|\.scrollTop/);
+    assert.doesNotMatch(interactionSource, /SortableBridge|PointerDragEngine|PresetPanelAdapter|DrawerAnimationAdapter/);
+    assert.doesNotMatch(styles, /content-visibility|contain-intrinsic-size|cla-drag-ghost/);
 });

@@ -139,4 +139,6 @@ test('the UI adapter never calls full chat reload and refreshed targets emit the
     assert.match(adapterSource, /saveScriptsByType/);
     assert.doesNotMatch(adapterSource, /reloadCurrentChat/);
     assert.match(refreshSource, /MESSAGE_UPDATED/);
+    assert.match(refreshSource, /Promise\.allSettled/);
+    assert.doesNotMatch(refreshSource, /if \(failed > 0\) await this\.reloadCurrentChat/);
 });

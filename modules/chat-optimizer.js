@@ -1,11 +1,7 @@
 import {
-    CHAT_PAGE_SIZE,
     chooseAdaptiveChatLimit,
     detectSwipeAxis,
-    estimateRenderComplexity,
-    getAdaptiveBatchSize,
     measureChatPayload,
-    selectLiveMessageIndexes,
 } from '../client-core.js';
 
 const CODE_SELECTOR = '#chat .mes pre code';
@@ -34,18 +30,15 @@ export class ChatOptimizer {
         this.chatElement = null;
         this.domObserver = null;
         this.eventHandlers = [];
-        this.autoLoadRunning = false;
-        this.lastAutoLoadAt = 0;
         this.highlightLibrary = null;
         this.originalHighlight = null;
-        this.highlightWrapper = null;
+        this.originalHighlights = new Map();
+        this.highlightWrappers = new Map();
         this.highlightObserver = null;
         this.touchState = null;
         this.swipeSuppressUntil = 0;
         this.heavyHtmlMode = false;
-        this.renderOptimizationActive = false;
         this.pendingMetrics = null;
-        this.userScrollIntentUntil = 0;
         this.generation = 0;
     }
 
@@ -81,7 +74,6 @@ export class ChatOptimizer {
             this.inspectPayload(this.chat);
             this.refreshChatBindings();
         });
-        this.bind(this.eventTypes.MORE_MESSAGES_LOADED, () => this.refreshRenderState());
         this.refreshChatBindings();
         await this.installHighlighter(generation);
         if (!this.started || generation !== this.generation) return;
@@ -117,146 +109,12 @@ export class ChatOptimizer {
     }
 
     refreshChatBindings() {
-        this.chatElement?.removeEventListener('scroll', this.onScroll);
-        this.chatElement?.removeEventListener('click', this.onHistoryClick, true);
-        this.chatElement?.removeEventListener('wheel', this.onScrollIntent);
-        this.chatElement?.removeEventListener('touchmove', this.onScrollIntent);
-        this.chatElement?.removeEventListener('pointerdown', this.onScrollIntent);
-        this.chatElement?.removeEventListener('keydown', this.onScrollKey);
         this.domObserver?.disconnect();
         this.chatElement = document.querySelector('#chat');
         if (!this.chatElement || !this.started) return;
-        this.onScroll ||= () => {
-            if (this.scrollFrame) return;
-            this.scrollFrame = requestAnimationFrame(() => {
-                this.scrollFrame = null;
-                this.refreshLiveMessages();
-                if (performance.now() <= this.userScrollIntentUntil) {
-                    this.userScrollIntentUntil = 0;
-                    void this.maybeLoadEarlier();
-                }
-            });
-        };
-        this.onScrollIntent ||= () => {
-            this.userScrollIntentUntil = performance.now() + 1200;
-        };
-        this.onScrollKey ||= event => {
-            if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) this.onScrollIntent();
-        };
-        this.onHistoryClick ||= event => {
-            const button = event.target instanceof Element ? event.target.closest('#show_more_messages') : null;
-            if (!button || !this.started) return;
-            event.preventDefault();
-            event.stopImmediatePropagation();
-            this.userScrollIntentUntil = 0;
-            void this.loadEarlier(this.chooseLoadBatch());
-        };
-        this.chatElement.addEventListener('scroll', this.onScroll, { passive: true });
-        this.chatElement.addEventListener('click', this.onHistoryClick, true);
-        this.chatElement.addEventListener('wheel', this.onScrollIntent, { passive: true });
-        this.chatElement.addEventListener('touchmove', this.onScrollIntent, { passive: true });
-        this.chatElement.addEventListener('pointerdown', this.onScrollIntent, { passive: true });
-        this.chatElement.addEventListener('keydown', this.onScrollKey);
-        this.domObserver = new MutationObserver(() => {
-            this.refreshRenderState();
-            this.observeCodeBlocks();
-        });
+        this.domObserver = new MutationObserver(() => this.observeCodeBlocks());
         this.domObserver.observe(this.chatElement, { childList: true, subtree: true });
-        this.refreshRenderState();
         this.observeCodeBlocks();
-    }
-
-    getComplexity() {
-        const chat = this.chatElement;
-        if (!chat) return 0;
-        return estimateRenderComplexity({
-            domNodes: chat.querySelectorAll('*').length,
-            htmlLength: chat.innerHTML.length,
-            richElements: chat.querySelectorAll('details, table, pre, svg, iframe').length,
-        });
-    }
-
-    chooseLoadBatch() {
-        return CHAT_PAGE_SIZE;
-    }
-
-    refreshRenderState() {
-        const messages = this.chatElement ? [...this.chatElement.querySelectorAll('.mes')] : [];
-        const active = this.started && (this.heavyHtmlMode || messages.length >= 20 || this.getComplexity() >= 900);
-        this.renderOptimizationActive = active;
-        document.body?.classList.toggle('cla-chat-optimized', active);
-        if (!active) {
-            for (const message of messages) message.classList.remove('cla-render-live');
-            return;
-        }
-
-        this.refreshLiveMessages(messages);
-    }
-
-    refreshLiveMessages(messages = this.chatElement ? [...this.chatElement.querySelectorAll('.mes')] : []) {
-        if (!this.renderOptimizationActive) return;
-        for (const message of messages) message.classList.remove('cla-render-live');
-        const indexes = selectLiveMessageIndexes(
-            messages.map(message => isVisible(message, this.chatElement)),
-            { generating: Boolean(this.isGenerating?.()) },
-        );
-        indexes.forEach(index => messages[index]?.classList.add('cla-render-live'));
-    }
-
-    async maybeLoadEarlier() {
-        if (!this.chatElement || this.autoLoadRunning || this.chatElement.scrollTop > 160) return;
-        if (performance.now() - this.lastAutoLoadAt < 700) return;
-        const firstId = Number(this.chatElement.querySelector('.mes[mesid]')?.getAttribute('mesid'));
-        if (!Number.isInteger(firstId) || firstId <= 0) return;
-        await this.loadEarlier(this.chooseLoadBatch());
-    }
-
-    getAnchor() {
-        if (!this.chatElement) return null;
-        const rootRect = this.chatElement.getBoundingClientRect();
-        const element = [...this.chatElement.querySelectorAll('.mes[mesid]')]
-            .find(message => message.getBoundingClientRect().bottom >= rootRect.top);
-        const messageId = Number(element?.getAttribute('mesid'));
-        return element && Number.isInteger(messageId)
-            ? { messageId, top: element.getBoundingClientRect().top }
-            : null;
-    }
-
-    async loadEarlier(requestedCount) {
-        if (this.autoLoadRunning) return { completed: 0 };
-        const firstId = Number(this.chatElement?.querySelector('.mes[mesid]')?.getAttribute('mesid'));
-        if (!Number.isInteger(firstId) || firstId <= 0) return { completed: 0 };
-        this.autoLoadRunning = true;
-        this.lastAutoLoadAt = performance.now();
-        let completed = 0;
-        let batch = 2;
-        let previousFrameMs = 0;
-        try {
-            const api = await import('../../../../../script.js');
-            if (typeof api.showMoreMessages !== 'function') throw new Error('官方显示更多接口不可用');
-            const total = Math.min(firstId, Math.max(1, requestedCount));
-            while (completed < total && this.started) {
-                const anchor = this.getAnchor();
-                const count = Math.min(batch, total - completed);
-                const startedAt = performance.now();
-                await api.showMoreMessages(count);
-                await this.scheduler.yield(1);
-                if (anchor) {
-                    const anchorElement = this.chatElement?.querySelector(`.mes[mesid="${anchor.messageId}"]`);
-                    if (anchorElement) this.chatElement.scrollTop += anchorElement.getBoundingClientRect().top - anchor.top;
-                }
-                completed += count;
-                previousFrameMs = performance.now() - startedAt;
-                batch = Math.min(3, getAdaptiveBatchSize({
-                    complexity: this.getComplexity(),
-                    previousFrameMs,
-                    currentBatch: batch,
-                }));
-            }
-            return { completed };
-        } finally {
-            this.autoLoadRunning = false;
-        }
     }
 
     async installHighlighter(generation = this.generation) {
@@ -264,17 +122,51 @@ export class ChatOptimizer {
             const library = await import('../../../../../lib.js');
             if (!this.started || generation !== this.generation) return;
             const hljs = library.hljs;
-            if (!hljs?.highlightElement || this.highlightWrapper) return;
+            if (!hljs || this.highlightWrappers.size > 0) return;
+            const originalHighlight = typeof hljs.highlightElement === 'function'
+                ? hljs.highlightElement
+                : hljs.highlightBlock;
+            if (typeof originalHighlight !== 'function') return;
             this.highlightLibrary = hljs;
-            this.originalHighlight = hljs.highlightElement;
-            this.highlightWrapper = element => {
-                if (!(element instanceof Element) || !element.closest('#chat') || !this.started) {
-                    return this.originalHighlight.call(hljs, element);
-                }
-                this.queueHighlight(element);
-                return undefined;
-            };
-            hljs.highlightElement = this.highlightWrapper;
+            this.originalHighlight = originalHighlight;
+            for (const name of ['highlightElement', 'highlightBlock']) {
+                const original = hljs[name];
+                if (typeof original !== 'function') continue;
+                const wrapper = element => {
+                    if (!(element instanceof Element) || !element.closest('#chat') || !this.started) {
+                        return original.call(hljs, element);
+                    }
+                    this.queueHighlight(element);
+                    return undefined;
+                };
+                this.originalHighlights.set(name, original);
+                this.highlightWrappers.set(name, wrapper);
+                hljs[name] = wrapper;
+            }
+            if (typeof hljs.highlightAll === 'function') {
+                const original = hljs.highlightAll;
+                const wrapper = (...args) => {
+                    if (!this.started) return original.apply(hljs, args);
+                    const temporaryMarks = [];
+                    document.querySelectorAll(CODE_SELECTOR).forEach(element => {
+                        this.queueHighlight(element);
+                        if (!element.hasAttribute('data-highlighted')) {
+                            element.dataset.highlighted = 'yes';
+                            temporaryMarks.push(element);
+                        }
+                    });
+                    try {
+                        return original.apply(hljs, args);
+                    } finally {
+                        temporaryMarks.forEach(element => {
+                            if (element.dataset.claHighlighted !== '1') delete element.dataset.highlighted;
+                        });
+                    }
+                };
+                this.originalHighlights.set('highlightAll', original);
+                this.highlightWrappers.set('highlightAll', wrapper);
+                hljs.highlightAll = wrapper;
+            }
             this.highlightObserver = new IntersectionObserver(entries => {
                 for (const entry of entries) {
                     if (!entry.isIntersecting) continue;
@@ -378,27 +270,19 @@ export class ChatOptimizer {
         this.generation += 1;
         for (const [name, handler] of this.eventHandlers) this.eventSource.removeListener(name, handler);
         this.eventHandlers = [];
-        this.chatElement?.removeEventListener('scroll', this.onScroll);
-        this.chatElement?.removeEventListener('click', this.onHistoryClick, true);
-        this.chatElement?.removeEventListener('wheel', this.onScrollIntent);
-        this.chatElement?.removeEventListener('touchmove', this.onScrollIntent);
-        this.chatElement?.removeEventListener('pointerdown', this.onScrollIntent);
-        this.chatElement?.removeEventListener('keydown', this.onScrollKey);
         this.chatElement = null;
         this.domObserver?.disconnect();
         this.domObserver = null;
-        if (this.scrollFrame) cancelAnimationFrame(this.scrollFrame);
-        this.scrollFrame = null;
-        document.body?.classList.remove('cla-chat-optimized');
-        this.renderOptimizationActive = false;
-        document.querySelectorAll('.cla-render-live').forEach(element => element.classList.remove('cla-render-live'));
         this.highlightObserver?.disconnect();
-        if (this.highlightLibrary && this.highlightWrapper && this.highlightLibrary.highlightElement === this.highlightWrapper) {
-            this.highlightLibrary.highlightElement = this.originalHighlight;
+        if (this.highlightLibrary) {
+            for (const [name, wrapper] of this.highlightWrappers) {
+                if (this.highlightLibrary[name] === wrapper) this.highlightLibrary[name] = this.originalHighlights.get(name);
+            }
         }
         this.highlightLibrary = null;
-        this.highlightWrapper = null;
         this.originalHighlight = null;
+        this.originalHighlights.clear();
+        this.highlightWrappers.clear();
         document.querySelectorAll('[data-cla-collapsible]').forEach(element => {
             element.classList.remove('cla-code-collapsed');
             delete element.dataset.claCollapsible;
@@ -422,23 +306,19 @@ export class ChatOptimizer {
         this.originalTruncation = null;
         this.heavyHtmlMode = false;
         this.pendingMetrics = null;
-        this.userScrollIntentUntil = 0;
     }
 }
 
-export function isHeavyHtmlCodeText({ text = '', classNames = [] } = {}) {
-    if (typeof text !== 'string' || text.length < 4000) return false;
-    const classes = new Set(Array.from(classNames, value => String(value).toLowerCase()));
-    const declaredHtml = classes.has('language-html') || classes.has('lang-html');
+export function isHeavyHtmlCodeText({ text = '' } = {}) {
+    if (typeof text !== 'string') return false;
     const fullDocument = /<!doctype\s+html\b/i.test(text) || /<html\b/i.test(text);
-    return declaredHtml && fullDocument;
+    const hasPageParts = /<style\b/i.test(text) || /<script\b/i.test(text) || /<head\b/i.test(text);
+    return fullDocument && (hasPageParts || text.length >= 2500);
 }
 
 function isHeavyHtmlCode(element) {
     if (!(element instanceof Element)) return false;
-    const pre = element.closest('pre');
     return isHeavyHtmlCodeText({
         text: element.textContent || '',
-        classNames: [...element.classList, ...(pre?.classList || [])],
     });
 }
