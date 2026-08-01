@@ -2,11 +2,6 @@
 
 让云端 SillyTavern 打开更快、长聊天更流畅，同时避免重复接管预设、正则和世界书的原生交互。安装后大部分功能都会自动工作，不需要手动调整复杂参数。
 
-## 一键安装完整版本
-
-一键安装会同时安装界面扩展和服务端加速。安装完成后，请手动重启 SillyTavern。
-
-
 ### 只安装 UI 扩展
 
 进入 SillyTavern 的“扩展 → 安装扩展”，粘贴：
@@ -16,6 +11,10 @@ https://github.com/soso454u/SillyTavern-Cloud-Lounge-Accelerator
 ```
 
 安装后即可使用启动、聊天、正则与界面操作优化。
+
+## 一键安装完整版本
+
+一键安装会同时安装界面扩展和服务端加速。安装完成后，请手动重启 SillyTavern。
 
 ### Linux、macOS、1Panel Xterminal
 
