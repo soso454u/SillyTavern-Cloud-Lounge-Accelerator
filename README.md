@@ -19,9 +19,29 @@ SillyTavern 当前的初始化会依次等待 CSRF token、语言包、扩展发
 
 它同时是 SillyTavern UI 扩展和服务端插件，**同一份仓库需要安装到两个位置**。这是为了不修改 SillyTavern 源文件，也不使用脆弱的 HTML 注入。
 
+> **这不是二选一：第 1 步“服务端插件”和第 2 步“UI 扩展”必须全部完成。** 只安装 UI 扩展时，面板会提示“服务端插件未就绪”；只安装服务端插件时，浏览器不会注册加速服务。第 3 步的 HTTPS 是 Service Worker 的运行条件。
+
+本项目的唯一安装地址是：
+
+```text
+https://github.com/soso454u/SillyTavern-Cloud-Lounge-Accelerator
+```
+
 ### 1. 安装服务端部分
 
-把整个项目放到 SillyTavern 根目录的：
+在 1Panel 中进入 SillyTavern 容器终端（或服务器终端），先进入 SillyTavern 根目录，再执行：
+
+```bash
+git clone https://github.com/soso454u/SillyTavern-Cloud-Lounge-Accelerator.git plugins/cloud-lounge-accelerator
+```
+
+如果该目录已经存在，不要重复 `clone`，更新时使用：
+
+```bash
+git -C plugins/cloud-lounge-accelerator pull
+```
+
+也可以用 1Panel 文件管理器下载并解压仓库，但最终必须保证整个项目位于：
 
 ```text
 plugins/cloud-lounge-accelerator/
@@ -71,13 +91,17 @@ Initializing plugin from .../cloud-lounge-accelerator/server/index.js
 
 ### 2. 安装 UI 扩展
 
-如果项目已上传 Git 仓库：
+推荐直接通过 SillyTavern 安装：
 
 1. 进入 SillyTavern 的“扩展”。
 2. 选“安装扩展”。
-3. 粘贴这个项目的 Git 地址。
+3. 粘贴下面的安装地址并确认：
 
-如果是手动上传，把同一份项目放到当前用户的扩展目录：
+```text
+https://github.com/soso454u/SillyTavern-Cloud-Lounge-Accelerator
+```
+
+“通过酒馆粘贴 Git 地址安装”和“手动上传 UI 文件”这两种 UI 安装方式才是二选一。如果不能使用 Git，可把同一份项目手动放到当前用户的扩展目录：
 
 ```text
 data/<用户>/extensions/cloud-lounge-accelerator/
@@ -88,6 +112,8 @@ data/<用户>/extensions/cloud-lounge-accelerator/
 ### 3. 确认 HTTPS
 
 Service Worker 只能在 HTTPS 或 localhost 上工作。云酒馆必须用正常域名证书访问，不要用裸 `http://IP:端口`。
+
+完成后，在 1Panel 重启 SillyTavern 容器/进程，然后刷新酒馆页面。打开“扩展设置 → 云酒馆加速器”，状态显示“已启用”即表示两个部分都已正常连接。
 
 ## 1Panel 首访优化（可选，推荐）
 
