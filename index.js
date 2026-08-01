@@ -1,13 +1,24 @@
+import {
+    eventSource,
+    event_types,
+    reloadCurrentChat,
+    saveSettingsDebounced,
+} from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
-import { reloadCurrentChat, saveSettingsDebounced } from '../../../../script.js';
+import {
+    CLIENT_VERSION,
+    normalizeSettings,
+    shouldActivateRenderBoost,
+    shouldAutoWarm,
+} from './client-core.js';
 
 const MODULE_ID = 'cloud_lounge_accelerator';
 const PLUGIN_ID = 'cloud-lounge-accelerator';
-const VERSION = '1.1.0';
 const API_BASE = `/api/plugins/${PLUGIN_ID}`;
 const CACHE_PREFIX = 'cloud-lounge-static-';
 const ROOT_ID = 'cloud-lounge-accelerator-settings';
 const LOG_PREFIX = '[Cloud Lounge Accelerator]';
+const PANEL_RETRY_LIMIT = 20;
 const INTERACTIVE_CORE_URLS = Object.freeze([
     '/scripts/extensions/regex/dropdown.html',
     '/scripts/extensions/regex/editor.html',
@@ -20,31 +31,30 @@ const INTERACTIVE_CORE_URLS = Object.freeze([
     '/scripts/templates/themeDelete.html',
     '/scripts/templates/themeImportWarning.html',
 ]);
-const DEFAULT_SETTINGS = Object.freeze({
-    enabled: true,
-    autoWarm: true,
-    cacheThirdPartyAssets: false,
-    renderBoost: false,
-});
 
 let settings;
-let initialized = false;
-let panelObserver = null;
-let lastError = '';
+let activated = false;
+let appReady = false;
+let appReadyWorkStarted = false;
+let panelRetryTimer = null;
+let panelRetryCount = 0;
 let scheduledWarmup = null;
+let renderObserver = null;
+let renderRefreshFrame = null;
+let cachedRegistration;
+let serverState = 'unknown';
+let serverHealth = null;
+let lastWorkerStats = null;
+let lastError = '';
 
 function loadSettings() {
-    settings = Object.assign({}, DEFAULT_SETTINGS, extension_settings[MODULE_ID] || {});
+    settings = normalizeSettings(extension_settings[MODULE_ID]);
     extension_settings[MODULE_ID] = settings;
 }
 
 function persistSettings() {
     extension_settings[MODULE_ID] = settings;
     saveSettingsDebounced();
-}
-
-function applyRenderBoost() {
-    document.body?.classList.toggle('cla-render-boost', settings?.renderBoost === true);
 }
 
 function isSecureContextAvailable() {
@@ -56,40 +66,58 @@ function isOurWorker(registration) {
     return Boolean(worker?.scriptURL?.includes(`${API_BASE}/service-worker.js`));
 }
 
-async function findRootRegistration() {
+async function findRootRegistration({ refresh = false } = {}) {
+    if (!('serviceWorker' in navigator)) return null;
+    if (!refresh && cachedRegistration !== undefined) return cachedRegistration;
     const rootScope = new URL('/', location.href).href;
     const registrations = await navigator.serviceWorker.getRegistrations();
-    return registrations.find(item => item.scope === rootScope) || null;
+    cachedRegistration = registrations.find(item => item.scope === rootScope) || null;
+    return cachedRegistration;
 }
 
-async function probeServerPlugin() {
-    const response = await fetch(`${API_BASE}/health`, {
-        credentials: 'same-origin',
-        cache: 'no-store',
-    });
-    if (!response.ok) throw new Error(`服务端插件未就绪（HTTP ${response.status}）`);
-    const payload = await response.json();
-    if (!payload?.ok) throw new Error('服务端插件返回异常');
-    return payload;
-}
-
-async function registerWorker() {
+async function probeServerPlugin({ force = false } = {}) {
+    if (!force && serverState === 'available') return serverHealth;
+    if (!force && ['missing', 'unsupported'].includes(serverState)) return null;
     if (!isSecureContextAvailable()) {
-        throw new Error('需要 HTTPS（或 localhost）才能启用本地加速缓存');
-    }
-    await probeServerPlugin();
-    const current = await findRootRegistration();
-    if (current && !isOurWorker(current)) {
-        throw new Error('站点根路径已由其他 Service Worker 控制，为避免破坏现有功能已停止安装');
+        serverState = 'unsupported';
+        return null;
     }
 
-    const registration = await navigator.serviceWorker.register(
-        `${API_BASE}/service-worker.js?v=${encodeURIComponent(VERSION)}`,
-        { scope: '/', updateViaCache: 'none' },
-    );
-    await navigator.serviceWorker.ready;
-    await sendWorkerMessage('CONFIG', { allowThirdParty: settings.cacheThirdPartyAssets });
-    return registration;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    try {
+        const response = await fetch(`${API_BASE}/health`, {
+            credentials: 'same-origin',
+            cache: 'no-store',
+            signal: controller.signal,
+        });
+        if (!response.ok) {
+            serverState = response.status === 404 ? 'missing' : 'error';
+            return null;
+        }
+        const payload = await response.json();
+        if (!payload?.ok) {
+            serverState = 'error';
+            return null;
+        }
+        serverHealth = payload;
+        serverState = 'available';
+        return payload;
+    } catch (error) {
+        serverState = error?.name === 'AbortError' ? 'error' : 'missing';
+        console.debug(LOG_PREFIX, '可选服务端增强不可用，继续使用纯 UI 模式', error);
+        return null;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+async function requireServerPlugin() {
+    const health = await probeServerPlugin({ force: serverState !== 'available' });
+    if (!health) {
+        throw new Error('当前为纯 UI 模式；安装可选服务端插件后才能使用静态资源缓存');
+    }
+    return health;
 }
 
 function workerFor(registration) {
@@ -98,19 +126,40 @@ function workerFor(registration) {
 
 async function sendWorkerMessage(type, payload = {}, timeout = 15000) {
     const registration = await findRootRegistration();
-    if (!registration || !isOurWorker(registration)) throw new Error('加速服务尚未启用');
+    if (!registration || !isOurWorker(registration)) throw new Error('静态资源缓存尚未启用');
     const worker = workerFor(registration);
-    if (!worker) throw new Error('加速服务尚未激活');
+    if (!worker) throw new Error('静态资源缓存尚未激活');
 
     return new Promise((resolve, reject) => {
         const channel = new MessageChannel();
-        const timer = setTimeout(() => reject(new Error('加速服务响应超时')), timeout);
+        const timer = setTimeout(() => reject(new Error('静态资源缓存响应超时')), timeout);
         channel.port1.onmessage = event => {
             clearTimeout(timer);
-            event.data?.ok ? resolve(event.data) : reject(new Error(event.data?.error || '加速服务执行失败'));
+            event.data?.ok ? resolve(event.data) : reject(new Error(event.data?.error || '静态资源缓存执行失败'));
         };
         worker.postMessage({ type, ...payload }, [channel.port2]);
     });
+}
+
+async function registerWorker() {
+    if (!isSecureContextAvailable()) {
+        serverState = 'unsupported';
+        throw new Error('静态资源缓存需要 HTTPS（或 localhost）；前端优化仍可正常使用');
+    }
+    await requireServerPlugin();
+    const current = await findRootRegistration({ refresh: true });
+    if (current && !isOurWorker(current)) {
+        serverState = 'conflict';
+        throw new Error('站点根路径已有其他 Service Worker，本插件不会覆盖；前端优化仍可使用');
+    }
+
+    cachedRegistration = await navigator.serviceWorker.register(
+        `${API_BASE}/service-worker.js?v=${encodeURIComponent(CLIENT_VERSION)}`,
+        { scope: '/', updateViaCache: 'none' },
+    );
+    await navigator.serviceWorker.ready;
+    await sendWorkerMessage('CONFIG', { allowThirdParty: settings.cacheThirdPartyAssets });
+    return cachedRegistration;
 }
 
 function collectWarmUrls() {
@@ -136,7 +185,7 @@ function cancelScheduledWarmup() {
     if (scheduledWarmup === null) return;
     if (scheduledWarmup.kind === 'idle' && 'cancelIdleCallback' in window) {
         window.cancelIdleCallback(scheduledWarmup.id);
-    } else if (scheduledWarmup.kind === 'timer') {
+    } else {
         clearTimeout(scheduledWarmup.id);
     }
     scheduledWarmup = null;
@@ -144,77 +193,77 @@ function cancelScheduledWarmup() {
 
 function scheduleAutoWarmup() {
     cancelScheduledWarmup();
-    if (!settings.enabled || !settings.autoWarm || !isSecureContextAvailable()) return;
+    if (!appReady || serverState !== 'available') return;
+    if (!shouldAutoWarm({
+        enabled: settings.enabled,
+        autoWarm: settings.autoWarm,
+        visible: document.visibilityState === 'visible',
+        connection: navigator.connection,
+        lastWarmVersion: settings.lastWarmVersion,
+    })) return;
 
     const run = async () => {
         scheduledWarmup = null;
-        if (!settings.enabled || !settings.autoWarm) return;
+        if (document.visibilityState !== 'visible') return;
         try {
             await warmCurrentInstall();
+            settings.lastWarmVersion = CLIENT_VERSION;
+            persistSettings();
         } catch (error) {
-            // Idle warm-up must never delay or interrupt SillyTavern startup.
             console.warn(LOG_PREFIX, '后台预热未完成', error);
         }
     };
 
-    const queueWhenLoaded = () => {
-        if (!settings.enabled || !settings.autoWarm || scheduledWarmup !== null) return;
-        if ('requestIdleCallback' in window) {
-            const id = window.requestIdleCallback(() => void run(), { timeout: 12000 });
-            scheduledWarmup = { kind: 'idle', id };
-        } else {
-            const id = setTimeout(() => void run(), 6000);
-            scheduledWarmup = { kind: 'timer', id };
-        }
-    };
-
-    if (document.readyState === 'complete') {
-        queueWhenLoaded();
+    if ('requestIdleCallback' in window) {
+        scheduledWarmup = {
+            kind: 'idle',
+            id: window.requestIdleCallback(() => void run(), { timeout: 15000 }),
+        };
     } else {
-        window.addEventListener('load', queueWhenLoaded, { once: true });
+        scheduledWarmup = { kind: 'timer', id: setTimeout(() => void run(), 8000) };
     }
 }
 
 async function warmCurrentInstall() {
     const result = await sendWorkerMessage('WARM', { urls: collectWarmUrls() }, 120000);
-    await refreshPanel();
+    lastWorkerStats = null;
     return result;
 }
 
 async function unregisterWorker({ clear = true } = {}) {
     let unregistered = false;
     if ('serviceWorker' in navigator) {
-        const registration = await findRootRegistration();
+        const registration = await findRootRegistration({ refresh: true });
         if (registration && isOurWorker(registration)) {
             if (clear) {
                 try {
                     await sendWorkerMessage('CLEAR');
                 } catch (error) {
-                    console.warn(LOG_PREFIX, '通过加速服务清理缓存失败', error);
+                    console.warn(LOG_PREFIX, '通过 Worker 清理缓存失败', error);
                 }
             }
             unregistered = await registration.unregister();
+            cachedRegistration = null;
         }
     }
 
     if (clear && 'caches' in window) {
         try {
             const names = await caches.keys();
-            await Promise.all(names
-                .filter(name => name.startsWith(CACHE_PREFIX))
-                .map(name => caches.delete(name)));
+            await Promise.all(names.filter(name => name.startsWith(CACHE_PREFIX)).map(name => caches.delete(name)));
         } catch (error) {
             console.warn(LOG_PREFIX, '从页面清理缓存失败', error);
         }
     }
+    lastWorkerStats = null;
     return unregistered;
 }
 
 async function removeLocalAcceleration() {
-    const confirmed = globalThis.confirm('确定删除这台设备上的云酒馆加速吗？\n\n这会注销加速服务并清除本插件的本地缓存，不会删除聊天、角色卡、设置或服务器文件。');
+    const confirmed = globalThis.confirm('确定删除这台设备上的静态资源缓存吗？\n\n前端长聊天优化仍会保留；聊天、角色卡、设置和服务器文件不会被删除。');
     if (!confirmed) return { cancelled: true };
-
     settings.enabled = false;
+    settings.lastWarmVersion = '';
     persistSettings();
     cancelScheduledWarmup();
     await unregisterWorker({ clear: true });
@@ -230,6 +279,75 @@ async function refreshRegexRendering() {
         console.debug(LOG_PREFIX, '当前版本没有可清理的正则编译缓存', error);
     }
     await reloadCurrentChat();
+}
+
+async function getPowerUserSettings() {
+    const module = await import('../../power-user.js');
+    if (!module.power_user) throw new Error('当前 SillyTavern 版本未提供聊天截断设置');
+    return module.power_user;
+}
+
+async function applyLongChatMode({ reload = false } = {}) {
+    const powerUser = await getPowerUserSettings();
+    if (settings.longChatMode) {
+        if (!Number.isFinite(settings.previousChatTruncation)) {
+            settings.previousChatTruncation = Number.isFinite(powerUser.chat_truncation)
+                ? powerUser.chat_truncation
+                : 100;
+        }
+        powerUser.chat_truncation = settings.longChatLimit;
+    } else if (Number.isFinite(settings.previousChatTruncation)) {
+        powerUser.chat_truncation = settings.previousChatTruncation;
+        settings.previousChatTruncation = null;
+    }
+    persistSettings();
+    if (reload) await reloadCurrentChat();
+}
+
+async function restoreLongChatMode({ reload = false } = {}) {
+    if (!settings?.longChatMode || !Number.isFinite(settings.previousChatTruncation)) return;
+    const powerUser = await getPowerUserSettings();
+    powerUser.chat_truncation = settings.previousChatTruncation;
+    saveSettingsDebounced();
+    if (reload) await reloadCurrentChat();
+}
+
+function stopRenderObserver() {
+    renderObserver?.disconnect();
+    renderObserver = null;
+    if (renderRefreshFrame !== null) cancelAnimationFrame(renderRefreshFrame);
+    renderRefreshFrame = null;
+    document.body?.classList.remove('cla-render-boost-active');
+    document.querySelectorAll('#chat .mes.cla-render-live').forEach(message => message.classList.remove('cla-render-live'));
+}
+
+function refreshRenderBoostState() {
+    renderRefreshFrame = null;
+    const chat = document.querySelector('#chat');
+    const messages = chat ? [...chat.querySelectorAll('.mes')] : [];
+    const active = shouldActivateRenderBoost({
+        enabled: settings?.renderBoost,
+        messageCount: messages.length,
+        threshold: settings?.renderBoostThreshold,
+    });
+    document.body?.classList.toggle('cla-render-boost-active', active);
+    messages.forEach(message => message.classList.remove('cla-render-live'));
+    if (active) messages.slice(-5).forEach(message => message.classList.add('cla-render-live'));
+}
+
+function queueRenderBoostRefresh() {
+    if (renderRefreshFrame !== null) return;
+    renderRefreshFrame = requestAnimationFrame(refreshRenderBoostState);
+}
+
+function startRenderObserver() {
+    stopRenderObserver();
+    if (!settings?.renderBoost) return;
+    const chat = document.querySelector('#chat');
+    if (!chat) return;
+    renderObserver = new MutationObserver(queueRenderBoostRefresh);
+    renderObserver.observe(chat, { childList: true });
+    queueRenderBoostRefresh();
 }
 
 function getNavigationMetrics() {
@@ -261,25 +379,53 @@ function setStatus(text, state = '') {
     node.dataset.state = state;
 }
 
-async function getRuntimeState() {
-    if (!isSecureContextAvailable()) return { state: 'unsupported', label: '当前页面不支持（请检查 HTTPS）' };
-    const registration = await findRootRegistration();
-    if (!registration) return { state: 'off', label: '未启用' };
-    if (!isOurWorker(registration)) return { state: 'conflict', label: '已有其他站点缓存，本插件未介入' };
-    try {
-        const stats = await sendWorkerMessage('STATS');
-        return { state: 'active', label: `已启用 · ${stats.entries} 个本地资源`, stats };
-    } catch {
-        return { state: 'pending', label: '正在激活' };
+async function getRuntimeState({ includeStats = false } = {}) {
+    if (!appReady || serverState === 'unknown') {
+        return { state: 'ui', label: '前端模式已就绪 · 静态缓存将在酒馆启动完成后检查' };
     }
+    if (serverState === 'unsupported') {
+        return { state: 'ui', label: '仅 UI 模式 · 前端优化可用；静态缓存需要 HTTPS 或 localhost' };
+    }
+    if (serverState === 'missing') {
+        return { state: 'ui', label: '仅 UI 模式 · 前端优化可用；服务端静态缓存未安装' };
+    }
+    if (serverState === 'error') {
+        return { state: 'ui', label: '仅 UI 模式 · 服务端增强暂时不可达，前端优化不受影响' };
+    }
+    if (serverState === 'conflict') {
+        return { state: 'conflict', label: '仅 UI 模式 · 站点已有其他 Service Worker，本插件未覆盖' };
+    }
+
+    const registration = await findRootRegistration();
+    if (!registration) return { state: 'available', label: '前端模式已就绪 · 可选静态缓存尚未启用' };
+    if (!isOurWorker(registration)) return { state: 'conflict', label: '仅 UI 模式 · 站点已有其他 Service Worker' };
+    if (includeStats) lastWorkerStats = await sendWorkerMessage('STATS');
+    return {
+        state: 'active',
+        label: lastWorkerStats
+            ? `完整模式 · 已缓存 ${lastWorkerStats.entries} 个程序资源`
+            : '完整模式 · 前端优化与静态资源缓存均已启用',
+        stats: lastWorkerStats,
+    };
 }
 
-async function refreshPanel() {
-    const status = await getRuntimeState().catch(error => ({ state: 'error', label: error.message }));
+async function refreshPanel({ includeStats = false } = {}) {
+    if (!document.getElementById(ROOT_ID) || !settings) return;
+    const status = await getRuntimeState({ includeStats }).catch(error => ({ state: 'error', label: error.message }));
     if (status.state === 'active') lastError = '';
     setStatus(lastError || status.label, lastError ? 'error' : status.state);
-    const toggle = document.querySelector(`#${ROOT_ID} [data-cloud-enabled]`);
-    if (toggle) toggle.checked = settings.enabled && status.state !== 'conflict';
+
+    const enabled = document.querySelector(`#${ROOT_ID} [data-cloud-enabled]`);
+    if (enabled) {
+        enabled.checked = settings.enabled;
+        enabled.indeterminate = settings.enabled && serverState !== 'available';
+    }
+    const serverControls = document.querySelectorAll(`#${ROOT_ID} [data-needs-server]`);
+    const canUseServer = serverState === 'available';
+    serverControls.forEach(control => {
+        control.disabled = !canUseServer;
+        control.title = canUseServer ? '' : '安装并启用可选服务端插件后可用';
+    });
 
     const metrics = getNavigationMetrics();
     const fields = {
@@ -287,7 +433,7 @@ async function refreshPanel() {
         interactive: metrics ? formatMilliseconds(metrics.interactive) : '—',
         transferred: metrics ? formatBytes(metrics.transferred) : '—',
         protocol: metrics?.protocol || '—',
-        hits: status.stats ? String(status.stats.hits) : '—',
+        hits: status.stats ? String(status.stats.hits) : '按需查询',
     };
     for (const [name, value] of Object.entries(fields)) {
         const node = document.querySelector(`#${ROOT_ID} [data-cloud-metric="${name}"]`);
@@ -307,11 +453,12 @@ function makeMetric(label, key) {
     return item;
 }
 
-function makeButton(label, iconClass, handler, { danger = false } = {}) {
+function makeButton(label, iconClass, handler, { danger = false, needsServer = false } = {}) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'menu_button cla-action';
     if (danger) button.classList.add('cla-action-danger');
+    if (needsServer) button.dataset.needsServer = '';
     const text = document.createElement('span');
     text.textContent = label;
     if (iconClass) {
@@ -336,12 +483,38 @@ function makeButton(label, iconClass, handler, { danger = false } = {}) {
     return button;
 }
 
+function makeSectionTitle(title, description) {
+    const section = document.createElement('div');
+    section.className = 'cla-section-title';
+    const heading = document.createElement('strong');
+    heading.textContent = title;
+    const note = document.createElement('small');
+    note.textContent = description;
+    section.append(heading, note);
+    return section;
+}
+
+function makeSwitch(title, description) {
+    const row = document.createElement('label');
+    row.className = 'checkbox_label cla-switch';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    const text = document.createElement('span');
+    const heading = document.createElement('strong');
+    heading.textContent = title;
+    const note = document.createElement('small');
+    note.textContent = description;
+    text.append(heading, note);
+    row.append(input, text);
+    return { row, input, text };
+}
+
 function mountPanel() {
-    if (document.getElementById(ROOT_ID)) return;
+    if (document.getElementById(ROOT_ID)) return true;
     const host = document.querySelector('#extensions_settings2')
         || document.querySelector('#extensions_settings')
         || document.querySelector('#extensions_settings_block');
-    if (!host) return;
+    if (!host) return false;
 
     const root = document.createElement('div');
     root.id = ROOT_ID;
@@ -354,65 +527,119 @@ function mountPanel() {
     const drawerIcon = document.createElement('div');
     drawerIcon.className = 'inline-drawer-icon fa-solid fa-circle-chevron-down down';
     header.append(heading, drawerIcon);
+    header.addEventListener('click', () => setTimeout(() => {
+        if (serverState === 'available') void refreshPanel({ includeStats: true });
+    }, 0));
 
     const body = document.createElement('div');
     body.className = 'inline-drawer-content cla-body';
     const intro = document.createElement('p');
     intro.className = 'cla-intro';
-    intro.textContent = '只缓存 SillyTavern 程序文件；聊天、角色卡、设置和 API 响应永远不进入缓存。';
+    intro.textContent = '只安装 UI 扩展也能使用前端优化；服务端插件仅用于额外的静态资源缓存。聊天、角色卡、设置和 API 响应永远不会被缓存。';
 
-    const enabledRow = document.createElement('label');
-    enabledRow.className = 'checkbox_label cla-switch';
-    const enabled = document.createElement('input');
-    enabled.type = 'checkbox';
+    const frontendTitle = makeSectionTitle('前端优化', '无需服务端、HTTPS 或服务器权限，安装 UI 扩展即可使用。');
+
+    const renderBoostSwitch = makeSwitch(
+        '长聊天渲染减负',
+        `消息达到 ${settings.renderBoostThreshold} 条后，跳过屏幕外复杂消息的布局和绘制，并始终保留最近 5 条。`,
+    );
+    renderBoostSwitch.input.checked = settings.renderBoost;
+    renderBoostSwitch.input.addEventListener('change', () => {
+        settings.renderBoost = renderBoostSwitch.input.checked;
+        persistSettings();
+        settings.renderBoost ? startRenderObserver() : stopRenderObserver();
+    });
+
+    const longChatSwitch = makeSwitch(
+        '长聊天流畅模式',
+        '使用 SillyTavern 官方聊天截断，只渲染最近一批消息；关闭时恢复原值。',
+    );
+    longChatSwitch.input.checked = settings.longChatMode;
+    longChatSwitch.input.addEventListener('change', async () => {
+        longChatSwitch.input.disabled = true;
+        const nextValue = longChatSwitch.input.checked;
+        settings.longChatMode = nextValue;
+        try {
+            await applyLongChatMode({ reload: true });
+        } catch (error) {
+            settings.longChatMode = !nextValue;
+            longChatSwitch.input.checked = settings.longChatMode;
+            lastError = error instanceof Error ? error.message : String(error);
+        } finally {
+            persistSettings();
+            longChatSwitch.input.disabled = false;
+            await refreshPanel();
+        }
+    });
+
+    const limitRow = document.createElement('label');
+    limitRow.className = 'cla-select-row';
+    const limitText = document.createElement('span');
+    limitText.textContent = '每批显示消息数';
+    const limit = document.createElement('select');
+    limit.className = 'text_pole';
+    for (const value of [30, 50, 100]) {
+        const option = document.createElement('option');
+        option.value = String(value);
+        option.textContent = `${value} 条`;
+        option.selected = settings.longChatLimit === value;
+        limit.append(option);
+    }
+    limit.addEventListener('change', async () => {
+        settings.longChatLimit = Number(limit.value);
+        persistSettings();
+        if (settings.longChatMode) await applyLongChatMode({ reload: true });
+    });
+    limitRow.append(limitText, limit);
+
+    const frontendActions = document.createElement('div');
+    frontendActions.className = 'cla-actions';
+    frontendActions.append(makeButton('刷新正则渲染', 'fa-solid fa-wand-magic-sparkles', async () => {
+        await refreshRegexRendering();
+        globalThis.toastr?.success?.('已清理正则编译缓存并重新渲染当前聊天', '云酒馆加速器');
+    }));
+
+    const serverTitle = makeSectionTitle('静态资源缓存（可选增强）', '需要服务端插件与 HTTPS；不安装不会影响上面的前端功能。');
+
+    const enabledSwitch = makeSwitch('启用静态资源缓存', '服务端增强存在时注册 Service Worker；纯 UI 模式下保持待命，不会报错。');
+    const enabled = enabledSwitch.input;
     enabled.dataset.cloudEnabled = '';
     enabled.checked = settings.enabled;
-    const enabledText = document.createElement('span');
-    enabledText.innerHTML = '<strong>启用本地加速</strong><small>首次进入后预热，从第二次开始明显受益。</small>';
     enabled.addEventListener('change', async () => {
         settings.enabled = enabled.checked;
         persistSettings();
         lastError = '';
         try {
             if (settings.enabled) {
-                await registerWorker();
-                scheduleAutoWarmup();
+                await probeServerPlugin({ force: true });
+                if (serverState === 'available') {
+                    await registerWorker();
+                    scheduleAutoWarmup();
+                }
             } else {
                 cancelScheduledWarmup();
                 await unregisterWorker({ clear: true });
             }
         } catch (error) {
             lastError = error instanceof Error ? error.message : String(error);
-            settings.enabled = false;
-            persistSettings();
         }
         await refreshPanel();
     });
-    enabledRow.append(enabled, enabledText);
 
-    const warmRow = document.createElement('label');
-    warmRow.className = 'checkbox_label cla-switch';
-    const autoWarm = document.createElement('input');
-    autoWarm.type = 'checkbox';
-    autoWarm.checked = settings.autoWarm;
-    const warmText = document.createElement('span');
-    warmText.innerHTML = '<strong>自动预热当前安装</strong><small>包括你实际启用的第三方扩展资源。</small>';
-    autoWarm.addEventListener('change', () => {
-        settings.autoWarm = autoWarm.checked;
+    const warmSwitch = makeSwitch('自动预热当前版本一次', '默认关闭；仅在页面可见、非省流/低速网络且浏览器空闲时执行。');
+    warmSwitch.input.checked = settings.autoWarm;
+    warmSwitch.input.addEventListener('change', () => {
+        settings.autoWarm = warmSwitch.input.checked;
+        settings.lastWarmVersion = '';
         persistSettings();
         settings.autoWarm ? scheduleAutoWarmup() : cancelScheduledWarmup();
     });
-    warmRow.append(autoWarm, warmText);
 
-    const thirdPartyRow = document.createElement('label');
-    thirdPartyRow.className = 'checkbox_label cla-switch';
-    const thirdParty = document.createElement('input');
-    thirdParty.type = 'checkbox';
-    thirdParty.checked = settings.cacheThirdPartyAssets;
-    const thirdPartyText = document.createElement('span');
-    thirdPartyText.innerHTML = '<strong>缓存第三方扩展</strong><small>仅个人单账号酒馆建议开启；多账号共用同一域名时请保持关闭。</small>';
-    thirdParty.addEventListener('change', async () => {
-        settings.cacheThirdPartyAssets = thirdParty.checked;
+    const thirdPartySwitch = makeSwitch('缓存第三方扩展', '仅个人单账号酒馆建议开启；多账号共用同一域名时保持关闭。');
+    thirdPartySwitch.input.checked = settings.cacheThirdPartyAssets;
+    thirdPartySwitch.input.dataset.needsServer = '';
+    thirdPartySwitch.input.addEventListener('change', async () => {
+        settings.cacheThirdPartyAssets = thirdPartySwitch.input.checked;
         persistSettings();
         lastError = '';
         try {
@@ -425,26 +652,11 @@ function mountPanel() {
         }
         await refreshPanel();
     });
-    thirdPartyRow.append(thirdParty, thirdPartyText);
-
-    const renderBoostRow = document.createElement('label');
-    renderBoostRow.className = 'checkbox_label cla-switch';
-    const renderBoost = document.createElement('input');
-    renderBoost.type = 'checkbox';
-    renderBoost.checked = settings.renderBoost;
-    const renderBoostText = document.createElement('span');
-    renderBoostText.innerHTML = '<strong>长聊天渲染减负</strong><small>跳过屏幕外复杂消息的布局和绘制；正则美化很多时可开启，如滚动异常再关闭。</small>';
-    renderBoost.addEventListener('change', () => {
-        settings.renderBoost = renderBoost.checked;
-        persistSettings();
-        applyRenderBoost();
-    });
-    renderBoostRow.append(renderBoost, renderBoostText);
 
     const status = document.createElement('div');
     status.className = 'cla-status';
     status.dataset.cloudStatus = '';
-    status.textContent = '正在检查…';
+    status.textContent = '前端模式正在就绪…';
 
     const metrics = document.createElement('div');
     metrics.className = 'cla-metrics';
@@ -456,93 +668,144 @@ function mountPanel() {
         makeMetric('本次命中', 'hits'),
     );
 
-    const actions = document.createElement('div');
-    actions.className = 'cla-actions';
-    actions.append(
+    const serverActions = document.createElement('div');
+    serverActions.className = 'cla-actions';
+    serverActions.append(
         makeButton('立即预热', 'fa-solid fa-bolt', async () => {
             await registerWorker();
             const result = await warmCurrentInstall();
             globalThis.toastr?.success?.(`新预热 ${result.warmed} 个资源`, '云酒馆加速器');
-        }),
+        }, { needsServer: true }),
         makeButton('清空并重建', 'fa-solid fa-arrows-rotate', async () => {
             await sendWorkerMessage('CLEAR');
             const result = await warmCurrentInstall();
             globalThis.toastr?.success?.(`缓存已重建：${result.warmed} 个资源`, '云酒馆加速器');
-        }),
-        makeButton('刷新正则渲染', 'fa-solid fa-wand-magic-sparkles', async () => {
-            await refreshRegexRendering();
-            globalThis.toastr?.success?.('已清理正则编译缓存并重新渲染当前聊天', '云酒馆加速器');
-        }),
-        makeButton('删除本机加速', '', async () => {
+        }, { needsServer: true }),
+        makeButton('刷新缓存状态', 'fa-solid fa-chart-simple', async () => {
+            await refreshPanel({ includeStats: true });
+        }, { needsServer: true }),
+        makeButton('删除本机缓存', '', async () => {
             const result = await removeLocalAcceleration();
-            if (!result.cancelled) {
-                globalThis.toastr?.success?.('已删除这台设备上的加速服务和本地缓存', '云酒馆加速器');
-            }
+            if (!result.cancelled) globalThis.toastr?.success?.('已删除这台设备上的静态资源缓存', '云酒馆加速器');
         }, { danger: true }),
     );
 
     const note = document.createElement('small');
     note.className = 'cla-note';
-    note.textContent = '正则保存后没有出现在旧消息中，可点“刷新正则渲染”。页面大改或扩展更新后再用“清空并重建”。';
+    note.textContent = '仅安装 UI 时可直接使用长聊天减负、官方聊天截断、正则刷新和性能指标；静态缓存按钮会安全地保持不可用。';
 
-    body.append(intro, enabledRow, warmRow, thirdPartyRow, renderBoostRow, status, metrics, actions, note);
+    body.append(
+        intro,
+        frontendTitle,
+        renderBoostSwitch.row,
+        longChatSwitch.row,
+        limitRow,
+        frontendActions,
+        serverTitle,
+        enabledSwitch.row,
+        warmSwitch.row,
+        thirdPartySwitch.row,
+        status,
+        metrics,
+        serverActions,
+        note,
+    );
     root.append(header, body);
     host.append(root);
+    return true;
 }
 
-async function ensurePanel() {
-    mountPanel();
-    if (!document.getElementById(ROOT_ID) && !panelObserver) {
-        panelObserver = new MutationObserver(() => {
-            mountPanel();
-            if (document.getElementById(ROOT_ID)) {
-                panelObserver.disconnect();
-                panelObserver = null;
-                void refreshPanel();
-            }
-        });
-        panelObserver.observe(document.body, { childList: true, subtree: true });
+function ensurePanel() {
+    if (mountPanel()) {
+        panelRetryCount = 0;
+        void refreshPanel();
+        return;
     }
-    await refreshPanel();
+    if (panelRetryTimer !== null || panelRetryCount >= PANEL_RETRY_LIMIT) return;
+    panelRetryTimer = setTimeout(() => {
+        panelRetryTimer = null;
+        panelRetryCount += 1;
+        ensurePanel();
+    }, 250);
 }
 
-async function initialize() {
-    if (initialized) return;
-    initialized = true;
-    loadSettings();
-    applyRenderBoost();
-    await ensurePanel();
-    if (!settings.enabled) return;
-    try {
-        await registerWorker();
-        scheduleAutoWarmup();
-    } catch (error) {
-        lastError = error instanceof Error ? error.message : String(error);
-        console.warn(LOG_PREFIX, lastError);
-    }
-    await refreshPanel();
-}
-
-jQuery(() => void initialize());
-
-export async function onActivate() {
-    await initialize();
-}
-
-export async function onUpdate() {
+async function startAfterAppReady({ forceProbe = false, forceWarm = false } = {}) {
+    if (!activated) return;
     if (!settings) loadSettings();
-    await registerWorker();
-    await warmCurrentInstall();
+    ensurePanel();
+    startRenderObserver();
+    if (settings.longChatMode) {
+        try {
+            await applyLongChatMode();
+        } catch (error) {
+            console.warn(LOG_PREFIX, '无法应用长聊天流畅模式', error);
+        }
+    }
+
+    await probeServerPlugin({ force: forceProbe });
+    if (settings.enabled && serverState === 'available') {
+        try {
+            await registerWorker();
+            if (forceWarm) await warmCurrentInstall();
+            else scheduleAutoWarmup();
+        } catch (error) {
+            lastError = error instanceof Error ? error.message : String(error);
+            console.warn(LOG_PREFIX, lastError);
+        }
+    }
+    await refreshPanel();
+}
+
+eventSource.once(event_types.APP_READY, () => {
+    appReady = true;
+    if (!activated || appReadyWorkStarted) return;
+    appReadyWorkStarted = true;
+    void startAfterAppReady();
+});
+
+export function onActivate() {
+    activated = true;
+    if (appReady && !appReadyWorkStarted) {
+        if (!settings) loadSettings();
+        appReadyWorkStarted = true;
+        void startAfterAppReady();
+    }
+}
+
+export function onUpdate() {
+    if (appReady) {
+        if (!settings) loadSettings();
+        void startAfterAppReady({ forceProbe: true, forceWarm: true });
+    }
+}
+
+function cleanupUi() {
+    activated = false;
+    appReadyWorkStarted = false;
+    cancelScheduledWarmup();
+    stopRenderObserver();
+    if (panelRetryTimer !== null) clearTimeout(panelRetryTimer);
+    panelRetryTimer = null;
+    panelRetryCount = 0;
+    document.getElementById(ROOT_ID)?.remove();
 }
 
 export async function onDisable() {
-    cancelScheduledWarmup();
-    document.body?.classList.remove('cla-render-boost');
+    try {
+        await restoreLongChatMode({ reload: true });
+    } catch (error) {
+        console.warn(LOG_PREFIX, '恢复聊天截断设置失败', error);
+    }
+    cleanupUi();
     await unregisterWorker({ clear: true });
 }
 
 export async function onDelete() {
-    cancelScheduledWarmup();
-    document.body?.classList.remove('cla-render-boost');
+    try {
+        await restoreLongChatMode({ reload: true });
+    } catch (error) {
+        console.warn(LOG_PREFIX, '恢复聊天截断设置失败', error);
+    }
+    cleanupUi();
     await unregisterWorker({ clear: true });
 }

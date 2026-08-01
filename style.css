@@ -12,6 +12,19 @@
     line-height: 1.55;
 }
 
+.cla-section-title {
+    display: grid;
+    gap: 0.15rem;
+    margin-top: 0.15rem;
+    padding-top: 0.7rem;
+    border-top: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 14%, transparent);
+}
+
+.cla-section-title small {
+    opacity: 0.7;
+    line-height: 1.4;
+}
+
 .cla-switch {
     align-items: flex-start;
     gap: 0.65rem;
@@ -26,6 +39,19 @@
 .cla-switch small {
     opacity: 0.72;
     line-height: 1.4;
+}
+
+.cla-select-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin: 0;
+}
+
+.cla-select-row .text_pole {
+    width: auto;
+    min-width: 7rem;
 }
 
 .cla-status {
@@ -48,6 +74,11 @@
 
 .cla-status[data-state='active']::before {
     background: #49d17d;
+}
+
+.cla-status[data-state='ui']::before,
+.cla-status[data-state='available']::before {
+    background: #67b7ff;
 }
 
 .cla-status[data-state='pending']::before {
@@ -131,14 +162,15 @@
 /* Opt-in paint/layout containment for regex-heavy, highly decorated chats.
    Keep the active last message fully visible so streaming and message-height
    measurements continue to behave like stock SillyTavern. */
-body.cla-render-boost #chat .mes:not(.last_mes):not(.selected):not(:focus-within) {
+body.cla-render-boost-active #chat .mes:not(.cla-render-live):not(.last_mes):not(.selected):not(:focus-within) {
     content-visibility: auto;
     contain-intrinsic-size: auto 320px;
 }
 
-body.cla-render-boost #chat .mes.last_mes,
-body.cla-render-boost #chat .mes.selected,
-body.cla-render-boost #chat .mes:focus-within {
+body.cla-render-boost-active #chat .mes.cla-render-live,
+body.cla-render-boost-active #chat .mes.last_mes,
+body.cla-render-boost-active #chat .mes.selected,
+body.cla-render-boost-active #chat .mes:focus-within {
     content-visibility: visible;
 }
 

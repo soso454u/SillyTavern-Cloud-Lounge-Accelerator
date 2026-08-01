@@ -6,7 +6,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "soso454u",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "auto_update": true,
   "hooks": {
     "activate": "onActivate",

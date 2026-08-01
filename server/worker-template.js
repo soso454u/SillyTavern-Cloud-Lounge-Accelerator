@@ -1,4 +1,4 @@
-export const ACCELERATOR_VERSION = '1.1.0';
+export const ACCELERATOR_VERSION = '1.2.0';
 export const CACHE_PREFIX = 'cloud-lounge-static-';
 
 export const STATIC_EXACT_PATHS = Object.freeze([
