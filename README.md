@@ -2,7 +2,7 @@
 
 面向 **1Panel / Docker / 反向代理部署的 SillyTavern**，专门优化“打开网址到酒馆可用”的重复访问时间。
 
-这个项目是根据 SillyTavern 官方的前端启动顺序、服务端插件路由和静态文件目录独立设计的，没有使用、改写或移植 Cocktail 的代码。
+本项目基于 SillyTavern 官方的前端启动顺序、服务端插件路由和静态文件目录独立设计。
 
 ## 它解决什么
 
@@ -41,11 +41,17 @@ SillyTavern/
 └─ config.yaml
 ```
 
-在 SillyTavern 根目录的 `config.yaml` 中修改现有键：
+在 SillyTavern 根目录的 `config.yaml` 中，**唯一必须手动确认的配置**是：
 
 ```yaml
 enableServerPlugins: true
+```
 
+这一项无法由插件自动修改：当它是 `false` 时，SillyTavern 根本不会加载任何服务端插件。如果你的文件里已经是 `true`，就不需要再改。
+
+下面是 **可选的官方性能配置**，不是启动本插件的必要条件：
+
+```yaml
 performance:
   lazyLoadCharacters: true
   memoryCacheCapacity: '100mb'
@@ -55,7 +61,7 @@ cacheBuster:
   enabled: false
 ```
 
-> 不要再造一个重复的 `performance:` 或 `cacheBuster:` 段，请修改文件里已有的值。`lazyLoadCharacters` 对角色卡多的云酒馆通常很重要；如个别老扩展不兼容，可单独改回 `false`。
+> 如果你没有很多角色卡，可以整段不改。角色卡较多时，只把现有的 `lazyLoadCharacters` 改为 `true` 即可。`memoryCacheCapacity: '100mb'`、`useDiskCache: true` 和 `cacheBuster.enabled: false` 在当前 SillyTavern 默认配置中已是推荐值，通常无需修改。不要新建重复的 `performance:` 或 `cacheBuster:` 段。
 
 在 1Panel 重启 SillyTavern 容器/进程。日志中应该出现：
 
