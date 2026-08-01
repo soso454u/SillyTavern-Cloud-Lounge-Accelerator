@@ -1,6 +1,6 @@
 {
   "name": "sillytavern-cloud-lounge-accelerator",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A safe repeat-visit accelerator for cloud-hosted SillyTavern instances.",
   "author": "soso454u",
   "type": "module",

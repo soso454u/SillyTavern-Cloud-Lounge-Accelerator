@@ -3,8 +3,9 @@ import { saveSettingsDebounced } from '../../../../script.js';
 
 const MODULE_ID = 'cloud_lounge_accelerator';
 const PLUGIN_ID = 'cloud-lounge-accelerator';
-const VERSION = '1.0.1';
+const VERSION = '1.0.2';
 const API_BASE = `/api/plugins/${PLUGIN_ID}`;
+const CACHE_PREFIX = 'cloud-lounge-static-';
 const ROOT_ID = 'cloud-lounge-accelerator-settings';
 const LOG_PREFIX = '[Cloud Lounge Accelerator]';
 const DEFAULT_SETTINGS = Object.freeze({
@@ -119,17 +120,43 @@ async function warmCurrentInstall() {
 }
 
 async function unregisterWorker({ clear = true } = {}) {
-    if (!isSecureContextAvailable()) return false;
-    const registration = await findRootRegistration();
-    if (!registration || !isOurWorker(registration)) return false;
-    if (clear) {
-        try {
-            await sendWorkerMessage('CLEAR');
-        } catch (error) {
-            console.warn(LOG_PREFIX, '清理缓存失败', error);
+    let unregistered = false;
+    if ('serviceWorker' in navigator) {
+        const registration = await findRootRegistration();
+        if (registration && isOurWorker(registration)) {
+            if (clear) {
+                try {
+                    await sendWorkerMessage('CLEAR');
+                } catch (error) {
+                    console.warn(LOG_PREFIX, '通过加速服务清理缓存失败', error);
+                }
+            }
+            unregistered = await registration.unregister();
         }
     }
-    return registration.unregister();
+
+    if (clear && 'caches' in window) {
+        try {
+            const names = await caches.keys();
+            await Promise.all(names
+                .filter(name => name.startsWith(CACHE_PREFIX))
+                .map(name => caches.delete(name)));
+        } catch (error) {
+            console.warn(LOG_PREFIX, '从页面清理缓存失败', error);
+        }
+    }
+    return unregistered;
+}
+
+async function removeLocalAcceleration() {
+    const confirmed = globalThis.confirm('确定删除这台设备上的云酒馆加速吗？\n\n这会注销加速服务并清除本插件的本地缓存，不会删除聊天、角色卡、设置或服务器文件。');
+    if (!confirmed) return { cancelled: true };
+
+    settings.enabled = false;
+    persistSettings();
+    await unregisterWorker({ clear: true });
+    lastError = '';
+    return { cancelled: false };
 }
 
 function getNavigationMetrics() {
@@ -207,15 +234,19 @@ function makeMetric(label, key) {
     return item;
 }
 
-function makeButton(label, iconClass, handler) {
+function makeButton(label, iconClass, handler, { danger = false } = {}) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'menu_button cla-action';
-    const icon = document.createElement('i');
-    icon.className = iconClass;
+    if (danger) button.classList.add('cla-action-danger');
     const text = document.createElement('span');
     text.textContent = label;
-    button.append(icon, text);
+    if (iconClass) {
+        const icon = document.createElement('i');
+        icon.className = iconClass;
+        button.append(icon);
+    }
+    button.append(text);
     button.addEventListener('click', async () => {
         button.disabled = true;
         lastError = '';
@@ -246,7 +277,7 @@ function mountPanel() {
     const header = document.createElement('div');
     header.className = 'inline-drawer-toggle inline-drawer-header';
     const heading = document.createElement('b');
-    heading.innerHTML = '<i class="fa-solid fa-cloud-arrow-down"></i><span>云酒馆加速器</span>';
+    heading.textContent = '云酒馆加速器';
     const drawerIcon = document.createElement('div');
     drawerIcon.className = 'inline-drawer-icon fa-solid fa-circle-chevron-down down';
     header.append(heading, drawerIcon);
@@ -349,6 +380,12 @@ function mountPanel() {
             const result = await warmCurrentInstall();
             globalThis.toastr?.success?.(`缓存已重建：${result.warmed} 个资源`, '云酒馆加速器');
         }),
+        makeButton('删除本机加速', '', async () => {
+            const result = await removeLocalAcceleration();
+            if (!result.cancelled) {
+                globalThis.toastr?.success?.('已删除这台设备上的加速服务和本地缓存', '云酒馆加速器');
+            }
+        }, { danger: true }),
     );
 
     const note = document.createElement('small');

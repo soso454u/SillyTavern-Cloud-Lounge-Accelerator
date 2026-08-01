@@ -1,4 +1,4 @@
-export const ACCELERATOR_VERSION = '1.0.1';
+export const ACCELERATOR_VERSION = '1.0.2';
 export const CACHE_PREFIX = 'cloud-lounge-static-';
 
 export const STATIC_EXACT_PATHS = Object.freeze([
@@ -236,6 +236,13 @@ async function saveConfig(allowThirdParty) {
     return allowThirdPartyAssets;
 }
 
+async function clearAcceleratorResourceCaches() {
+    const names = await caches.keys();
+    const ownNames = names.filter(name => name.startsWith(CACHE_PREFIX) && name !== METADATA_CACHE);
+    const results = await Promise.all(ownNames.map(name => caches.delete(name)));
+    return results.filter(Boolean).length;
+}
+
 self.addEventListener('install', event => {
     event.waitUntil(self.skipWaiting());
 });
@@ -271,7 +278,7 @@ self.addEventListener('message', event => {
     } else if (data.type === 'STATS') {
         event.waitUntil(getStats().then(stats => reply({ ok: true, ...stats })).catch(error => reply({ ok: false, error: String(error) })));
     } else if (data.type === 'CLEAR') {
-        event.waitUntil(caches.delete(CACHE_NAME).then(cleared => reply({ ok: true, cleared })).catch(error => reply({ ok: false, error: String(error) })));
+        event.waitUntil(clearAcceleratorResourceCaches().then(cleared => reply({ ok: true, cleared })).catch(error => reply({ ok: false, error: String(error) })));
     } else if (data.type === 'CONFIG') {
         event.waitUntil(saveConfig(data.allowThirdParty).then(allowThirdParty => reply({ ok: true, allowThirdParty })).catch(error => reply({ ok: false, error: String(error) })));
     }

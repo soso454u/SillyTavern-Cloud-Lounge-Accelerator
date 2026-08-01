@@ -1,13 +1,3 @@
-#cloud-lounge-accelerator-settings .inline-drawer-header > b {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.55rem;
-}
-
-#cloud-lounge-accelerator-settings .inline-drawer-header > b > i {
-    color: #75c7ff;
-}
-
 .cla-body {
     display: grid;
     gap: 0.75rem;
@@ -111,6 +101,15 @@
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
+}
+
+.cla-action-danger {
+    border-color: color-mix(in srgb, #ef6262 55%, transparent);
+    color: #ff9a9a;
+}
+
+.cla-action-danger:hover {
+    background: color-mix(in srgb, #ef6262 16%, transparent);
 }
 
 @media (max-width: 600px) {
