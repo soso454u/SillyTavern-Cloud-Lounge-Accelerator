@@ -1,331 +1,209 @@
-.cla-body {
+.cla-panel .cla-body {
     display: grid;
-    gap: 0.75rem;
-    padding-bottom: 0.75rem;
+    gap: 0.8rem;
+    padding: 0.25rem 0 0.8rem;
 }
 
-.cla-intro,
-.cla-note {
-    margin: 0;
-    color: var(--SmartThemeBodyColor);
-    opacity: 0.82;
-    line-height: 1.55;
+.cla-overall-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.65rem 0.75rem;
+    border: 1px solid color-mix(in srgb, #39c777 38%, transparent);
+    border-radius: 0.6rem;
+    background: color-mix(in srgb, #39c777 9%, transparent);
 }
 
-.cla-section-title {
-    display: grid;
-    gap: 0.15rem;
-    margin-top: 0.15rem;
-    padding-top: 0.7rem;
-    border-top: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 14%, transparent);
+.cla-status-dot {
+    width: 0.65rem;
+    height: 0.65rem;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    background: #39c777;
+    box-shadow: 0 0 0 0.2rem color-mix(in srgb, #39c777 18%, transparent);
 }
 
-.cla-section-title small {
-    opacity: 0.7;
-    line-height: 1.4;
+.cla-panel[data-state="warning"] .cla-overall-status {
+    border-color: color-mix(in srgb, #f0ad4e 45%, transparent);
+    background: color-mix(in srgb, #f0ad4e 10%, transparent);
+}
+
+.cla-panel[data-state="warning"] .cla-status-dot {
+    background: #f0ad4e;
 }
 
 .cla-switch {
-    align-items: flex-start;
-    gap: 0.65rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
     margin: 0;
+    padding: 0.15rem 0;
 }
 
 .cla-switch > span {
     display: grid;
-    gap: 0.2rem;
+    gap: 0.18rem;
+    min-width: 0;
+}
+
+.cla-switch strong {
+    font-weight: 600;
 }
 
 .cla-switch small {
-    opacity: 0.72;
     line-height: 1.4;
+    opacity: 0.7;
 }
 
-.cla-heavy-mode {
-    padding: 0.75rem;
-    border: 1px solid color-mix(in srgb, #a78bfa 50%, transparent);
-    border-radius: 0.65rem;
-    background: color-mix(in srgb, #a78bfa 9%, transparent);
-}
-
-.cla-takeover-master {
-    padding: 0.8rem;
-    border: 1px solid color-mix(in srgb, #67b7ff 58%, transparent);
-    border-radius: 0.65rem;
-    background: linear-gradient(135deg, color-mix(in srgb, #67b7ff 13%, transparent), color-mix(in srgb, #a78bfa 9%, transparent));
-}
-
-.cla-takeover-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.6rem;
-}
-
-.cla-takeover-grid .cla-switch {
-    padding: 0.6rem;
-    border-radius: 0.55rem;
-    background: color-mix(in srgb, var(--SmartThemeBodyColor) 5%, transparent);
-}
-
-.cla-compact-settings {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.5rem;
-}
-
-.cla-compact-settings label {
-    display: grid;
-    gap: 0.25rem;
-}
-
-.cla-compact-settings .text_pole {
-    width: 100%;
-}
-
-.cla-background-init-banner {
-    position: fixed;
-    z-index: 10000;
-    top: max(0.75rem, env(safe-area-inset-top));
-    left: 50%;
-    transform: translateX(-50%);
-    max-width: min(90vw, 42rem);
-    padding: 0.55rem 0.85rem;
-    border: 1px solid color-mix(in srgb, #67b7ff 65%, transparent);
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 92%, #111827 8%);
-    box-shadow: 0 0.45rem 1.4rem rgb(0 0 0 / 24%);
-    color: var(--SmartThemeBodyColor);
-    text-align: center;
-    pointer-events: none;
-}
-
-#chat pre.cla-code-collapsed {
-    position: relative;
-    max-height: 7rem;
-    overflow: hidden;
-    cursor: pointer;
-    mask-image: linear-gradient(to bottom, #000 55%, transparent);
-}
-
-#chat pre.cla-code-collapsed::after {
-    content: '点击展开并高亮代码';
-    position: absolute;
-    right: 0.6rem;
-    bottom: 0.35rem;
-    padding: 0.2rem 0.45rem;
-    border-radius: 0.35rem;
-    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 90%, #111827 10%);
-    color: var(--SmartThemeBodyColor);
-    font-size: 0.75rem;
-    mask-image: none;
-}
-
-.cla-warning-note {
-    padding-left: 0.65rem;
-    border-left: 3px solid #f8c14c;
-}
-
-.cla-select-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    margin: 0;
-}
-
-.cla-select-row .text_pole {
-    width: auto;
-    min-width: 7rem;
-}
-
-.cla-status {
-    border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 18%, transparent);
-    border-radius: 0.65rem;
-    padding: 0.65rem 0.8rem;
-    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 82%, transparent);
-}
-
-.cla-status::before {
-    content: '';
-    display: inline-block;
-    width: 0.55rem;
-    height: 0.55rem;
-    margin-right: 0.45rem;
-    border-radius: 50%;
-    background: #9ca3af;
-    box-shadow: 0 0 0.55rem currentColor;
-}
-
-.cla-status[data-state='active']::before {
-    background: #49d17d;
-}
-
-.cla-status[data-state='ui']::before,
-.cla-status[data-state='available']::before {
-    background: #67b7ff;
-}
-
-.cla-status[data-state='pending']::before {
-    background: #f8c14c;
-}
-
-.cla-status[data-state='error'],
-.cla-status[data-state='conflict'],
-.cla-status[data-state='unsupported'] {
-    color: #ff9a9a;
-}
-
-.cla-status[data-state='error']::before,
-.cla-status[data-state='conflict']::before,
-.cla-status[data-state='unsupported']::before {
-    background: #ef6262;
-}
-
-.cla-metrics {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
-    gap: 0.5rem;
-}
-
-.cla-metric {
-    display: grid;
-    gap: 0.15rem;
-    min-width: 0;
-    padding: 0.55rem 0.65rem;
-    border-radius: 0.55rem;
-    background: color-mix(in srgb, var(--SmartThemeBodyColor) 7%, transparent);
-}
-
-.cla-metric small {
-    opacity: 0.68;
-}
-
-.cla-metric strong {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.cla-chat-metrics {
-    grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+.cla-switch input[type="checkbox"] {
+    flex: 0 0 auto;
 }
 
 .cla-actions {
     display: flex;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: 0.55rem;
-    max-width: 100%;
-    overflow-x: auto;
-    padding-bottom: 0.2rem;
-    scrollbar-width: thin;
+    padding-top: 0.2rem;
 }
 
-.cla-action {
+.cla-actions .menu_button,
+.cla-repair .menu_button {
     display: inline-flex;
-    flex: 0 0 auto;
     align-items: center;
     justify-content: center;
     gap: 0.4rem;
-    min-width: max-content;
-    white-space: nowrap;
-    word-break: keep-all;
-    writing-mode: horizontal-tb;
-}
-
-.cla-action > span {
-    display: inline-block;
-    white-space: nowrap;
-    word-break: keep-all;
-}
-
-.cla-action-danger {
-    border-color: color-mix(in srgb, #ef6262 55%, transparent);
-    color: #ff9a9a;
-}
-
-.cla-action-danger:hover {
-    background: color-mix(in srgb, #ef6262 16%, transparent);
-}
-
-.cla-task-progress {
-    display: grid;
-    grid-template-columns: minmax(8rem, 1fr) auto auto;
-    align-items: center;
-    gap: 0.55rem;
-    padding: 0.55rem 0.65rem;
-    border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 16%, transparent);
-    border-radius: 0.55rem;
-    background: color-mix(in srgb, var(--SmartThemeBodyColor) 6%, transparent);
-}
-
-.cla-task-progress[hidden] {
-    display: none;
-}
-
-.cla-task-progress progress {
-    width: 100%;
     min-width: 0;
-    accent-color: #67b7ff;
-}
-
-.cla-task-progress[data-state='done'] progress {
-    accent-color: #49d17d;
-}
-
-.cla-task-progress[data-state='warning'] progress,
-.cla-task-progress[data-state='cancelled'] progress {
-    accent-color: #f8c14c;
-}
-
-.cla-task-progress[data-state='error'] progress {
-    accent-color: #ef6262;
-}
-
-.cla-task-progress small {
     white-space: nowrap;
 }
 
-.cla-task-cancel {
-    min-width: auto;
-    padding-inline: 0.65rem;
+.cla-repair {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.7rem 0;
+    border-top: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 14%, transparent);
 }
 
-/* Opt-in paint/layout containment for regex-heavy, highly decorated chats.
-   Keep the active last message fully visible so streaming and message-height
-   measurements continue to behave like stock SillyTavern. */
-body.cla-render-boost-active #chat .mes:not(.cla-render-live):not(.last_mes):not(.selected):not(:focus-within) {
+.cla-repair-button {
+    color: #ffce72;
+}
+
+.cla-advanced {
+    border-top: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 14%, transparent);
+    padding-top: 0.55rem;
+}
+
+.cla-advanced summary {
+    cursor: pointer;
+    opacity: 0.82;
+}
+
+.cla-advanced-body {
+    display: grid;
+    gap: 0.42rem;
+    padding-top: 0.65rem;
+}
+
+.cla-advanced-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    font-size: 0.92em;
+}
+
+.cla-advanced-row span:last-child {
+    opacity: 0.72;
+    text-align: right;
+}
+
+.cla-background-init-banner {
+    position: fixed;
+    left: 50%;
+    bottom: max(1rem, env(safe-area-inset-bottom));
+    z-index: 10000;
+    transform: translateX(-50%);
+    padding: 0.55rem 0.8rem;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 18%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 92%, transparent);
+    box-shadow: 0 0.4rem 1.2rem rgb(0 0 0 / 24%);
+    font-size: 0.85rem;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+body.cla-chat-optimized #chat .mes:not(.cla-render-live):not(:has(:focus, .mes_edit_buttons_visible)) {
     content-visibility: auto;
-    contain-intrinsic-size: auto 320px;
+    contain-intrinsic-size: auto 420px;
 }
 
-body.cla-render-boost-active #chat .mes.cla-render-live,
-body.cla-render-boost-active #chat .mes.last_mes,
-body.cla-render-boost-active #chat .mes.selected,
-body.cla-render-boost-active #chat .mes:focus-within {
-    content-visibility: visible;
+#chat pre.cla-code-collapsed {
+    position: relative;
+    max-height: 8rem;
+    overflow: hidden;
+    cursor: pointer;
+    contain: layout paint;
 }
 
-@media (max-width: 600px) {
-    .cla-metrics {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+#chat pre.cla-code-collapsed::after {
+    content: '点击展开旧代码';
+    position: absolute;
+    inset: auto 0 0;
+    padding: 1.8rem 0.65rem 0.4rem;
+    background: linear-gradient(transparent, color-mix(in srgb, var(--SmartThemeBlurTintColor) 94%, #111));
+    color: var(--SmartThemeBodyColor);
+    text-align: center;
+    font: 0.8rem/1.2 sans-serif;
+}
+
+.cla-drag-source {
+    opacity: 0.42 !important;
+}
+
+.cla-drag-ghost {
+    overflow: hidden !important;
+    opacity: 0.9;
+    contain: strict;
+    transform-origin: top left;
+    will-change: transform;
+    box-shadow: 0 0.65rem 1.5rem rgb(0 0 0 / 34%);
+}
+
+.cla-drop-indicator {
+    z-index: 2147483647;
+    height: 2px;
+    border-radius: 999px;
+    background: var(--SmartThemeQuoteColor, #65aaff);
+    pointer-events: none;
+    box-shadow: 0 0 0.45rem color-mix(in srgb, var(--SmartThemeQuoteColor, #65aaff) 55%, transparent);
+}
+
+[data-cla-drag-optimized="1"] {
+    touch-action: pan-y;
+}
+
+@media (max-width: 700px) {
+    .cla-switch {
+        align-items: flex-start;
     }
 
-    .cla-actions {
-        padding-bottom: 0.35rem;
+    .cla-actions .menu_button {
+        width: 100%;
     }
 
-    .cla-takeover-grid,
-    .cla-compact-settings {
-        grid-template-columns: 1fr;
+    .cla-background-init-banner {
+        max-width: calc(100vw - 2rem);
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
+}
 
-    .cla-task-progress {
-        grid-template-columns: 1fr auto;
-    }
-
-    .cla-task-progress small {
-        grid-column: 1 / -1;
-        grid-row: 2;
-        white-space: normal;
+@media (prefers-reduced-motion: reduce) {
+    .cla-drag-ghost,
+    .cla-drop-indicator {
+        transition: none !important;
     }
 }

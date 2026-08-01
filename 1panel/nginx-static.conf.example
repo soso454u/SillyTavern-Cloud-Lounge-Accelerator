@@ -1,6 +1,7 @@
 # 放入 1Panel 网站 -> 配置 -> 配置文件的 server { ... } 内。
 # 如 SillyTavern 上游不是 127.0.0.1:8000，请把下方 proxy_pass 改成你现有反代的上游。
-# 不要对 /api、/characters、/backgrounds 或 /thumbnail 使用这段规则。
+# 不要对页面导航、登录、/api、/characters、/backgrounds、/thumbnail 或 /user 使用这段规则。
+# 使用 Basic Auth / Access 网关时保留 private，避免共享代理复用带认证的响应。
 
 gzip on;
 gzip_vary on;
@@ -27,5 +28,7 @@ location ~* ^/(?:script\.js|style\.css|lib\.js|favicon\.ico|manifest\.json|css/|
     proxy_hide_header Cache-Control;
     proxy_hide_header Expires;
     expires 1h;
-    add_header Cache-Control "public, max-age=3600, stale-while-revalidate=86400" always;
+    # 不使用 always：401/403 和认证挑战响应不能得到静态缓存头。
+    add_header Cache-Control "private, max-age=3600, stale-while-revalidate=86400";
+    add_header Vary "Authorization, Cookie";
 }
