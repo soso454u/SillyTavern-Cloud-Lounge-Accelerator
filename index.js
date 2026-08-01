@@ -2,6 +2,7 @@ import {
     chat,
     eventSource,
     event_types,
+    isGenerating,
     reloadCurrentChat,
     saveSettingsDebounced,
 } from '../../../../script.js';
@@ -66,6 +67,8 @@ function ensureModules() {
     chatOptimizer = new ChatOptimizer({
         eventSource,
         eventTypes: event_types,
+        chat,
+        isGenerating,
         scheduler,
         saveSettings: saveSettingsDebounced,
         onStatus: updateRuntimeStatus,
@@ -88,14 +91,20 @@ function ensureModules() {
 async function startEnabledModules({ skipCache = false, forceCache = false } = {}) {
     if (!activated) return;
     ensureModules();
-    if (settings.pageAcceleration) startupOptimizer.start();
+    let chatStart = null;
+    if (settings.chatOptimization) {
+        chatStart = chatOptimizer.start({ legacyTruncation });
+    }
+    if (settings.pageAcceleration || settings.chatOptimization) {
+        startupOptimizer.start({ startupFeatures: settings.pageAcceleration });
+    }
+    if (chatStart) {
+        await chatStart;
+        legacyTruncation = null;
+    }
     if (settings.interactionOptimization) await interactionOptimizer.start();
     if (!appReady) return;
-    if (settings.chatOptimization) {
-        await chatOptimizer.start({ legacyTruncation });
-        legacyTruncation = null;
-        await regexRefresh.start();
-    }
+    if (settings.chatOptimization) await regexRefresh.start();
     if (settings.pageAcceleration && !skipCache) {
         try {
             await cacheController.startAfterLogin({ force: forceCache });
@@ -126,20 +135,24 @@ async function changeSetting(key, enabled) {
     persistSettings();
     if (key === 'pageAcceleration') {
         if (enabled) {
-            startupOptimizer.start();
+            startupOptimizer.start({ startupFeatures: true });
             if (appReady) await cacheController.startAfterLogin();
         } else {
-            startupOptimizer.stop();
+            if (settings.chatOptimization) startupOptimizer.start({ startupFeatures: false });
+            else startupOptimizer.stop();
             await cacheController.stop({ clear: true });
         }
     } else if (key === 'chatOptimization') {
-        if (enabled && appReady) {
-            await chatOptimizer.start({ legacyTruncation });
+        if (enabled) {
+            const chatStart = chatOptimizer.start({ legacyTruncation });
+            startupOptimizer.start({ startupFeatures: settings.pageAcceleration });
+            await chatStart;
             legacyTruncation = null;
-            await regexRefresh.start();
+            if (appReady) await regexRefresh.start();
         } else {
             regexRefresh.stop();
             await chatOptimizer.stop();
+            if (!settings.pageAcceleration) startupOptimizer.stop();
         }
     } else if (key === 'interactionOptimization') {
         if (enabled) await interactionOptimizer.start();

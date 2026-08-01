@@ -65,15 +65,17 @@ export class StartupOptimizer {
         this.handlers = [];
         this.banner = null;
         this.started = false;
+        this.startupFeatures = true;
     }
 
-    start() {
+    start({ startupFeatures = true } = {}) {
+        this.startupFeatures = Boolean(startupFeatures);
         if (this.started) return;
         this.started = true;
         this.installFetchCoordinator();
         this.bind(this.eventTypes.SETTINGS_LOADED, () => this.onSettingsLoaded());
         this.bind(this.eventTypes.APP_READY, () => this.onAppReady());
-        this.onStatus?.('页面启动优化已启用');
+        if (this.startupFeatures) this.onStatus?.('页面启动优化已启用');
     }
 
     bind(name, handler) {
@@ -83,7 +85,7 @@ export class StartupOptimizer {
     }
 
     async onSettingsLoaded() {
-        if (!this.started) return;
+        if (!this.started || !this.startupFeatures) return;
         void this.prefetchInitializationRequests();
         try {
             const loaderModule = await import('../../../../action-loader.js');
@@ -124,6 +126,7 @@ export class StartupOptimizer {
                 await this.inspectChatResponse(cloneResponse(response));
                 return response;
             }
+            if (!this.startupFeatures) return nativeFetch(input, init);
             if (policy === 'invalidate') {
                 const response = await nativeFetch(input, init);
                 if (response.ok) this.entries.clear();
@@ -194,5 +197,6 @@ export class StartupOptimizer {
         document.body?.classList.remove('cla-early-ui');
         this.banner?.remove();
         this.banner = null;
+        this.startupFeatures = true;
     }
 }

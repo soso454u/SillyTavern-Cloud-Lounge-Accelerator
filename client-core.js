@@ -1,4 +1,4 @@
-export const CLIENT_VERSION = '2.0.0';
+export const CLIENT_VERSION = '2.0.1';
 
 export const CHAT_REQUEST_PATHS = Object.freeze(['/api/chats/get', '/api/chats/group/get']);
 
@@ -11,31 +11,75 @@ export function clampInteger(value, fallback, minimum, maximum) {
 export function chooseAdaptiveChatLimit({
     averageTextLength = 0,
     richMarkerCount = 0,
+    heavyHtmlCount = 0,
+    maxHtmlLength = 0,
     hardwareConcurrency = 8,
     deviceMemory = 8,
 } = {}) {
-    const average = Math.max(0, Number(averageTextLength) || 0);
-    const markers = Math.max(0, Number(richMarkerCount) || 0);
     const constrained = Math.max(1, Number(hardwareConcurrency) || 8) <= 4
         || Math.max(1, Number(deviceMemory) || 8) <= 4;
+    const hasHeavyHtml = Math.max(0, Number(heavyHtmlCount) || 0) > 0
+        || Math.max(0, Number(maxHtmlLength) || 0) >= 10000;
+    if (hasHeavyHtml) return constrained ? 3 : 5;
+
+    const average = Math.max(0, Number(averageTextLength) || 0);
+    const markers = Math.max(0, Number(richMarkerCount) || 0);
     let limit = average >= 7000 || markers >= 18 ? 10
         : (average >= 3000 || markers >= 8 ? 15 : (average >= 1200 || markers >= 3 ? 20 : 30));
     if (constrained) limit = Math.min(limit, average >= 3000 || markers >= 8 ? 8 : 10);
     return limit;
 }
 
+export function looksLikeHeavyHtml(text) {
+    if (typeof text !== 'string' || text.length < 3000) return false;
+    const hasDocumentRoot = /<!doctype\s+html\b/i.test(text) || /<html\b/i.test(text);
+    const hasPageParts = /<style\b/i.test(text) || /<script\b/i.test(text) || /<head\b/i.test(text);
+    const hasFencedHtml = /```html\b/i.test(text);
+    return (hasDocumentRoot && hasPageParts) || (hasFencedHtml && text.length >= 6000);
+}
+
 export function measureChatPayload(messages) {
     const sample = (Array.isArray(messages) ? messages : []).slice(-40);
-    if (!sample.length) return { averageTextLength: 0, richMarkerCount: 0 };
+    if (!sample.length) {
+        return { averageTextLength: 0, richMarkerCount: 0, heavyHtmlCount: 0, maxHtmlLength: 0 };
+    }
     const richPattern = /<(?:details|table|svg|pre|iframe)\b|(?:box-shadow|filter\s*:|backdrop-filter|text-shadow)/gi;
     let textLength = 0;
     let richMarkerCount = 0;
+    let heavyHtmlCount = 0;
+    let maxHtmlLength = 0;
     for (const message of sample) {
         const text = String(message?.mes ?? message?.message ?? '');
         textLength += text.length;
         richMarkerCount += text.match(richPattern)?.length || 0;
+        if (looksLikeHeavyHtml(text)) {
+            heavyHtmlCount += 1;
+            maxHtmlLength = Math.max(maxHtmlLength, text.length);
+        }
     }
-    return { averageTextLength: Math.round(textLength / sample.length), richMarkerCount };
+    return {
+        averageTextLength: Math.round(textLength / sample.length),
+        richMarkerCount,
+        heavyHtmlCount,
+        maxHtmlLength,
+    };
+}
+
+export function selectLiveMessageIndexes(visibility, { generating = false, fallbackCount = 3 } = {}) {
+    const states = Array.isArray(visibility) ? visibility : [];
+    const selected = new Set();
+    states.forEach((visible, index) => {
+        if (!visible) return;
+        if (index > 0) selected.add(index - 1);
+        selected.add(index);
+        if (index + 1 < states.length) selected.add(index + 1);
+    });
+    if (!selected.size) {
+        const count = clampInteger(fallbackCount, 3, 1, Math.max(1, states.length));
+        for (let index = Math.max(0, states.length - count); index < states.length; index += 1) selected.add(index);
+    }
+    if (generating && states.length) selected.add(states.length - 1);
+    return [...selected].sort((left, right) => left - right);
 }
 
 export function classifyStartupRequest({ pathname = '', method = 'GET' } = {}) {

@@ -4,6 +4,7 @@ import {
     estimateRenderComplexity,
     getAdaptiveBatchSize,
     measureChatPayload,
+    selectLiveMessageIndexes,
 } from '../client-core.js';
 
 const CODE_SELECTOR = '#chat .mes pre code';
@@ -18,9 +19,11 @@ function isVisible(element, root) {
 }
 
 export class ChatOptimizer {
-    constructor({ eventSource, eventTypes, scheduler, saveSettings, onStatus = null }) {
+    constructor({ eventSource, eventTypes, chat = [], isGenerating = () => false, scheduler, saveSettings, onStatus = null }) {
         this.eventSource = eventSource;
         this.eventTypes = eventTypes;
+        this.chat = chat;
+        this.isGenerating = isGenerating;
         this.scheduler = scheduler;
         this.saveSettings = saveSettings;
         this.onStatus = onStatus;
@@ -38,6 +41,9 @@ export class ChatOptimizer {
         this.highlightObserver = null;
         this.touchState = null;
         this.swipeSuppressUntil = 0;
+        this.heavyHtmlMode = false;
+        this.renderOptimizationActive = false;
+        this.pendingMetrics = null;
         this.generation = 0;
     }
 
@@ -61,11 +67,18 @@ export class ChatOptimizer {
                 ? restoredTruncation
                 : (Number.isFinite(this.powerUser?.chat_truncation) ? this.powerUser.chat_truncation : 100);
             localStorage.setItem(ORIGINAL_TRUNCATION_KEY, String(this.originalTruncation));
-            this.applyMetrics({ averageTextLength: 1200, richMarkerCount: 3 });
+            const initialMetrics = this.pendingMetrics || (Array.isArray(this.chat) && this.chat.length
+                ? measureChatPayload(this.chat)
+                : { averageTextLength: 1200, richMarkerCount: 3, heavyHtmlCount: 0, maxHtmlLength: 0 });
+            this.pendingMetrics = null;
+            this.applyMetrics(initialMetrics);
         } catch (error) {
             console.debug(LOG_PREFIX, '官方聊天截断接口不可用', error);
         }
-        this.bind(this.eventTypes.CHAT_CHANGED, () => this.refreshChatBindings());
+        this.bind(this.eventTypes.CHAT_CHANGED, () => {
+            this.inspectPayload(this.chat);
+            this.refreshChatBindings();
+        });
         this.bind(this.eventTypes.MORE_MESSAGES_LOADED, () => this.refreshRenderState());
         this.refreshChatBindings();
         await this.installHighlighter(generation);
@@ -82,11 +95,17 @@ export class ChatOptimizer {
 
     inspectPayload(messages) {
         if (!this.started) return;
-        this.applyMetrics(measureChatPayload(messages));
+        const metrics = measureChatPayload(messages);
+        if (!this.powerUser) {
+            this.pendingMetrics = metrics;
+            return;
+        }
+        this.applyMetrics(metrics);
     }
 
     applyMetrics(metrics) {
         if (!this.powerUser || !this.started) return;
+        this.heavyHtmlMode = Number(metrics?.heavyHtmlCount) > 0 || Number(metrics?.maxHtmlLength) >= 10000;
         const limit = chooseAdaptiveChatLimit({
             ...metrics,
             hardwareConcurrency: navigator.hardwareConcurrency,
@@ -105,6 +124,7 @@ export class ChatOptimizer {
             if (this.scrollFrame) return;
             this.scrollFrame = requestAnimationFrame(() => {
                 this.scrollFrame = null;
+                this.refreshLiveMessages();
                 void this.maybeLoadEarlier();
             });
         };
@@ -138,15 +158,30 @@ export class ChatOptimizer {
 
     chooseLoadBatch() {
         const constrained = (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 4;
-        return constrained || this.getComplexity() >= 900 ? 2 : 4;
+        return this.heavyHtmlMode || constrained || this.getComplexity() >= 900 ? 2 : 4;
     }
 
     refreshRenderState() {
         const messages = this.chatElement ? [...this.chatElement.querySelectorAll('.mes')] : [];
-        const active = this.started && (messages.length >= 20 || this.getComplexity() >= 900);
+        const active = this.started && (this.heavyHtmlMode || messages.length >= 20 || this.getComplexity() >= 900);
+        this.renderOptimizationActive = active;
         document.body?.classList.toggle('cla-chat-optimized', active);
+        if (!active) {
+            for (const message of messages) message.classList.remove('cla-render-live');
+            return;
+        }
+
+        this.refreshLiveMessages(messages);
+    }
+
+    refreshLiveMessages(messages = this.chatElement ? [...this.chatElement.querySelectorAll('.mes')] : []) {
+        if (!this.renderOptimizationActive) return;
         for (const message of messages) message.classList.remove('cla-render-live');
-        if (active) messages.slice(-5).forEach(message => message.classList.add('cla-render-live'));
+        const indexes = selectLiveMessageIndexes(
+            messages.map(message => isVisible(message, this.chatElement)),
+            { generating: Boolean(this.isGenerating?.()) },
+        );
+        indexes.forEach(index => messages[index]?.classList.add('cla-render-live'));
     }
 
     async maybeLoadEarlier() {
@@ -238,6 +273,15 @@ export class ChatOptimizer {
         if (!this.started || element.dataset.claHighlighted === '1' || !this.originalHighlight) return;
         const messages = [...document.querySelectorAll('#chat .mes')];
         const recent = messages.slice(-3).includes(element.closest('.mes'));
+        if (isHeavyHtmlCode(element)) {
+            if (!recent) this.collapseOldCode(element);
+            element.dataset.claHighlighted = '1';
+            element.dataset.claHeavyHtml = '1';
+            element.dataset.highlighted = 'yes';
+            delete element.dataset.claHighlightPending;
+            this.highlightObserver?.unobserve(element);
+            return;
+        }
         if (!recent) this.collapseOldCode(element);
         if (!force && !recent && !isVisible(element, this.chatElement)) {
             element.dataset.claHighlightPending = '1';
@@ -323,6 +367,7 @@ export class ChatOptimizer {
         if (this.scrollFrame) cancelAnimationFrame(this.scrollFrame);
         this.scrollFrame = null;
         document.body?.classList.remove('cla-chat-optimized');
+        this.renderOptimizationActive = false;
         document.querySelectorAll('.cla-render-live').forEach(element => element.classList.remove('cla-render-live'));
         this.highlightObserver?.disconnect();
         if (this.highlightLibrary && this.highlightWrapper && this.highlightLibrary.highlightElement === this.highlightWrapper) {
@@ -334,6 +379,11 @@ export class ChatOptimizer {
         document.querySelectorAll('[data-cla-collapsible]').forEach(element => {
             element.classList.remove('cla-code-collapsed');
             delete element.dataset.claCollapsible;
+        });
+        document.querySelectorAll('[data-cla-heavy-html]').forEach(element => {
+            delete element.dataset.claHighlighted;
+            delete element.dataset.claHeavyHtml;
+            delete element.dataset.highlighted;
         });
         document.removeEventListener('touchstart', this.onTouchStart, true);
         document.removeEventListener('touchmove', this.onTouchMove, true);
@@ -347,5 +397,24 @@ export class ChatOptimizer {
         localStorage.removeItem(ORIGINAL_TRUNCATION_KEY);
         this.powerUser = null;
         this.originalTruncation = null;
+        this.heavyHtmlMode = false;
+        this.pendingMetrics = null;
     }
+}
+
+export function isHeavyHtmlCodeText({ text = '', classNames = [] } = {}) {
+    if (typeof text !== 'string' || text.length < 4000) return false;
+    const classes = new Set(Array.from(classNames, value => String(value).toLowerCase()));
+    const declaredHtml = classes.has('language-html') || classes.has('lang-html');
+    const fullDocument = /<!doctype\s+html\b/i.test(text) || /<html\b/i.test(text);
+    return declaredHtml && fullDocument;
+}
+
+function isHeavyHtmlCode(element) {
+    if (!(element instanceof Element)) return false;
+    const pre = element.closest('pre');
+    return isHeavyHtmlCodeText({
+        text: element.textContent || '',
+        classNames: [...element.classList, ...(pre?.classList || [])],
+    });
 }
