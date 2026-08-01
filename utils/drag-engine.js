@@ -8,6 +8,12 @@ export function calculateInsertionIndex(rects, pointerY, draggedIndex = -1) {
     return match ? match.index : rects.length;
 }
 
+export function findDirectListItem(target, list, itemSelector) {
+    let candidate = target;
+    while (candidate && candidate.parentElement !== list) candidate = candidate.parentElement;
+    return candidate?.parentElement === list && candidate.matches?.(itemSelector) ? candidate : null;
+}
+
 export class PointerDragEngine {
     constructor({ list, itemSelector, handleSelector = null, onCommit, label = '列表条目' }) {
         this.list = list;
@@ -29,9 +35,10 @@ export class PointerDragEngine {
     onPointerDown(event) {
         if (event.button !== 0 || !event.isPrimary || this.drag) return;
         const target = event.target instanceof Element ? event.target : null;
-        const item = target?.closest(this.itemSelector);
-        if (!item || item.parentElement !== this.list) return;
-        if (this.handleSelector && !target.closest(this.handleSelector)) return;
+        const item = findDirectListItem(target, this.list, this.itemSelector);
+        if (!item) return;
+        const handle = this.handleSelector ? target.closest(this.handleSelector) : null;
+        if (this.handleSelector && (!handle || !item.contains(handle))) return;
         if (!this.handleSelector && target.closest(INTERACTIVE_SELECTOR)) return;
 
         const rect = item.getBoundingClientRect();

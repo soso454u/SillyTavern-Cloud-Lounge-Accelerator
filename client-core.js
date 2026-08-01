@@ -1,4 +1,5 @@
-export const CLIENT_VERSION = '2.0.2';
+export const CLIENT_VERSION = '2.0.3';
+export const CHAT_PAGE_SIZE = 5;
 
 export const CHAT_REQUEST_PATHS = Object.freeze(['/api/chats/get', '/api/chats/group/get']);
 
@@ -8,26 +9,8 @@ export function clampInteger(value, fallback, minimum, maximum) {
     return Math.min(maximum, Math.max(minimum, parsed));
 }
 
-export function chooseAdaptiveChatLimit({
-    averageTextLength = 0,
-    richMarkerCount = 0,
-    heavyHtmlCount = 0,
-    maxHtmlLength = 0,
-    hardwareConcurrency = 8,
-    deviceMemory = 8,
-} = {}) {
-    const constrained = Math.max(1, Number(hardwareConcurrency) || 8) <= 4
-        || Math.max(1, Number(deviceMemory) || 8) <= 4;
-    const hasHeavyHtml = Math.max(0, Number(heavyHtmlCount) || 0) > 0
-        || Math.max(0, Number(maxHtmlLength) || 0) >= 10000;
-    if (hasHeavyHtml) return constrained ? 3 : 5;
-
-    const average = Math.max(0, Number(averageTextLength) || 0);
-    const markers = Math.max(0, Number(richMarkerCount) || 0);
-    let limit = average >= 7000 || markers >= 18 ? 10
-        : (average >= 3000 || markers >= 8 ? 15 : (average >= 1200 || markers >= 3 ? 20 : 30));
-    if (constrained) limit = Math.min(limit, average >= 3000 || markers >= 8 ? 8 : 10);
-    return limit;
+export function chooseAdaptiveChatLimit() {
+    return CHAT_PAGE_SIZE;
 }
 
 export function looksLikeHeavyHtml(text) {

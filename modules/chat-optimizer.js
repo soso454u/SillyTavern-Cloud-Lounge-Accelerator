@@ -1,4 +1,5 @@
 import {
+    CHAT_PAGE_SIZE,
     chooseAdaptiveChatLimit,
     detectSwipeAxis,
     estimateRenderComplexity,
@@ -44,6 +45,7 @@ export class ChatOptimizer {
         this.heavyHtmlMode = false;
         this.renderOptimizationActive = false;
         this.pendingMetrics = null;
+        this.userScrollIntentUntil = 0;
         this.generation = 0;
     }
 
@@ -117,6 +119,10 @@ export class ChatOptimizer {
     refreshChatBindings() {
         this.chatElement?.removeEventListener('scroll', this.onScroll);
         this.chatElement?.removeEventListener('click', this.onHistoryClick, true);
+        this.chatElement?.removeEventListener('wheel', this.onScrollIntent);
+        this.chatElement?.removeEventListener('touchmove', this.onScrollIntent);
+        this.chatElement?.removeEventListener('pointerdown', this.onScrollIntent);
+        this.chatElement?.removeEventListener('keydown', this.onScrollKey);
         this.domObserver?.disconnect();
         this.chatElement = document.querySelector('#chat');
         if (!this.chatElement || !this.started) return;
@@ -125,18 +131,32 @@ export class ChatOptimizer {
             this.scrollFrame = requestAnimationFrame(() => {
                 this.scrollFrame = null;
                 this.refreshLiveMessages();
-                void this.maybeLoadEarlier();
+                if (performance.now() <= this.userScrollIntentUntil) {
+                    this.userScrollIntentUntil = 0;
+                    void this.maybeLoadEarlier();
+                }
             });
+        };
+        this.onScrollIntent ||= () => {
+            this.userScrollIntentUntil = performance.now() + 1200;
+        };
+        this.onScrollKey ||= event => {
+            if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) this.onScrollIntent();
         };
         this.onHistoryClick ||= event => {
             const button = event.target instanceof Element ? event.target.closest('#show_more_messages') : null;
             if (!button || !this.started) return;
             event.preventDefault();
             event.stopImmediatePropagation();
+            this.userScrollIntentUntil = 0;
             void this.loadEarlier(this.chooseLoadBatch());
         };
         this.chatElement.addEventListener('scroll', this.onScroll, { passive: true });
         this.chatElement.addEventListener('click', this.onHistoryClick, true);
+        this.chatElement.addEventListener('wheel', this.onScrollIntent, { passive: true });
+        this.chatElement.addEventListener('touchmove', this.onScrollIntent, { passive: true });
+        this.chatElement.addEventListener('pointerdown', this.onScrollIntent, { passive: true });
+        this.chatElement.addEventListener('keydown', this.onScrollKey);
         this.domObserver = new MutationObserver(() => {
             this.refreshRenderState();
             this.observeCodeBlocks();
@@ -157,8 +177,7 @@ export class ChatOptimizer {
     }
 
     chooseLoadBatch() {
-        const constrained = (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 4;
-        return this.heavyHtmlMode || constrained || this.getComplexity() >= 900 ? 2 : 4;
+        return CHAT_PAGE_SIZE;
     }
 
     refreshRenderState() {
@@ -361,6 +380,10 @@ export class ChatOptimizer {
         this.eventHandlers = [];
         this.chatElement?.removeEventListener('scroll', this.onScroll);
         this.chatElement?.removeEventListener('click', this.onHistoryClick, true);
+        this.chatElement?.removeEventListener('wheel', this.onScrollIntent);
+        this.chatElement?.removeEventListener('touchmove', this.onScrollIntent);
+        this.chatElement?.removeEventListener('pointerdown', this.onScrollIntent);
+        this.chatElement?.removeEventListener('keydown', this.onScrollKey);
         this.chatElement = null;
         this.domObserver?.disconnect();
         this.domObserver = null;
@@ -399,6 +422,7 @@ export class ChatOptimizer {
         this.originalTruncation = null;
         this.heavyHtmlMode = false;
         this.pendingMetrics = null;
+        this.userScrollIntentUntil = 0;
     }
 }
 

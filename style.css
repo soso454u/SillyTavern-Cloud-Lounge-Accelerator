@@ -185,6 +185,15 @@ body.cla-chat-optimized #chat .mes:not(.cla-render-live):not(:has(:focus, .mes_e
     touch-action: pan-y;
 }
 
+[data-cla-drag-optimized="1"] .drag-handle {
+    cursor: grab;
+    touch-action: none;
+}
+
+[data-cla-drag-optimized="1"] .drag-handle:active {
+    cursor: grabbing;
+}
+
 @media (max-width: 700px) {
     .cla-switch {
         align-items: flex-start;

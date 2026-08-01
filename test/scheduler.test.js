@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { FrameScheduler } from '../utils/scheduler.js';
-import { calculateInsertionIndex } from '../utils/drag-engine.js';
+import { calculateInsertionIndex, findDirectListItem } from '../utils/drag-engine.js';
 
 test('runs higher-priority queued work first', async () => {
     const callbacks = [];
@@ -30,4 +30,14 @@ test('calculates a single DOM insertion point from item midpoints', () => {
     assert.equal(calculateInsertionIndex(rects, 10, 1), 0);
     assert.equal(calculateInsertionIndex(rects, 70, 0), 2);
     assert.equal(calculateInsertionIndex(rects, 140, 1), 3);
+});
+
+test('resolves a nested drag handle to the matching direct list item', () => {
+    const list = {};
+    const item = { parentElement: list, matches: selector => selector === '*' || selector === '.entry' };
+    const wrapper = { parentElement: item, matches: () => false };
+    const handle = { parentElement: wrapper, matches: () => false };
+    assert.equal(findDirectListItem(handle, list, '*'), item);
+    assert.equal(findDirectListItem(handle, list, '.entry'), item);
+    assert.equal(findDirectListItem(handle, list, '.missing'), null);
 });
