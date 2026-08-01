@@ -1,19 +1,35 @@
-export const CLIENT_VERSION = '1.3.1';
+export const CLIENT_VERSION = '1.5.0';
 
-export const CHAT_LIMIT_CHOICES = Object.freeze([10, 15, 20, 30, 50]);
+export const CHAT_LIMIT_CHOICES = Object.freeze([8, 10, 15, 20, 30, 50]);
 export const CHAT_REQUEST_PATHS = Object.freeze(['/api/chats/get', '/api/chats/group/get']);
+export const TAKEOVER_INTENSITIES = Object.freeze(['balanced', 'strong', 'extreme']);
 
 export const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
     autoWarm: false,
     cacheThirdPartyAssets: false,
-    renderBoost: false,
+    renderBoost: true,
     renderBoostThreshold: 20,
     longChatMode: false,
     longChatLimit: 20,
     previousChatTruncation: null,
     heavyBeautifyMode: false,
     heavyModePrevious: null,
+    takeoverEnabled: true,
+    takeoverIntensity: 'strong',
+    earlyUi: true,
+    requestPrefetch: true,
+    regexAutoRefresh: true,
+    adaptiveChatLimit: true,
+    adaptivePreviousChatTruncation: null,
+    autoLoadOlder: true,
+    autoLoadBatch: 6,
+    autoLoadDistance: 180,
+    autoLoadCooldown: 700,
+    deferChatHighlight: true,
+    skipOldHighlight: false,
+    collapseOldCode: false,
+    mobileSwipeGuard: true,
     lastWarmVersion: '',
     settingsVersion: CLIENT_VERSION,
 });
@@ -49,7 +65,7 @@ export function normalizeSettings(value) {
         enabled: source.enabled !== false,
         autoWarm: source.autoWarm === true,
         cacheThirdPartyAssets: source.cacheThirdPartyAssets === true,
-        renderBoost: heavyBeautifyMode || source.renderBoost === true,
+        renderBoost: heavyBeautifyMode || source.renderBoost !== false,
         renderBoostThreshold: isPre13Settings
             ? DEFAULT_SETTINGS.renderBoostThreshold
             : clampInteger(source.renderBoostThreshold, DEFAULT_SETTINGS.renderBoostThreshold, 1, 500),
@@ -64,9 +80,92 @@ export function normalizeSettings(value) {
             longChatMode: previous.longChatMode === true,
             longChatLimit: normalizeChoice(previous.longChatLimit, DEFAULT_SETTINGS.longChatLimit, CHAT_LIMIT_CHOICES),
         } : null,
+        takeoverEnabled: source.takeoverEnabled !== false,
+        takeoverIntensity: TAKEOVER_INTENSITIES.includes(source.takeoverIntensity)
+            ? source.takeoverIntensity
+            : DEFAULT_SETTINGS.takeoverIntensity,
+        earlyUi: source.earlyUi !== false,
+        requestPrefetch: source.requestPrefetch !== false,
+        regexAutoRefresh: source.regexAutoRefresh !== false,
+        adaptiveChatLimit: source.adaptiveChatLimit !== false,
+        adaptivePreviousChatTruncation: Number.isFinite(source.adaptivePreviousChatTruncation)
+            ? source.adaptivePreviousChatTruncation
+            : null,
+        autoLoadOlder: source.autoLoadOlder !== false,
+        autoLoadBatch: clampInteger(source.autoLoadBatch, DEFAULT_SETTINGS.autoLoadBatch, 1, 20),
+        autoLoadDistance: clampInteger(source.autoLoadDistance, DEFAULT_SETTINGS.autoLoadDistance, 40, 600),
+        autoLoadCooldown: clampInteger(source.autoLoadCooldown, DEFAULT_SETTINGS.autoLoadCooldown, 200, 5000),
+        deferChatHighlight: source.deferChatHighlight !== false,
+        skipOldHighlight: source.skipOldHighlight === true,
+        collapseOldCode: source.collapseOldCode === true,
+        mobileSwipeGuard: source.mobileSwipeGuard !== false,
         lastWarmVersion: typeof source.lastWarmVersion === 'string' ? source.lastWarmVersion : '',
         settingsVersion: CLIENT_VERSION,
     };
+}
+
+export function chooseAdaptiveChatLimit({
+    averageTextLength = 0,
+    richMarkerCount = 0,
+    hardwareConcurrency = 8,
+    deviceMemory = 8,
+    intensity = 'strong',
+} = {}) {
+    const average = Math.max(0, Number(averageTextLength) || 0);
+    const markers = Math.max(0, Number(richMarkerCount) || 0);
+    const cores = Math.max(1, Number(hardwareConcurrency) || 8);
+    const memory = Math.max(1, Number(deviceMemory) || 8);
+    const constrained = cores <= 4 || memory <= 4;
+    let limit = average >= 7000 || markers >= 18 ? 10
+        : (average >= 3000 || markers >= 8 ? 15 : (average >= 1200 || markers >= 3 ? 20 : 30));
+
+    if (constrained) limit = Math.min(limit, average >= 3000 || markers >= 8 ? 8 : 10);
+    if (intensity === 'extreme') limit = Math.max(8, limit - 5);
+    if (intensity === 'balanced' && !constrained) limit = Math.min(30, limit + 5);
+    return limit;
+}
+
+export function measureChatPayload(messages) {
+    const list = Array.isArray(messages) ? messages : [];
+    const sample = list.slice(-40);
+    if (!sample.length) return { averageTextLength: 0, richMarkerCount: 0 };
+    let textLength = 0;
+    let richMarkerCount = 0;
+    const richPattern = /<(?:details|table|svg|pre|iframe)\b|(?:box-shadow|filter\s*:|backdrop-filter|text-shadow)/gi;
+    for (const message of sample) {
+        const text = String(message?.mes ?? message?.message ?? '');
+        textLength += text.length;
+        richMarkerCount += text.match(richPattern)?.length || 0;
+    }
+    return {
+        averageTextLength: Math.round(textLength / sample.length),
+        richMarkerCount,
+    };
+}
+
+export function classifyTakeoverRequest({ pathname = '', method = 'GET' } = {}) {
+    const verb = String(method).toUpperCase();
+    if (CHAT_REQUEST_PATHS.includes(pathname) && verb === 'POST') return 'observe-chat';
+    if (verb === 'GET' && (
+        pathname === '/api/extensions/discover'
+        || /^\/scripts\/extensions\/.+\.(?:html|css|json)$/.test(pathname)
+    )) return 'reuse';
+    if (verb === 'POST' && ['/api/avatars/get', '/api/characters/all', '/api/backgrounds/all'].includes(pathname)) {
+        return 'reuse';
+    }
+    if (/^\/api\/(?:characters|avatars|backgrounds)\/(?:create|edit|delete|rename|upload|import|duplicate)/.test(pathname)) {
+        return 'invalidate';
+    }
+    return 'native';
+}
+
+export function detectSwipeAxis({ deltaX = 0, deltaY = 0, minimum = 12, ratio = 1.35 } = {}) {
+    const x = Math.abs(Number(deltaX) || 0);
+    const y = Math.abs(Number(deltaY) || 0);
+    if (Math.max(x, y) < minimum) return 'pending';
+    if (y > x * ratio) return 'vertical';
+    if (x > y * ratio) return 'horizontal';
+    return 'ambiguous';
 }
 
 export function shouldActivateRenderBoost({ enabled, messageCount, threshold }) {

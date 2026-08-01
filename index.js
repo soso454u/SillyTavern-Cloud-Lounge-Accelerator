@@ -9,6 +9,7 @@ import { extension_settings } from '../../../extensions.js';
 import {
     CHAT_LIMIT_CHOICES,
     CLIENT_VERSION,
+    TAKEOVER_INTENSITIES,
     buildChatDiagnostics,
     estimateRenderComplexity,
     findLatestChatRequest,
@@ -18,6 +19,8 @@ import {
     shouldActivateRenderBoost,
     shouldAutoWarm,
 } from './client-core.js';
+import { FrontendTakeoverController } from './frontend-takeover.js';
+import { FrameBudgetScheduler, budgetForIntensity } from './frontend-scheduler.js';
 
 const MODULE_ID = 'cloud_lounge_accelerator';
 const PLUGIN_ID = 'cloud-lounge-accelerator';
@@ -62,6 +65,15 @@ let serverState = 'unknown';
 let serverHealth = null;
 let lastWorkerStats = null;
 let lastError = '';
+let takeoverController = null;
+let takeoverState = 'native';
+let takeoverLabel = '酒馆原生流程';
+const frontendScheduler = new FrameBudgetScheduler({
+    budgetMs: 10,
+    onError: error => {
+        if (error?.name !== 'AbortError') console.error(LOG_PREFIX, '统一帧预算任务失败', error);
+    },
+});
 let frontendTaskGeneration = 0;
 let chatUiApiPromise = null;
 let frontendTaskState = {
@@ -76,11 +88,47 @@ let frontendTaskState = {
 function loadSettings() {
     settings = normalizeSettings(extension_settings[MODULE_ID]);
     extension_settings[MODULE_ID] = settings;
+    frontendScheduler.setBudget(budgetForIntensity(settings.takeoverIntensity));
+    return settings;
 }
 
 function persistSettings() {
     extension_settings[MODULE_ID] = settings;
     saveSettingsDebounced();
+    takeoverController?.updateSettings(settings);
+}
+
+function updateTakeoverStatus(state, label) {
+    takeoverState = state;
+    takeoverLabel = label;
+    if (['circuit', 'native', 'safe'].includes(state) && frontendTaskState.status === 'running') {
+        cancelFrontendTask(label);
+    }
+    const node = document.querySelector(`#${ROOT_ID} [data-cloud-takeover-status]`);
+    if (node) {
+        node.dataset.state = state;
+        node.textContent = label;
+    }
+    const master = document.querySelector(`#${ROOT_ID} [data-cloud-takeover-master]`);
+    if (master && settings) master.checked = settings.takeoverEnabled;
+}
+
+function ensureTakeoverController() {
+    if (takeoverController) return takeoverController;
+    takeoverController = new FrontendTakeoverController({
+        settings,
+        scheduler: frontendScheduler,
+        eventSource,
+        eventTypes: event_types,
+        chat,
+        refreshRegex: () => reapplyRegexRendering(),
+        loadEarlier: (count, options) => loadEarlierMessagesSmoothly(count, options),
+        reloadChat: () => reloadCurrentChat(),
+        persistSettings,
+        loadSettings,
+        onStatus: updateTakeoverStatus,
+    });
+    return takeoverController;
 }
 
 function isSecureContextAvailable() {
@@ -232,7 +280,7 @@ function scheduleAutoWarmup() {
         scheduledWarmup = null;
         if (document.visibilityState !== 'visible') return;
         try {
-            await warmCurrentInstall();
+            await frontendScheduler.schedule(() => warmCurrentInstall(), { priority: 4 });
             settings.lastWarmVersion = CLIENT_VERSION;
             persistSettings();
         } catch (error) {
@@ -297,8 +345,8 @@ async function removeLocalAcceleration() {
     return { cancelled: false };
 }
 
-function nextAnimationFrame() {
-    return new Promise(resolve => requestAnimationFrame(resolve));
+function nextAnimationFrame(priority = 2) {
+    return frontendScheduler.yield(priority);
 }
 
 function renderFrontendTaskState() {
@@ -399,49 +447,54 @@ async function reapplyRegexRendering() {
     let batchSize = 4;
     let previousFrameMs = 0;
 
-    while (completed < descriptors.length) {
-        await nextAnimationFrame();
-        if (taskId !== frontendTaskGeneration) return { cancelled: true, completed, total: descriptors.length };
-
-        const frameStartedAt = performance.now();
-        const nextComplexity = descriptors[completed]?.complexity || 0;
-        batchSize = getAdaptiveBatchSize({
-            complexity: nextComplexity,
-            previousFrameMs,
-            currentBatch: batchSize,
-        });
-        let processedThisFrame = 0;
-
-        while (completed < descriptors.length && processedThisFrame < batchSize) {
+    takeoverController?.setRegexRefreshing(true);
+    try {
+        while (completed < descriptors.length) {
+            await nextAnimationFrame(descriptors[completed]?.visible ? 0 : (descriptors[completed]?.recent ? 1 : 2));
             if (taskId !== frontendTaskGeneration) return { cancelled: true, completed, total: descriptors.length };
-            const descriptor = descriptors[completed];
-            try {
-                api.updateMessageBlock(descriptor.messageId, chat[descriptor.messageId], { rerenderMessage: true });
-            } catch (error) {
-                failed += 1;
-                console.warn(LOG_PREFIX, `局部刷新消息 ${descriptor.messageId} 失败`, error);
+
+            const frameStartedAt = performance.now();
+            const nextComplexity = descriptors[completed]?.complexity || 0;
+            batchSize = getAdaptiveBatchSize({
+                complexity: nextComplexity,
+                previousFrameMs,
+                currentBatch: batchSize,
+            });
+            let processedThisFrame = 0;
+
+            while (completed < descriptors.length && processedThisFrame < batchSize) {
+                if (taskId !== frontendTaskGeneration) return { cancelled: true, completed, total: descriptors.length };
+                const descriptor = descriptors[completed];
+                try {
+                    api.updateMessageBlock(descriptor.messageId, chat[descriptor.messageId], { rerenderMessage: true });
+                } catch (error) {
+                    failed += 1;
+                    console.warn(LOG_PREFIX, `局部刷新消息 ${descriptor.messageId} 失败`, error);
+                }
+                completed += 1;
+                processedThisFrame += 1;
+                if (performance.now() - frameStartedAt >= 12) break;
             }
-            completed += 1;
-            processedThisFrame += 1;
-            if (performance.now() - frameStartedAt >= 12) break;
+
+            previousFrameMs = performance.now() - frameStartedAt;
+            setFrontendTaskState(taskId, {
+                completed,
+                elapsedMs: performance.now() - startedAt,
+            });
         }
 
-        previousFrameMs = performance.now() - frameStartedAt;
+        const elapsedMs = performance.now() - startedAt;
         setFrontendTaskState(taskId, {
+            status: failed ? 'warning' : 'done',
+            label: failed ? `局部刷新完成，${failed} 条失败` : '局部刷新完成',
             completed,
-            elapsedMs: performance.now() - startedAt,
+            elapsedMs,
         });
+        scheduleChatDiagnosticCapture();
+        return { cancelled: false, completed, failed, total: descriptors.length, elapsedMs };
+    } finally {
+        takeoverController?.setRegexRefreshing(false);
     }
-
-    const elapsedMs = performance.now() - startedAt;
-    setFrontendTaskState(taskId, {
-        status: failed ? 'warning' : 'done',
-        label: failed ? `局部刷新完成，${failed} 条失败` : '局部刷新完成',
-        completed,
-        elapsedMs,
-    });
-    scheduleChatDiagnosticCapture();
-    return { cancelled: false, completed, failed, total: descriptors.length, elapsedMs };
 }
 
 async function fullReloadRegexRendering() {
@@ -493,7 +546,10 @@ function getVisibleMessageAnchor() {
     return Number.isInteger(messageId) ? { messageId, top: element.getBoundingClientRect().top } : null;
 }
 
-async function loadEarlierMessagesSmoothly(limit = 10) {
+async function loadEarlierMessagesSmoothly(limit = 10, { source = 'manual' } = {}) {
+    if (source === 'auto' && frontendTaskState.status === 'running') {
+        return { cancelled: true, completed: 0, total: 0 };
+    }
     const api = await getChatUiApi();
     if (typeof api.showMoreMessages !== 'function') {
         throw new Error('当前 SillyTavern 版本不支持官方“显示更多”接口');
@@ -524,7 +580,7 @@ async function loadEarlierMessagesSmoothly(limit = 10) {
             });
             throw error;
         }
-        await nextAnimationFrame();
+        await nextAnimationFrame(2);
         if (taskId !== frontendTaskGeneration) return { cancelled: true, completed, total };
 
         if (anchor) {
@@ -566,6 +622,32 @@ async function getPowerUserSettings() {
     return module.power_user;
 }
 
+async function syncDisplayedChatLimit(limit) {
+    const chatElement = document.querySelector('#chat');
+    if (!chatElement || !Number.isFinite(limit) || limit < 1) return;
+    const messages = [...chatElement.querySelectorAll('.mes[mesid]')];
+    if (messages.length > limit) {
+        messages.slice(0, messages.length - limit).forEach(message => message.remove());
+        const firstRemaining = chatElement.querySelector('.mes[mesid]');
+        const firstId = Number(firstRemaining?.getAttribute('mesid'));
+        if (firstRemaining && firstId > 0 && !chatElement.querySelector('#show_more_messages')) {
+            const showMore = document.createElement('div');
+            showMore.id = 'show_more_messages';
+            showMore.textContent = '显示更多消息';
+            firstRemaining.before(showMore);
+        }
+        queueRenderBoostRefresh();
+        scheduleChatDiagnosticCapture();
+        return;
+    }
+    if (messages.length < limit) {
+        const firstId = Number(messages[0]?.getAttribute('mesid'));
+        if (Number.isInteger(firstId) && firstId > 0) {
+            await loadEarlierMessagesSmoothly(Math.min(limit - messages.length, firstId));
+        }
+    }
+}
+
 async function applyLongChatMode({ reload = false } = {}) {
     const powerUser = await getPowerUserSettings();
     if (settings.longChatMode) {
@@ -580,7 +662,10 @@ async function applyLongChatMode({ reload = false } = {}) {
         settings.previousChatTruncation = null;
     }
     persistSettings();
-    if (reload) await reloadCurrentChat();
+    if (reload) {
+        if (settings.takeoverEnabled) await syncDisplayedChatLimit(powerUser.chat_truncation);
+        else await reloadCurrentChat();
+    }
 }
 
 async function setHeavyBeautifyMode(enabled) {
@@ -620,7 +705,6 @@ async function restoreLongChatMode({ reload = false } = {}) {
 function stopRenderObserver() {
     renderObserver?.disconnect();
     renderObserver = null;
-    if (renderRefreshFrame !== null) cancelAnimationFrame(renderRefreshFrame);
     renderRefreshFrame = null;
     document.body?.classList.remove('cla-render-boost-active');
     document.querySelectorAll('#chat .mes.cla-render-live').forEach(message => message.classList.remove('cla-render-live'));
@@ -642,7 +726,11 @@ function refreshRenderBoostState() {
 
 function queueRenderBoostRefresh() {
     if (renderRefreshFrame !== null) return;
-    renderRefreshFrame = requestAnimationFrame(refreshRenderBoostState);
+    renderRefreshFrame = true;
+    void frontendScheduler.schedule(refreshRenderBoostState, { priority: 2 }).catch(error => {
+        renderRefreshFrame = null;
+        if (error?.name !== 'AbortError') console.error(LOG_PREFIX, '渲染减负调度失败', error);
+    });
 }
 
 function startRenderObserver() {
@@ -731,10 +819,14 @@ function captureChatDiagnostics({ includeTiming = true } = {}) {
 function scheduleChatDiagnosticCapture({ includeTiming = false } = {}) {
     diagnosticIncludeTiming ||= includeTiming;
     if (diagnosticRefreshFrame !== null) return;
-    diagnosticRefreshFrame = requestAnimationFrame(() => {
+    diagnosticRefreshFrame = true;
+    void frontendScheduler.schedule(() => {
         const shouldIncludeTiming = diagnosticIncludeTiming;
         diagnosticIncludeTiming = false;
         captureChatDiagnostics({ includeTiming: shouldIncludeTiming });
+    }, { priority: 3 }).catch(error => {
+        diagnosticRefreshFrame = null;
+        if (error?.name !== 'AbortError') console.error(LOG_PREFIX, '聊天诊断调度失败', error);
     });
 }
 
@@ -790,7 +882,6 @@ function stopChatDiagnostics() {
     longTaskObserver = null;
     if (chatChangedHandler) eventSource.removeListener(event_types.CHAT_CHANGED, chatChangedHandler);
     chatChangedHandler = null;
-    if (diagnosticRefreshFrame !== null) cancelAnimationFrame(diagnosticRefreshFrame);
     diagnosticRefreshFrame = null;
     diagnosticIncludeTiming = false;
     chatLoadStart = null;
@@ -886,12 +977,25 @@ async function refreshPanel({ includeStats = false } = {}) {
     }
     if (longChatMode) {
         longChatMode.checked = settings.longChatMode;
-        longChatMode.disabled = settings.heavyBeautifyMode;
+        longChatMode.disabled = settings.heavyBeautifyMode || settings.adaptiveChatLimit;
     }
     if (longChatLimit) {
         longChatLimit.value = String(settings.longChatLimit);
-        longChatLimit.disabled = settings.heavyBeautifyMode;
+        longChatLimit.disabled = settings.heavyBeautifyMode || settings.adaptiveChatLimit;
     }
+    const takeoverStatusNode = document.querySelector(`#${ROOT_ID} [data-cloud-takeover-status]`);
+    if (takeoverStatusNode) {
+        takeoverStatusNode.dataset.state = takeoverState;
+        takeoverStatusNode.textContent = takeoverLabel;
+    }
+    const takeoverMaster = document.querySelector(`#${ROOT_ID} [data-cloud-takeover-master]`);
+    if (takeoverMaster) takeoverMaster.checked = settings.takeoverEnabled;
+    document.querySelectorAll(`#${ROOT_ID} [data-cloud-setting]`).forEach(input => {
+        const key = input.dataset.cloudSetting;
+        if (key && key in settings && input instanceof HTMLInputElement) input.checked = settings[key] === true;
+    });
+    const intensity = document.querySelector(`#${ROOT_ID} [data-cloud-takeover-intensity]`);
+    if (intensity) intensity.value = settings.takeoverIntensity;
 
     const metrics = getNavigationMetrics();
     const fields = {
@@ -944,8 +1048,10 @@ function makeButton(label, iconClass, handler, {
         try {
             await handler();
         } catch (error) {
-            lastError = error instanceof Error ? error.message : String(error);
-            console.error(LOG_PREFIX, error);
+            if (error?.name !== 'AbortError') {
+                lastError = error instanceof Error ? error.message : String(error);
+                console.error(LOG_PREFIX, error);
+            }
         } finally {
             if (lockWhileRunning) button.disabled = false;
             await refreshPanel();
@@ -1006,9 +1112,131 @@ function mountPanel() {
     body.className = 'inline-drawer-content cla-body';
     const intro = document.createElement('p');
     intro.className = 'cla-intro';
-    intro.textContent = '只安装 UI 扩展也能使用前端优化；服务端插件仅用于额外的静态资源缓存。聊天、角色卡、设置和 API 响应永远不会被缓存。';
+    intro.textContent = '只安装 UI 扩展也能使用前端优化；服务端插件仅用于额外的静态资源缓存。聊天、角色卡、设置和 API 响应永远不会写入 Cache Storage。';
 
-    const frontendTitle = makeSectionTitle('前端优化', '无需服务端、HTTPS 或服务器权限，安装 UI 扩展即可使用。');
+    const takeoverTitle = makeSectionTitle('全局前端接管', '统一调度启动预取、正则重绘、旧消息补载、聊天代码高亮和移动端手势；默认开启，连续异常会自动恢复原生流程。');
+    const takeoverMaster = makeSwitch(
+        '强力前端接管',
+        '总开关。关闭会立即还原 fetch、代码高亮代理、事件、Observer 和计时器；静态资源缓存不受影响。',
+    );
+    takeoverMaster.row.classList.add('cla-takeover-master');
+    takeoverMaster.input.dataset.cloudTakeoverMaster = '';
+    takeoverMaster.input.checked = settings.takeoverEnabled;
+    takeoverMaster.input.addEventListener('change', async () => {
+        takeoverMaster.input.disabled = true;
+        settings.takeoverEnabled = takeoverMaster.input.checked;
+        persistSettings();
+        try {
+            if (settings.takeoverEnabled) await ensureTakeoverController().start();
+            else await takeoverController?.stop({ reason: '已恢复酒馆原生流程' });
+        } finally {
+            takeoverMaster.input.disabled = false;
+            await refreshPanel();
+        }
+    });
+
+    const takeoverStatusNode = document.createElement('div');
+    takeoverStatusNode.className = 'cla-status cla-takeover-status';
+    takeoverStatusNode.dataset.cloudTakeoverStatus = '';
+    takeoverStatusNode.dataset.state = takeoverState;
+    takeoverStatusNode.textContent = takeoverLabel;
+
+    const intensityRow = document.createElement('label');
+    intensityRow.className = 'cla-select-row';
+    const intensityText = document.createElement('span');
+    intensityText.textContent = '接管强度';
+    const intensitySelect = document.createElement('select');
+    intensitySelect.className = 'text_pole';
+    intensitySelect.dataset.cloudTakeoverIntensity = '';
+    const intensityLabels = { balanced: '平衡 · 8 ms', strong: '强力 · 10 ms', extreme: '极致 · 12 ms' };
+    for (const value of TAKEOVER_INTENSITIES) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = intensityLabels[value];
+        option.selected = settings.takeoverIntensity === value;
+        intensitySelect.append(option);
+    }
+    intensitySelect.addEventListener('change', () => {
+        settings.takeoverIntensity = intensitySelect.value;
+        frontendScheduler.setBudget(budgetForIntensity(settings.takeoverIntensity));
+        persistSettings();
+    });
+    intensityRow.append(intensityText, intensitySelect);
+
+    const takeoverSwitchGrid = document.createElement('div');
+    takeoverSwitchGrid.className = 'cla-takeover-grid';
+    const takeoverSwitchDefinitions = [
+        ['earlyUi', '提前显示主界面', '设置加载后释放官方启动遮罩，并提示后台仍在初始化；下次启动生效。'],
+        ['requestPrefetch', '初始化请求预取与去重', '仅在本页内复用完全相同的角色、头像、背景和扩展模板请求。'],
+        ['regexAutoRefresh', '正则编辑器统一刷新', '连续保存、开关和批量操作合并成一次视口优先局部刷新。'],
+        ['adaptiveChatLimit', '自适应首屏消息数', '根据聊天内容、富组件、设备核心数和内存提示自动选择 8～30 条。'],
+        ['autoLoadOlder', '自动加载旧消息', '靠近聊天顶部时小批量补入旧消息，并代理官方“显示更多”按钮。'],
+        ['deferChatHighlight', '聊天代码延迟高亮', '最近 3 条立即高亮，旧代码块进入视口后再处理；不影响聊天外代码。'],
+        ['skipOldHighlight', '旧代码块不自动高亮', '屏幕外旧代码保持纯文本；最近消息仍正常高亮。'],
+        ['collapseOldCode', '旧代码块默认折叠', '点击旧代码块后展开并按需高亮。'],
+        ['mobileSwipeGuard', '移动端滑动保护', '垂直滚动时阻止误触消息左右切换，明确横向手势保持原生行为。'],
+    ];
+    for (const [key, title, description] of takeoverSwitchDefinitions) {
+        const item = makeSwitch(title, description);
+        item.input.dataset.cloudSetting = key;
+        item.input.checked = settings[key];
+        item.input.addEventListener('change', () => {
+            settings[key] = item.input.checked;
+            persistSettings();
+        });
+        takeoverSwitchGrid.append(item.row);
+    }
+
+    const autoLoadConfig = document.createElement('div');
+    autoLoadConfig.className = 'cla-compact-settings';
+    const compactChoices = [
+        ['每批旧消息', 'autoLoadBatch', [1, 2, 3, 6, 10], value => `${value} 条`],
+        ['顶部触发距离', 'autoLoadDistance', [80, 120, 180, 260, 400], value => `${value} px`],
+        ['加载冷却', 'autoLoadCooldown', [300, 700, 1200, 2000], value => `${value} ms`],
+    ];
+    for (const [label, key, choices, formatter] of compactChoices) {
+        const row = document.createElement('label');
+        const text = document.createElement('small');
+        text.textContent = label;
+        const select = document.createElement('select');
+        select.className = 'text_pole';
+        for (const value of choices) {
+            const option = document.createElement('option');
+            option.value = String(value);
+            option.textContent = formatter(value);
+            option.selected = settings[key] === value;
+            select.append(option);
+        }
+        select.addEventListener('change', () => {
+            settings[key] = Number(select.value);
+            persistSettings();
+        });
+        row.append(text, select);
+        autoLoadConfig.append(row);
+    }
+
+    const takeoverActions = document.createElement('div');
+    takeoverActions.className = 'cla-actions';
+    const safeModeActive = new URLSearchParams(location.search).get('cla-safe') === '1';
+    takeoverActions.append(
+        makeButton('暂停当前前端任务', 'fa-solid fa-pause', async () => {
+            cancelFrontendTask('当前前端任务已暂停');
+            takeoverController?.pauseTasks();
+        }),
+        makeButton('恢复酒馆原生流程', 'fa-solid fa-shield-halved', async () => {
+            settings.takeoverEnabled = false;
+            persistSettings();
+            await takeoverController?.stop({ reason: '已恢复酒馆原生流程' });
+        }, { danger: true }),
+        makeButton(safeModeActive ? '退出本次安全模式' : '本次安全模式', 'fa-solid fa-life-ring', async () => {
+            const url = new URL(location.href);
+            if (safeModeActive) url.searchParams.delete('cla-safe');
+            else url.searchParams.set('cla-safe', '1');
+            location.assign(url.href);
+        }),
+    );
+
+    const frontendTitle = makeSectionTitle('聊天渲染与手动工具', '无需服务端、HTTPS 或服务器权限；全局接管异常时仍可使用高级完整重载。');
 
     const heavyModeSwitch = makeSwitch(
         '重美化聊天模式',
@@ -1140,7 +1368,7 @@ function mountPanel() {
     regexNote.className = 'cla-note cla-warning-note';
     regexNote.textContent = '“重新应用正则”会保留聊天页面，按视口优先分帧刷新已显示消息，默认不清缓存、不重新请求聊天；再次点击会取消旧刷新并开始新刷新。只有异常时才使用高级完整重载。';
 
-    const diagnosticsTitle = makeSectionTitle('聊天加载诊断', '仅使用浏览器 Performance API 与官方聊天事件，不缓存聊天，也不接管官方渲染和滚动。');
+    const diagnosticsTitle = makeSectionTitle('聊天加载诊断', '使用浏览器 Performance API 与官方聊天事件；聊天读取只做复杂度旁路分析，不进入请求复用缓存。');
     const chatMetrics = document.createElement('div');
     chatMetrics.className = 'cla-metrics cla-chat-metrics';
     chatMetrics.append(
@@ -1256,6 +1484,13 @@ function mountPanel() {
 
     body.append(
         intro,
+        takeoverTitle,
+        takeoverMaster.row,
+        takeoverStatusNode,
+        intensityRow,
+        takeoverSwitchGrid,
+        autoLoadConfig,
+        takeoverActions,
         frontendTitle,
         heavyModeSwitch.row,
         renderBoostSwitch.row,
@@ -1302,6 +1537,16 @@ async function startAfterAppReady({ forceProbe = false, forceWarm = false } = {}
     ensurePanel();
     startRenderObserver();
     startChatDiagnostics();
+    if (takeoverController?.safeMode && Number.isFinite(settings.adaptivePreviousChatTruncation)) {
+        try {
+            const powerUser = await getPowerUserSettings();
+            powerUser.chat_truncation = settings.adaptivePreviousChatTruncation;
+            settings.adaptivePreviousChatTruncation = null;
+            persistSettings();
+        } catch (error) {
+            console.warn(LOG_PREFIX, '安全模式恢复原聊天截断值失败', error);
+        }
+    }
     if (settings.longChatMode) {
         try {
             await applyLongChatMode();
@@ -1333,16 +1578,18 @@ eventSource.once(event_types.APP_READY, () => {
 
 export function onActivate() {
     activated = true;
+    if (!settings) loadSettings();
+    void ensureTakeoverController().start();
     if (appReady && !appReadyWorkStarted) {
-        if (!settings) loadSettings();
         appReadyWorkStarted = true;
         void startAfterAppReady();
     }
 }
 
 export function onUpdate() {
+    if (!settings) loadSettings();
+    takeoverController?.updateSettings(settings);
     if (appReady) {
-        if (!settings) loadSettings();
         void startAfterAppReady({ forceProbe: true, forceWarm: true });
     }
 }
@@ -1351,6 +1598,7 @@ function cleanupUi() {
     activated = false;
     appReadyWorkStarted = false;
     frontendTaskGeneration += 1;
+    frontendScheduler.cancelAll('扩展已停用');
     frontendTaskState = {
         status: 'idle',
         kind: '',
@@ -1371,20 +1619,24 @@ function cleanupUi() {
 
 export async function onDisable() {
     try {
-        await restoreLongChatMode({ reload: true });
+        await restoreLongChatMode({ reload: false });
     } catch (error) {
         console.warn(LOG_PREFIX, '恢复聊天截断设置失败', error);
     }
+    await takeoverController?.stop({ reason: '扩展已停用，酒馆原生流程已恢复' });
+    takeoverController = null;
     cleanupUi();
     await unregisterWorker({ clear: true });
 }
 
 export async function onDelete() {
     try {
-        await restoreLongChatMode({ reload: true });
+        await restoreLongChatMode({ reload: false });
     } catch (error) {
         console.warn(LOG_PREFIX, '恢复聊天截断设置失败', error);
     }
+    await takeoverController?.stop({ reason: '扩展已删除，酒馆原生流程已恢复' });
+    takeoverController = null;
     cleanupUi();
     await unregisterWorker({ clear: true });
 }

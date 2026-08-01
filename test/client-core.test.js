@@ -5,24 +5,30 @@ import {
     CHAT_LIMIT_CHOICES,
     CLIENT_VERSION,
     buildChatDiagnostics,
+    chooseAdaptiveChatLimit,
+    classifyTakeoverRequest,
     connectionAllowsWarmup,
+    detectSwipeAxis,
     estimateRenderComplexity,
     findLatestChatRequest,
     getAdaptiveBatchSize,
+    measureChatPayload,
     normalizeSettings,
     prioritizeMessageDescriptors,
     shouldActivateRenderBoost,
     shouldAutoWarm,
 } from '../client-core.js';
+import { ACCELERATOR_VERSION } from '../server/worker-template.js';
 
 test('keeps every published version source in sync', async () => {
     const [{ default: manifest }, { default: packageJson }] = await Promise.all([
         import('../manifest.json', { with: { type: 'json' } }),
         import('../package.json', { with: { type: 'json' } }),
     ]);
-    assert.equal(CLIENT_VERSION, '1.3.1');
+    assert.equal(CLIENT_VERSION, '1.5.0');
     assert.equal(manifest.version, CLIENT_VERSION);
     assert.equal(packageJson.version, CLIENT_VERSION);
+    assert.equal(ACCELERATOR_VERSION, CLIENT_VERSION);
 });
 
 test('normalizes old UI settings without requiring server state', () => {
@@ -32,8 +38,46 @@ test('normalizes old UI settings without requiring server state', () => {
     assert.equal(settings.renderBoost, true);
     assert.equal(settings.longChatLimit, 20);
     assert.equal(settings.renderBoostThreshold, 20);
-    assert.deepEqual(CHAT_LIMIT_CHOICES, [10, 15, 20, 30, 50]);
+    assert.deepEqual(CHAT_LIMIT_CHOICES, [8, 10, 15, 20, 30, 50]);
     assert.equal(settings.previousChatTruncation, null);
+});
+
+test('enables the guarded takeover defaults for existing installations', () => {
+    const settings = normalizeSettings({ settingsVersion: '1.3.1' });
+    assert.equal(settings.takeoverEnabled, true);
+    assert.equal(settings.takeoverIntensity, 'strong');
+    assert.equal(settings.requestPrefetch, true);
+    assert.equal(settings.regexAutoRefresh, true);
+    assert.equal(settings.adaptiveChatLimit, true);
+    assert.equal(settings.autoLoadOlder, true);
+    assert.equal(settings.deferChatHighlight, true);
+    assert.equal(settings.mobileSwipeGuard, true);
+    assert.equal(settings.renderBoost, true);
+    assert.equal(settings.adaptivePreviousChatTruncation, null);
+});
+
+test('chooses smaller first-paint limits for rich chats and constrained devices', () => {
+    assert.equal(chooseAdaptiveChatLimit({ averageTextLength: 400, richMarkerCount: 0, hardwareConcurrency: 8, deviceMemory: 8 }), 30);
+    assert.equal(chooseAdaptiveChatLimit({ averageTextLength: 5000, richMarkerCount: 12, hardwareConcurrency: 8, deviceMemory: 8 }), 15);
+    assert.equal(chooseAdaptiveChatLimit({ averageTextLength: 5000, richMarkerCount: 12, hardwareConcurrency: 4, deviceMemory: 4 }), 8);
+    const metrics = measureChatPayload([{ mes: '<details><table>heavy</table></details>' }, { mes: 'plain' }]);
+    assert.ok(metrics.richMarkerCount >= 2);
+});
+
+test('strictly classifies request reuse, observation, invalidation, and native paths', () => {
+    assert.equal(classifyTakeoverRequest({ pathname: '/api/characters/all', method: 'POST' }), 'reuse');
+    assert.equal(classifyTakeoverRequest({ pathname: '/scripts/extensions/regex/editor.html', method: 'GET' }), 'reuse');
+    assert.equal(classifyTakeoverRequest({ pathname: '/api/chats/get', method: 'POST' }), 'observe-chat');
+    assert.equal(classifyTakeoverRequest({ pathname: '/api/characters/delete', method: 'POST' }), 'invalidate');
+    assert.equal(classifyTakeoverRequest({ pathname: '/api/backends/chat-completions/generate', method: 'POST' }), 'native');
+    assert.equal(classifyTakeoverRequest({ pathname: '/api/settings/save', method: 'POST' }), 'native');
+});
+
+test('mobile swipe guard only classifies decisive gestures', () => {
+    assert.equal(detectSwipeAxis({ deltaX: 4, deltaY: 5 }), 'pending');
+    assert.equal(detectSwipeAxis({ deltaX: 8, deltaY: 40 }), 'vertical');
+    assert.equal(detectSwipeAxis({ deltaX: 40, deltaY: 8 }), 'horizontal');
+    assert.equal(detectSwipeAxis({ deltaX: 20, deltaY: 18 }), 'ambiguous');
 });
 
 test('keeps versioned heavy-beautify settings and supported low chat limits', () => {

@@ -48,6 +48,78 @@
     background: color-mix(in srgb, #a78bfa 9%, transparent);
 }
 
+.cla-takeover-master {
+    padding: 0.8rem;
+    border: 1px solid color-mix(in srgb, #67b7ff 58%, transparent);
+    border-radius: 0.65rem;
+    background: linear-gradient(135deg, color-mix(in srgb, #67b7ff 13%, transparent), color-mix(in srgb, #a78bfa 9%, transparent));
+}
+
+.cla-takeover-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.6rem;
+}
+
+.cla-takeover-grid .cla-switch {
+    padding: 0.6rem;
+    border-radius: 0.55rem;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 5%, transparent);
+}
+
+.cla-compact-settings {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.5rem;
+}
+
+.cla-compact-settings label {
+    display: grid;
+    gap: 0.25rem;
+}
+
+.cla-compact-settings .text_pole {
+    width: 100%;
+}
+
+.cla-background-init-banner {
+    position: fixed;
+    z-index: 10000;
+    top: max(0.75rem, env(safe-area-inset-top));
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: min(90vw, 42rem);
+    padding: 0.55rem 0.85rem;
+    border: 1px solid color-mix(in srgb, #67b7ff 65%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 92%, #111827 8%);
+    box-shadow: 0 0.45rem 1.4rem rgb(0 0 0 / 24%);
+    color: var(--SmartThemeBodyColor);
+    text-align: center;
+    pointer-events: none;
+}
+
+#chat pre.cla-code-collapsed {
+    position: relative;
+    max-height: 7rem;
+    overflow: hidden;
+    cursor: pointer;
+    mask-image: linear-gradient(to bottom, #000 55%, transparent);
+}
+
+#chat pre.cla-code-collapsed::after {
+    content: '点击展开并高亮代码';
+    position: absolute;
+    right: 0.6rem;
+    bottom: 0.35rem;
+    padding: 0.2rem 0.45rem;
+    border-radius: 0.35rem;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 90%, #111827 10%);
+    color: var(--SmartThemeBodyColor);
+    font-size: 0.75rem;
+    mask-image: none;
+}
+
 .cla-warning-note {
     padding-left: 0.65rem;
     border-left: 3px solid #f8c14c;
@@ -240,6 +312,11 @@ body.cla-render-boost-active #chat .mes:focus-within {
 
     .cla-actions {
         padding-bottom: 0.35rem;
+    }
+
+    .cla-takeover-grid,
+    .cla-compact-settings {
+        grid-template-columns: 1fr;
     }
 
     .cla-task-progress {
