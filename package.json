@@ -1,0 +1,14 @@
+{
+  "name": "sillytavern-cloud-lounge-accelerator",
+  "version": "1.0.0",
+  "description": "A safe repeat-visit accelerator for cloud-hosted SillyTavern instances.",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "AGPL-3.0-only"
+}

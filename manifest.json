@@ -1,0 +1,17 @@
+{
+  "display_name": "云酒馆加速器",
+  "loading_order": -900,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "云酒馆加速器项目",
+  "version": "1.0.0",
+  "auto_update": true,
+  "hooks": {
+    "activate": "onActivate",
+    "update": "onUpdate",
+    "disable": "onDisable",
+    "delete": "onDelete"
+  }
+}

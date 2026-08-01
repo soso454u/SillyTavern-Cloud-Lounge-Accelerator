@@ -1,0 +1,124 @@
+#cloud-lounge-accelerator-settings .inline-drawer-header > b {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+}
+
+#cloud-lounge-accelerator-settings .inline-drawer-header > b > i {
+    color: #75c7ff;
+}
+
+.cla-body {
+    display: grid;
+    gap: 0.75rem;
+    padding-bottom: 0.75rem;
+}
+
+.cla-intro,
+.cla-note {
+    margin: 0;
+    color: var(--SmartThemeBodyColor);
+    opacity: 0.82;
+    line-height: 1.55;
+}
+
+.cla-switch {
+    align-items: flex-start;
+    gap: 0.65rem;
+    margin: 0;
+}
+
+.cla-switch > span {
+    display: grid;
+    gap: 0.2rem;
+}
+
+.cla-switch small {
+    opacity: 0.72;
+    line-height: 1.4;
+}
+
+.cla-status {
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 18%, transparent);
+    border-radius: 0.65rem;
+    padding: 0.65rem 0.8rem;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 82%, transparent);
+}
+
+.cla-status::before {
+    content: '';
+    display: inline-block;
+    width: 0.55rem;
+    height: 0.55rem;
+    margin-right: 0.45rem;
+    border-radius: 50%;
+    background: #9ca3af;
+    box-shadow: 0 0 0.55rem currentColor;
+}
+
+.cla-status[data-state='active']::before {
+    background: #49d17d;
+}
+
+.cla-status[data-state='pending']::before {
+    background: #f8c14c;
+}
+
+.cla-status[data-state='error'],
+.cla-status[data-state='conflict'],
+.cla-status[data-state='unsupported'] {
+    color: #ff9a9a;
+}
+
+.cla-status[data-state='error']::before,
+.cla-status[data-state='conflict']::before,
+.cla-status[data-state='unsupported']::before {
+    background: #ef6262;
+}
+
+.cla-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+    gap: 0.5rem;
+}
+
+.cla-metric {
+    display: grid;
+    gap: 0.15rem;
+    min-width: 0;
+    padding: 0.55rem 0.65rem;
+    border-radius: 0.55rem;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 7%, transparent);
+}
+
+.cla-metric small {
+    opacity: 0.68;
+}
+
+.cla-metric strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cla-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+}
+
+.cla-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+@media (max-width: 600px) {
+    .cla-metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .cla-actions .menu_button {
+        flex: 1 1 auto;
+    }
+}
