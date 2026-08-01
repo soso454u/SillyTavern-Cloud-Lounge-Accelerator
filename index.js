@@ -1,4 +1,5 @@
 import {
+    chat,
     eventSource,
     event_types,
     reloadCurrentChat,
@@ -6,7 +7,10 @@ import {
 } from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
 import {
+    CHAT_LIMIT_CHOICES,
     CLIENT_VERSION,
+    buildChatDiagnostics,
+    findLatestChatRequest,
     normalizeSettings,
     shouldActivateRenderBoost,
     shouldAutoWarm,
@@ -41,6 +45,15 @@ let panelRetryCount = 0;
 let scheduledWarmup = null;
 let renderObserver = null;
 let renderRefreshFrame = null;
+let chatDiagnosticObserver = null;
+let longTaskObserver = null;
+let diagnosticRefreshFrame = null;
+let diagnosticIncludeTiming = false;
+let chatChangedHandler = null;
+let chatLoadStart = null;
+let firstContentAt = null;
+let recentLongTasks = [];
+let latestChatDiagnostics = null;
 let cachedRegistration;
 let serverState = 'unknown';
 let serverHealth = null;
@@ -271,7 +284,7 @@ async function removeLocalAcceleration() {
     return { cancelled: false };
 }
 
-async function refreshRegexRendering() {
+async function reapplyRegexRendering() {
     try {
         const regexEngine = await import('../../regex/engine.js');
         regexEngine.RegexProvider?.instance?.clear?.();
@@ -304,6 +317,32 @@ async function applyLongChatMode({ reload = false } = {}) {
     if (reload) await reloadCurrentChat();
 }
 
+async function setHeavyBeautifyMode(enabled) {
+    if (enabled) {
+        if (!settings.heavyBeautifyMode) {
+            settings.heavyModePrevious = {
+                renderBoost: settings.renderBoost,
+                longChatMode: settings.longChatMode,
+                longChatLimit: settings.longChatLimit,
+            };
+        }
+        settings.heavyBeautifyMode = true;
+        settings.renderBoost = true;
+        settings.longChatMode = true;
+        if (settings.longChatLimit > 20) settings.longChatLimit = 20;
+    } else {
+        const previous = settings.heavyModePrevious;
+        settings.heavyBeautifyMode = false;
+        settings.renderBoost = previous?.renderBoost === true;
+        settings.longChatMode = previous?.longChatMode === true;
+        settings.longChatLimit = previous?.longChatLimit || 20;
+        settings.heavyModePrevious = null;
+    }
+    persistSettings();
+    settings.renderBoost ? startRenderObserver() : stopRenderObserver();
+    await applyLongChatMode({ reload: true });
+}
+
 async function restoreLongChatMode({ reload = false } = {}) {
     if (!settings?.longChatMode || !Number.isFinite(settings.previousChatTruncation)) return;
     const powerUser = await getPowerUserSettings();
@@ -328,7 +367,7 @@ function refreshRenderBoostState() {
     const active = shouldActivateRenderBoost({
         enabled: settings?.renderBoost,
         messageCount: messages.length,
-        threshold: settings?.renderBoostThreshold,
+        threshold: settings?.heavyBeautifyMode ? 1 : settings?.renderBoostThreshold,
     });
     document.body?.classList.toggle('cla-render-boost-active', active);
     messages.forEach(message => message.classList.remove('cla-render-live'));
@@ -350,6 +389,131 @@ function startRenderObserver() {
     queueRenderBoostRefresh();
 }
 
+function nodeContainsMessage(node) {
+    return node instanceof Element
+        && (node.matches('.mes') || Boolean(node.querySelector('.mes')));
+}
+
+function getChatComplexity() {
+    const chatElement = document.querySelector('#chat');
+    return {
+        displayedMessages: chatElement?.querySelectorAll('.mes').length || 0,
+        totalMessages: Array.isArray(chat) ? chat.length : 0,
+        domNodes: chatElement?.querySelectorAll('*').length || 0,
+    };
+}
+
+function updateChatDiagnosticFields() {
+    if (!latestChatDiagnostics) return;
+    const fields = {
+        chatRequest: formatMilliseconds(latestChatDiagnostics.requestMs),
+        chatTransfer: formatBytes(latestChatDiagnostics.transferBytes),
+        displayedMessages: String(latestChatDiagnostics.displayedMessages),
+        totalMessages: String(latestChatDiagnostics.totalMessages),
+        domNodes: latestChatDiagnostics.domNodes.toLocaleString(),
+        firstContent: formatMilliseconds(latestChatDiagnostics.firstContentMs),
+        frontendWork: formatMilliseconds(latestChatDiagnostics.frontendMs),
+        totalLoad: formatMilliseconds(latestChatDiagnostics.totalLoadMs),
+        longestTask: Number.isFinite(latestChatDiagnostics.longestTaskMs)
+            ? formatMilliseconds(latestChatDiagnostics.longestTaskMs)
+            : (longTaskObserver ? '< 50 ms' : '—'),
+    };
+    for (const [name, value] of Object.entries(fields)) {
+        const node = document.querySelector(`#${ROOT_ID} [data-cloud-metric="${name}"]`);
+        if (node) node.textContent = value;
+    }
+}
+
+function captureChatDiagnostics({ includeTiming = true } = {}) {
+    diagnosticRefreshFrame = null;
+    const now = performance.now();
+    const latestRequestEntry = includeTiming
+        ? findLatestChatRequest(performance.getEntriesByType('resource'), now)
+        : null;
+    const requestEntry = latestRequestEntry
+        && (!Number.isFinite(chatLoadStart) || latestRequestEntry.responseEnd >= chatLoadStart)
+        ? latestRequestEntry
+        : null;
+    const complexity = getChatComplexity();
+    const timing = buildChatDiagnostics({
+        now,
+        requestEntry,
+        loadStart: includeTiming ? chatLoadStart : null,
+        firstContentAt: includeTiming ? firstContentAt : null,
+        ...complexity,
+        longTasks: recentLongTasks,
+    });
+    latestChatDiagnostics = includeTiming || !latestChatDiagnostics
+        ? timing
+        : { ...latestChatDiagnostics, ...complexity, measuredAt: now };
+    updateChatDiagnosticFields();
+}
+
+function scheduleChatDiagnosticCapture({ includeTiming = false } = {}) {
+    diagnosticIncludeTiming ||= includeTiming;
+    if (diagnosticRefreshFrame !== null) return;
+    diagnosticRefreshFrame = requestAnimationFrame(() => {
+        const shouldIncludeTiming = diagnosticIncludeTiming;
+        diagnosticIncludeTiming = false;
+        captureChatDiagnostics({ includeTiming: shouldIncludeTiming });
+    });
+}
+
+function startChatDiagnostics() {
+    stopChatDiagnostics();
+    const chatElement = document.querySelector('#chat');
+    if (!chatElement) return;
+
+    latestChatDiagnostics = null;
+    chatDiagnosticObserver = new MutationObserver(records => {
+        const removedMessage = records.some(record => [...record.removedNodes].some(nodeContainsMessage));
+        const addedMessage = records.some(record => [...record.addedNodes].some(nodeContainsMessage));
+        if (removedMessage) {
+            chatLoadStart = performance.now();
+            firstContentAt = null;
+            recentLongTasks = [];
+        }
+        if (addedMessage && firstContentAt === null) firstContentAt = performance.now();
+        if (removedMessage || addedMessage) scheduleChatDiagnosticCapture();
+    });
+    chatDiagnosticObserver.observe(chatElement, { childList: true });
+
+    if ('PerformanceObserver' in window) {
+        try {
+            longTaskObserver = new PerformanceObserver(list => {
+                recentLongTasks.push(...list.getEntries().map(entry => ({
+                    startTime: entry.startTime,
+                    duration: entry.duration,
+                })));
+                if (recentLongTasks.length > 200) recentLongTasks = recentLongTasks.slice(-200);
+            });
+            longTaskObserver.observe({ type: 'longtask', buffered: true });
+        } catch (error) {
+            longTaskObserver = null;
+            console.debug(LOG_PREFIX, '当前浏览器不支持 Long Tasks 诊断', error);
+        }
+    }
+
+    chatChangedHandler = () => scheduleChatDiagnosticCapture({ includeTiming: true });
+    eventSource.on(event_types.CHAT_CHANGED, chatChangedHandler);
+    captureChatDiagnostics({ includeTiming: false });
+}
+
+function stopChatDiagnostics() {
+    chatDiagnosticObserver?.disconnect();
+    chatDiagnosticObserver = null;
+    longTaskObserver?.disconnect();
+    longTaskObserver = null;
+    if (chatChangedHandler) eventSource.removeListener(event_types.CHAT_CHANGED, chatChangedHandler);
+    chatChangedHandler = null;
+    if (diagnosticRefreshFrame !== null) cancelAnimationFrame(diagnosticRefreshFrame);
+    diagnosticRefreshFrame = null;
+    diagnosticIncludeTiming = false;
+    chatLoadStart = null;
+    firstContentAt = null;
+    recentLongTasks = [];
+}
+
 function getNavigationMetrics() {
     const navigation = performance.getEntriesByType('navigation')[0];
     if (!navigation) return null;
@@ -366,7 +530,7 @@ function formatMilliseconds(value) {
 }
 
 function formatBytes(value) {
-    if (!Number.isFinite(value) || value <= 0) return '—';
+    if (!Number.isFinite(value) || value < 0) return '—';
     if (value < 1024) return `${value} B`;
     if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`;
     return `${(value / 1024 ** 2).toFixed(1)} MB`;
@@ -427,6 +591,24 @@ async function refreshPanel({ includeStats = false } = {}) {
         control.title = canUseServer ? '' : '安装并启用可选服务端插件后可用';
     });
 
+    const heavyMode = document.querySelector(`#${ROOT_ID} [data-cloud-heavy-mode]`);
+    const renderBoost = document.querySelector(`#${ROOT_ID} [data-cloud-render-boost]`);
+    const longChatMode = document.querySelector(`#${ROOT_ID} [data-cloud-long-chat]`);
+    const longChatLimit = document.querySelector(`#${ROOT_ID} [data-cloud-chat-limit]`);
+    if (heavyMode) heavyMode.checked = settings.heavyBeautifyMode;
+    if (renderBoost) {
+        renderBoost.checked = settings.renderBoost;
+        renderBoost.disabled = settings.heavyBeautifyMode;
+    }
+    if (longChatMode) {
+        longChatMode.checked = settings.longChatMode;
+        longChatMode.disabled = settings.heavyBeautifyMode;
+    }
+    if (longChatLimit) {
+        longChatLimit.value = String(settings.longChatLimit);
+        longChatLimit.disabled = settings.heavyBeautifyMode;
+    }
+
     const metrics = getNavigationMetrics();
     const fields = {
         ttfb: metrics ? formatMilliseconds(metrics.ttfb) : '—',
@@ -439,6 +621,7 @@ async function refreshPanel({ includeStats = false } = {}) {
         const node = document.querySelector(`#${ROOT_ID} [data-cloud-metric="${name}"]`);
         if (node) node.textContent = value;
     }
+    updateChatDiagnosticFields();
 }
 
 function makeMetric(label, key) {
@@ -539,10 +722,36 @@ function mountPanel() {
 
     const frontendTitle = makeSectionTitle('前端优化', '无需服务端、HTTPS 或服务器权限，安装 UI 扩展即可使用。');
 
+    const heavyModeSwitch = makeSwitch(
+        '重美化聊天模式',
+        '一键启用官方聊天截断与屏幕外渲染减负；适合消息不多但人物卡、仪表盘和折叠块很复杂的聊天。',
+    );
+    heavyModeSwitch.row.classList.add('cla-heavy-mode');
+    heavyModeSwitch.input.dataset.cloudHeavyMode = '';
+    heavyModeSwitch.input.checked = settings.heavyBeautifyMode;
+    heavyModeSwitch.input.addEventListener('change', async () => {
+        heavyModeSwitch.input.disabled = true;
+        const nextValue = heavyModeSwitch.input.checked;
+        try {
+            await setHeavyBeautifyMode(nextValue);
+            globalThis.toastr?.success?.(
+                nextValue ? '重美化模式已开启：首批消息已减少并启用屏幕外减负' : '已恢复开启重美化模式前的设置',
+                '云酒馆加速器',
+            );
+        } catch (error) {
+            lastError = error instanceof Error ? error.message : String(error);
+            heavyModeSwitch.input.checked = settings.heavyBeautifyMode;
+        } finally {
+            heavyModeSwitch.input.disabled = false;
+            await refreshPanel();
+        }
+    });
+
     const renderBoostSwitch = makeSwitch(
         '长聊天渲染减负',
         `消息达到 ${settings.renderBoostThreshold} 条后，跳过屏幕外复杂消息的布局和绘制，并始终保留最近 5 条。`,
     );
+    renderBoostSwitch.input.dataset.cloudRenderBoost = '';
     renderBoostSwitch.input.checked = settings.renderBoost;
     renderBoostSwitch.input.addEventListener('change', () => {
         settings.renderBoost = renderBoostSwitch.input.checked;
@@ -554,6 +763,7 @@ function mountPanel() {
         '长聊天流畅模式',
         '使用 SillyTavern 官方聊天截断，只渲染最近一批消息；关闭时恢复原值。',
     );
+    longChatSwitch.input.dataset.cloudLongChat = '';
     longChatSwitch.input.checked = settings.longChatMode;
     longChatSwitch.input.addEventListener('change', async () => {
         longChatSwitch.input.disabled = true;
@@ -578,7 +788,8 @@ function mountPanel() {
     limitText.textContent = '每批显示消息数';
     const limit = document.createElement('select');
     limit.className = 'text_pole';
-    for (const value of [30, 50, 100]) {
+    limit.dataset.cloudChatLimit = '';
+    for (const value of CHAT_LIMIT_CHOICES) {
         const option = document.createElement('option');
         option.value = String(value);
         option.textContent = `${value} 条`;
@@ -594,10 +805,32 @@ function mountPanel() {
 
     const frontendActions = document.createElement('div');
     frontendActions.className = 'cla-actions';
-    frontendActions.append(makeButton('刷新正则渲染', 'fa-solid fa-wand-magic-sparkles', async () => {
-        await refreshRegexRendering();
-        globalThis.toastr?.success?.('已清理正则编译缓存并重新渲染当前聊天', '云酒馆加速器');
+    frontendActions.append(makeButton('重新应用正则', 'fa-solid fa-wand-magic-sparkles', async () => {
+        await reapplyRegexRendering();
+        globalThis.toastr?.success?.('已重新应用正则并渲染当前聊天', '云酒馆加速器');
     }));
+
+    const regexNote = document.createElement('small');
+    regexNote.className = 'cla-note cla-warning-note';
+    regexNote.textContent = '“重新应用正则”仅在修改正则后旧消息没有更新时使用；它会清理编译缓存并重绘当前聊天，不是日常加速按钮。';
+
+    const diagnosticsTitle = makeSectionTitle('聊天加载诊断', '仅使用浏览器 Performance API 与官方聊天事件，不缓存聊天，也不接管官方渲染和滚动。');
+    const chatMetrics = document.createElement('div');
+    chatMetrics.className = 'cla-metrics cla-chat-metrics';
+    chatMetrics.append(
+        makeMetric('聊天请求', 'chatRequest'),
+        makeMetric('聊天传输', 'chatTransfer'),
+        makeMetric('本次显示', 'displayedMessages'),
+        makeMetric('聊天总数', 'totalMessages'),
+        makeMetric('聊天 DOM 节点', 'domNodes'),
+        makeMetric('首批内容出现', 'firstContent'),
+        makeMetric('前端处理估算', 'frontendWork'),
+        makeMetric('完整加载', 'totalLoad'),
+        makeMetric('最长主线程阻塞', 'longestTask'),
+    );
+    const diagnosticsNote = document.createElement('small');
+    diagnosticsNote.className = 'cla-note';
+    diagnosticsNote.textContent = '“前端处理估算”包含 JSON 解析、正则、Markdown、HTML 清洗、DOM 创建及其他扩展处理；浏览器无法在不侵入官方函数的情况下把它们逐项精确拆开。';
 
     const serverTitle = makeSectionTitle('静态资源缓存（可选增强）', '需要服务端插件与 HTTPS；不安装不会影响上面的前端功能。');
 
@@ -697,10 +930,15 @@ function mountPanel() {
     body.append(
         intro,
         frontendTitle,
+        heavyModeSwitch.row,
         renderBoostSwitch.row,
         longChatSwitch.row,
         limitRow,
         frontendActions,
+        regexNote,
+        diagnosticsTitle,
+        chatMetrics,
+        diagnosticsNote,
         serverTitle,
         enabledSwitch.row,
         warmSwitch.row,
@@ -734,6 +972,7 @@ async function startAfterAppReady({ forceProbe = false, forceWarm = false } = {}
     if (!settings) loadSettings();
     ensurePanel();
     startRenderObserver();
+    startChatDiagnostics();
     if (settings.longChatMode) {
         try {
             await applyLongChatMode();
@@ -784,6 +1023,7 @@ function cleanupUi() {
     appReadyWorkStarted = false;
     cancelScheduledWarmup();
     stopRenderObserver();
+    stopChatDiagnostics();
     if (panelRetryTimer !== null) clearTimeout(panelRetryTimer);
     panelRetryTimer = null;
     panelRetryCount = 0;

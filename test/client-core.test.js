@@ -2,8 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+    CHAT_LIMIT_CHOICES,
     CLIENT_VERSION,
+    buildChatDiagnostics,
     connectionAllowsWarmup,
+    findLatestChatRequest,
     normalizeSettings,
     shouldActivateRenderBoost,
     shouldAutoWarm,
@@ -14,8 +17,24 @@ test('normalizes old UI settings without requiring server state', () => {
     assert.equal(settings.enabled, true);
     assert.equal(settings.autoWarm, false);
     assert.equal(settings.renderBoost, true);
-    assert.equal(settings.longChatLimit, 50);
+    assert.equal(settings.longChatLimit, 20);
+    assert.equal(settings.renderBoostThreshold, 20);
+    assert.deepEqual(CHAT_LIMIT_CHOICES, [10, 15, 20, 30, 50]);
     assert.equal(settings.previousChatTruncation, null);
+});
+
+test('keeps versioned heavy-beautify settings and supported low chat limits', () => {
+    const settings = normalizeSettings({
+        settingsVersion: CLIENT_VERSION,
+        heavyBeautifyMode: true,
+        longChatLimit: 15,
+        renderBoostThreshold: 40,
+        heavyModePrevious: { renderBoost: false, longChatMode: true, longChatLimit: 30 },
+    });
+    assert.equal(settings.heavyBeautifyMode, true);
+    assert.equal(settings.longChatLimit, 15);
+    assert.equal(settings.renderBoostThreshold, 40);
+    assert.deepEqual(settings.heavyModePrevious, { renderBoost: false, longChatMode: true, longChatLimit: 30 });
 });
 
 test('only enables render containment for genuinely long chats', () => {
@@ -41,4 +60,33 @@ test('automatic warm-up respects data saving, slow links, visibility, and versio
         connection: null,
         lastWarmVersion: CLIENT_VERSION,
     }), false);
+});
+
+test('selects the latest real chat load request and derives browser diagnostics', () => {
+    const entries = [
+        { name: 'https://example.test/api/chats/search', startTime: 10, responseEnd: 20, duration: 10 },
+        { name: 'https://example.test/api/chats/get', startTime: 100, responseEnd: 180, duration: 80, transferSize: 4096 },
+        { name: 'https://example.test/api/chats/group/get', startTime: 200, responseEnd: 260, duration: 60, transferSize: 2048 },
+    ];
+    const request = findLatestChatRequest(entries, 300);
+    assert.equal(request.startTime, 200);
+    const metrics = buildChatDiagnostics({
+        now: 350,
+        requestEntry: request,
+        loadStart: 190,
+        firstContentAt: 330,
+        displayedMessages: 15,
+        totalMessages: 28,
+        domNodes: 3200,
+        longTasks: [
+            { startTime: 150, duration: 99 },
+            { startTime: 270, duration: 74 },
+        ],
+    });
+    assert.equal(metrics.requestMs, 60);
+    assert.equal(metrics.transferBytes, 2048);
+    assert.equal(metrics.firstContentMs, 140);
+    assert.equal(metrics.totalLoadMs, 160);
+    assert.equal(metrics.frontendMs, 90);
+    assert.equal(metrics.longestTaskMs, 74);
 });

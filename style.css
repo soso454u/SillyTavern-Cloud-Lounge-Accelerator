@@ -41,6 +41,18 @@
     line-height: 1.4;
 }
 
+.cla-heavy-mode {
+    padding: 0.75rem;
+    border: 1px solid color-mix(in srgb, #a78bfa 50%, transparent);
+    border-radius: 0.65rem;
+    background: color-mix(in srgb, #a78bfa 9%, transparent);
+}
+
+.cla-warning-note {
+    padding-left: 0.65rem;
+    border-left: 3px solid #f8c14c;
+}
+
 .cla-select-row {
     display: flex;
     align-items: center;
@@ -120,6 +132,10 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.cla-chat-metrics {
+    grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
 }
 
 .cla-actions {
