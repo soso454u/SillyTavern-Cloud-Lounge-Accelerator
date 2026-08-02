@@ -124,9 +124,9 @@ export class SettingsPanel {
         const status = await this.getStatus();
         this.advanced?.update(status);
         const label = this.root.querySelector('[data-cla-overall-status]');
-        const problem = status.cache === '错误' || status.chat === '错误' || status.interaction === '错误';
+        const problem = status.warning === true || status.cache === '错误' || status.chat === '错误' || status.interaction === '错误';
         this.root.dataset.state = problem ? 'warning' : 'ok';
-        if (label) label.textContent = problem ? '部分功能需要修复' : '运行正常';
+        if (label) label.textContent = status.overall || (problem ? '部分功能需要修复' : '运行正常');
     }
 
     remove() {

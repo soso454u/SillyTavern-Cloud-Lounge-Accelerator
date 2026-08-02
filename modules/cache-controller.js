@@ -14,6 +14,10 @@ const CORE_URLS = Object.freeze([
     '/scripts/templates/themeImportWarning.html',
 ]);
 
+export function serverVersionMatchesClient(version) {
+    return typeof version === 'string' && version === CLIENT_VERSION;
+}
+
 export class CacheController {
     constructor({ onStatus = null } = {}) {
         this.onStatus = onStatus;
@@ -44,7 +48,7 @@ export class CacheController {
             const payload = await response.json();
             if (!payload?.ok) throw new Error('服务端健康检查返回无效');
             this.health = payload;
-            this.state = 'available';
+            this.state = serverVersionMatchesClient(payload.version) ? 'available' : 'version-mismatch';
             return payload;
         } catch {
             this.state = 'missing';
@@ -125,6 +129,11 @@ export class CacheController {
             this.onStatus?.('cache', this.state === 'unsupported' ? '需要 HTTPS' : '仅 UI 模式');
             return null;
         }
+        if (this.state === 'version-mismatch') {
+            await this.retireIncompatibleWorker();
+            this.onStatus?.('cache', '已停用（服务端需更新）');
+            return null;
+        }
         const registration = await this.register();
         if (generation !== this.generation) {
             if (registration && this.isOurs(registration)) await registration.unregister();
@@ -175,6 +184,15 @@ export class CacheController {
         return results.filter(Boolean).length;
     }
 
+    async retireIncompatibleWorker() {
+        this.cancelWarmup();
+        const registration = await this.findRegistration({ refresh: true });
+        if (registration && this.isOurs(registration)) await registration.unregister();
+        this.registration = undefined;
+        localStorage.removeItem(WARM_KEY);
+        return this.clearOwnCaches();
+    }
+
     async stop({ clear = true } = {}) {
         this.generation += 1;
         this.cancelWarmup();
@@ -188,13 +206,24 @@ export class CacheController {
         this.cancelWarmup();
         await this.stop({ clear: true });
         localStorage.removeItem(WARM_KEY);
-        await this.startAfterLogin({ force: true });
+        const registration = await this.startAfterLogin({ force: true });
+        if (!registration) return { warmed: 0, skipped: true, state: this.state };
         const result = await this.message('WARM', { urls: this.collectWarmUrls() }, 30000);
         await this.refreshStats();
         return result;
     }
 
     getStatus() {
+        if (this.state === 'version-mismatch') {
+            return {
+                state: this.state,
+                cache: '已停用（服务端需更新）',
+                server: `需更新（${this.health?.version || '未知版本'}）`,
+                entries: null,
+                warning: true,
+                overall: '服务端插件需更新',
+            };
+        }
         return {
             state: this.state,
             cache: this.state === 'available' ? '正常' : (this.state === 'unsupported' ? '需要 HTTPS' : '仅 UI 模式'),
