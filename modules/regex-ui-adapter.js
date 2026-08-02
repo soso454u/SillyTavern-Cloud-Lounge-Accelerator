@@ -4,6 +4,13 @@ const TYPE_BY_LIST_ID = Object.freeze({
     saved_preset_scripts: 'PRESET',
 });
 
+function recordsOnlyAffectChat(records) {
+    return records.length > 0 && records.every(record => {
+        const target = record.target instanceof Element ? record.target : record.target.parentElement;
+        return Boolean(target?.closest?.('#chat'));
+    });
+}
+
 function parseOptionalInteger(value) {
     const parsed = Number.parseInt(String(value ?? ''), 10);
     return Number.isFinite(parsed) ? parsed : null;
@@ -65,7 +72,8 @@ export class RegexUiAdapter {
         this.started = true;
         document.addEventListener('click', this.onClick, true);
         document.addEventListener('input', this.onInput, true);
-        this.observer = new MutationObserver(() => {
+        this.observer = new MutationObserver(records => {
+            if (recordsOnlyAffectChat(records)) return;
             if (document.querySelector('.regex_editor')) {
                 if (this.editorContext) this.editorContext.opened = true;
             } else if (this.editorContext?.opened && !document.querySelector('.popup[closing] .regex_editor')) {

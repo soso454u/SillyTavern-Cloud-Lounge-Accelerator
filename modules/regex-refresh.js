@@ -12,6 +12,13 @@ const CONTROL_SELECTOR = [
 
 const LOG_PREFIX = '[Cloud Lounge Accelerator]';
 
+function recordsOnlyAffectChat(records) {
+    return records.length > 0 && records.every(record => {
+        const target = record.target instanceof Element ? record.target : record.target.parentElement;
+        return Boolean(target?.closest?.('#chat'));
+    });
+}
+
 export class RegexRefreshController {
     constructor({ chat, eventSource, eventTypes, reloadCurrentChat, scheduler, onStatus = null }) {
         this.chat = chat;
@@ -55,6 +62,7 @@ export class RegexRefreshController {
         document.addEventListener('click', this.onInteraction, false);
         document.addEventListener('cla-regex-dirty', this.onInteraction, false);
         this.observer = new MutationObserver(records => {
+            if (recordsOnlyAffectChat(records)) return;
             const editorOpen = Boolean(document.querySelector('.regex_editor'));
             if (this.editorWasOpen && !editorOpen) this.queueSnapshotCheck(250, false);
             this.editorWasOpen = editorOpen;

@@ -90,7 +90,12 @@ function ensureModules() {
         onStatus: updateRuntimeStatus,
     });
     regexUiAdapter = new RegexUiAdapter({ onSaved: () => regexRefresh.noteChange() });
-    interactionOptimizer = new InteractionOptimizer({ onStatus: updateRuntimeStatus });
+    interactionOptimizer = new InteractionOptimizer({
+        isGenerating,
+        eventSource,
+        eventTypes: event_types,
+        onStatus: updateRuntimeStatus,
+    });
 }
 
 async function startEnabledModules({ skipCache = false, forceCache = false } = {}) {

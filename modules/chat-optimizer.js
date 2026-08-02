@@ -35,6 +35,9 @@ export class ChatOptimizer {
         this.originalHighlights = new Map();
         this.highlightWrappers = new Map();
         this.highlightObserver = null;
+        this.codeScanTimer = null;
+        this.codeScanFrame = null;
+        this.generationEndTimer = null;
         this.touchState = null;
         this.swipeSuppressUntil = 0;
         this.heavyHtmlMode = false;
@@ -74,6 +77,9 @@ export class ChatOptimizer {
             this.inspectPayload(this.chat);
             this.refreshChatBindings();
         });
+        this.bind(this.eventTypes.GENERATION_STARTED, () => this.pauseCodeScanning());
+        this.bind(this.eventTypes.GENERATION_STOPPED, () => this.refreshAfterGeneration());
+        this.bind(this.eventTypes.GENERATION_ENDED, () => this.refreshAfterGeneration());
         this.refreshChatBindings();
         await this.installHighlighter(generation);
         if (!this.started || generation !== this.generation) return;
@@ -112,9 +118,48 @@ export class ChatOptimizer {
         this.domObserver?.disconnect();
         this.chatElement = document.querySelector('#chat');
         if (!this.chatElement || !this.started) return;
-        this.domObserver = new MutationObserver(() => this.observeCodeBlocks());
+        this.domObserver = new MutationObserver(() => {
+            if (this.isGenerating?.()) return;
+            this.queueCodeScan();
+        });
         this.domObserver.observe(this.chatElement, { childList: true, subtree: true });
-        this.observeCodeBlocks();
+        if (!this.isGenerating?.()) this.queueCodeScan(0);
+    }
+
+    pauseCodeScanning() {
+        clearTimeout(this.codeScanTimer);
+        this.codeScanTimer = null;
+        if (this.codeScanFrame !== null) cancelAnimationFrame(this.codeScanFrame);
+        this.codeScanFrame = null;
+    }
+
+    queueCodeScan(delay = 180) {
+        if (!this.started || this.isGenerating?.()) return;
+        clearTimeout(this.codeScanTimer);
+        this.codeScanTimer = setTimeout(() => {
+            this.codeScanTimer = null;
+            if (!this.started || this.isGenerating?.()) return;
+            if (this.codeScanFrame !== null) cancelAnimationFrame(this.codeScanFrame);
+            this.codeScanFrame = requestAnimationFrame(() => {
+                this.codeScanFrame = null;
+                if (!this.started || this.isGenerating?.()) return;
+                this.observeCodeBlocks();
+            });
+        }, delay);
+    }
+
+    refreshAfterGeneration() {
+        clearTimeout(this.generationEndTimer);
+        const waitForUnlock = () => {
+            this.generationEndTimer = null;
+            if (!this.started) return;
+            if (this.isGenerating?.()) {
+                this.generationEndTimer = setTimeout(waitForUnlock, 80);
+                return;
+            }
+            this.queueCodeScan(0);
+        };
+        waitForUnlock();
     }
 
     async installHighlighter(generation = this.generation) {
@@ -147,6 +192,7 @@ export class ChatOptimizer {
                 const original = hljs.highlightAll;
                 const wrapper = (...args) => {
                     if (!this.started) return original.apply(hljs, args);
+                    if (this.isGenerating?.()) return undefined;
                     const temporaryMarks = [];
                     document.querySelectorAll(CODE_SELECTOR).forEach(element => {
                         this.queueHighlight(element);
@@ -174,7 +220,7 @@ export class ChatOptimizer {
                     this.queueHighlight(entry.target, true);
                 }
             }, { root: this.chatElement, rootMargin: '180px 0px' });
-            this.observeCodeBlocks();
+            this.queueCodeScan(0);
         } catch (error) {
             console.debug(LOG_PREFIX, '代码延迟高亮不可用', error);
         }
@@ -182,6 +228,10 @@ export class ChatOptimizer {
 
     queueHighlight(element, force = false) {
         if (!this.started || element.dataset.claHighlighted === '1' || !this.originalHighlight) return;
+        if (this.isGenerating?.()) {
+            element.dataset.claHighlightPending = '1';
+            return;
+        }
         const messages = [...document.querySelectorAll('#chat .mes')];
         const recent = messages.slice(-3).includes(element.closest('.mes'));
         if (isHeavyHtmlCode(element)) {
@@ -201,6 +251,10 @@ export class ChatOptimizer {
         }
         void this.scheduler.schedule(async () => {
             if (!element.isConnected || element.dataset.claHighlighted === '1') return;
+            if (this.isGenerating?.()) {
+                element.dataset.claHighlightPending = '1';
+                return;
+            }
             this.originalHighlight.call(this.highlightLibrary, element);
             element.dataset.claHighlighted = '1';
             delete element.dataset.claHighlightPending;
@@ -227,7 +281,7 @@ export class ChatOptimizer {
     }
 
     observeCodeBlocks() {
-        if (!this.highlightLibrary || !this.started) return;
+        if (!this.highlightLibrary || !this.started || this.isGenerating?.()) return;
         document.querySelectorAll(CODE_SELECTOR).forEach(element => this.queueHighlight(element));
     }
 
@@ -273,6 +327,9 @@ export class ChatOptimizer {
         this.chatElement = null;
         this.domObserver?.disconnect();
         this.domObserver = null;
+        this.pauseCodeScanning();
+        clearTimeout(this.generationEndTimer);
+        this.generationEndTimer = null;
         this.highlightObserver?.disconnect();
         if (this.highlightLibrary) {
             for (const [name, wrapper] of this.highlightWrappers) {

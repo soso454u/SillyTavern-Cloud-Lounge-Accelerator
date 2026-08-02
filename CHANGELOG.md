@@ -1,5 +1,15 @@
 # 更新记录
 
+## 2.0.5 — 生成暂停与预设开关修复
+
+- 流式生成期间暂停聊天代码块全量扫描，`MutationObserver` 只做常量级生成状态判断，正则模块也会直接忽略纯聊天 DOM 变化，避免重 HTML 持续变化时拖慢官方停止清理。
+- 同时监听 `GENERATION_STARTED`、`GENERATION_STOPPED` 和 `GENERATION_ENDED`；停止事件发出后会等待官方 `isGenerating()` 真正解锁，再合并扫描一次代码块。
+- 已排队的高亮任务在生成期间也会自动延后，不手动调用 `activateSendButtons()`，不修改官方 `body[data-generating]` 状态。
+- 生成期间点击预设条目开关时，立即更新官方 `promptOrderEntry.enabled`、当前行图标和禁用样式，并调用官方 `saveServiceSettings()` 保存。
+- 生成解锁后通过官方 `renderDebounced()` 合并为一次 Token 重算与列表刷新；不改写 `PromptManager.render`，不触碰 sortable 和拖拽逻辑。
+- 生成期间切换只影响尚未发送的后续请求，不会篡改已经发送给模型的当前请求。
+- 版本统一升级到 2.0.5，Worker 使用新版本缓存名。
+
 ## 2.0.4 — 原生拖拽与滚动热修
 
 - 撤销预设、正则和世界书的自定义 PointerEvent 拖拽接管，不再禁用 SillyTavern 原生 sortable，电脑与手机继续使用官方排序和保存逻辑。
