@@ -15,14 +15,22 @@ function isVisible(element, root) {
     return rect.bottom >= rootRect.top && rect.top <= rootRect.bottom;
 }
 
+export function hasRenderedChatTail(chatElement, expectedLastId) {
+    if (!chatElement || !Number.isInteger(expectedLastId) || expectedLastId < 0) return false;
+    const messages = chatElement.querySelectorAll?.('.mes[mesid]') || [];
+    const lastMessage = messages[messages.length - 1];
+    return Number(lastMessage?.getAttribute?.('mesid')) === expectedLastId;
+}
+
 export class ChatOptimizer {
-    constructor({ eventSource, eventTypes, chat = [], isGenerating = () => false, scheduler, saveSettings, onStatus = null }) {
+    constructor({ eventSource, eventTypes, chat = [], isGenerating = () => false, scheduler, saveSettings, scrollToBottom = null, onStatus = null }) {
         this.eventSource = eventSource;
         this.eventTypes = eventTypes;
         this.chat = chat;
         this.isGenerating = isGenerating;
         this.scheduler = scheduler;
         this.saveSettings = saveSettings;
+        this.scrollToBottom = scrollToBottom;
         this.onStatus = onStatus;
         this.started = false;
         this.powerUser = null;
@@ -43,6 +51,8 @@ export class ChatOptimizer {
         this.heavyHtmlMode = false;
         this.pendingMetrics = null;
         this.generation = 0;
+        this.bottomSettleTimers = new Set();
+        this.bottomSettleCleanup = null;
     }
 
     async start({ legacyTruncation = null } = {}) {
@@ -76,7 +86,9 @@ export class ChatOptimizer {
         this.bind(this.eventTypes.CHAT_CHANGED, () => {
             this.inspectPayload(this.chat);
             this.refreshChatBindings();
+            this.settleInitialBottom();
         });
+        this.bind(this.eventTypes.MORE_MESSAGES_LOADED, () => this.cancelInitialBottom());
         this.bind(this.eventTypes.GENERATION_STARTED, () => this.pauseCodeScanning());
         this.bind(this.eventTypes.GENERATION_STOPPED, () => this.refreshAfterGeneration());
         this.bind(this.eventTypes.GENERATION_ENDED, () => this.refreshAfterGeneration());
@@ -160,6 +172,44 @@ export class ChatOptimizer {
             this.queueCodeScan(0);
         };
         waitForUnlock();
+    }
+
+    cancelInitialBottom() {
+        for (const timer of this.bottomSettleTimers) clearTimeout(timer);
+        this.bottomSettleTimers.clear();
+        const cleanup = this.bottomSettleCleanup;
+        this.bottomSettleCleanup = null;
+        cleanup?.();
+    }
+
+    settleInitialBottom() {
+        this.cancelInitialBottom();
+        const chatElement = this.chatElement;
+        if (!chatElement || !this.started || typeof this.scrollToBottom !== 'function') return;
+
+        const expectedLastId = this.chat.length - 1;
+        const cancelByUser = () => this.cancelInitialBottom();
+        const cancelEvents = ['touchstart', 'pointerdown', 'wheel'];
+        for (const type of cancelEvents) chatElement.addEventListener(type, cancelByUser, { passive: true, once: true });
+        this.bottomSettleCleanup = () => {
+            for (const type of cancelEvents) chatElement.removeEventListener(type, cancelByUser);
+        };
+
+        const schedule = (callback, delay) => {
+            const timer = setTimeout(() => {
+                this.bottomSettleTimers.delete(timer);
+                callback();
+            }, delay);
+            this.bottomSettleTimers.add(timer);
+        };
+        const snapToBottom = () => {
+            if (!this.started || this.chatElement !== chatElement) return;
+            if (!hasRenderedChatTail(chatElement, expectedLastId)) return;
+            this.scrollToBottom({ waitForFrame: true });
+        };
+
+        for (const delay of [0, 80, 220, 500, 900]) schedule(snapToBottom, delay);
+        schedule(() => this.cancelInitialBottom(), 1100);
     }
 
     async installHighlighter(generation = this.generation) {
@@ -322,6 +372,7 @@ export class ChatOptimizer {
         if (!this.started) return;
         this.started = false;
         this.generation += 1;
+        this.cancelInitialBottom();
         for (const [name, handler] of this.eventHandlers) this.eventSource.removeListener(name, handler);
         this.eventHandlers = [];
         this.chatElement = null;

@@ -25,7 +25,7 @@ test('keeps every published version source in sync', async () => {
         import('../manifest.json', { with: { type: 'json' } }),
         import('../package.json', { with: { type: 'json' } }),
     ]);
-    assert.equal(CLIENT_VERSION, '2.0.6');
+    assert.equal(CLIENT_VERSION, '2.0.7');
     assert.equal(manifest.version, CLIENT_VERSION);
     assert.equal(packageJson.version, CLIENT_VERSION);
     assert.equal(ACCELERATOR_VERSION, CLIENT_VERSION);
@@ -131,6 +131,9 @@ test('pauses chat scanning during generation and leaves native sortable ownershi
         readFile(new URL('../style.css', import.meta.url), 'utf8'),
     ]);
     assert.doesNotMatch(chatSource, /showMoreMessages|onHistoryClick|maybeLoadEarlier|\.scrollTop/);
+    assert.match(chatSource, /MORE_MESSAGES_LOADED/);
+    assert.match(chatSource, /settleInitialBottom/);
+    assert.match(chatSource, /scrollToBottom/);
     assert.match(chatSource, /GENERATION_STARTED/);
     assert.match(chatSource, /GENERATION_STOPPED/);
     assert.match(chatSource, /GENERATION_ENDED/);
@@ -139,7 +142,9 @@ test('pauses chat scanning during generation and leaves native sortable ownershi
     assert.match(promptToggleSource, /saveServiceSettings/);
     assert.match(promptToggleSource, /renderDebounced/);
     assert.doesNotMatch(promptToggleSource, /PromptManager\.prototype|\.render\s*=/);
+    assert.match(promptToggleSource, /pointerup/);
     assert.match(regexRefreshSource, /recordsOnlyAffectChat/);
     assert.match(regexUiSource, /recordsOnlyAffectChat/);
     assert.doesNotMatch(styles, /content-visibility|contain-intrinsic-size|cla-drag-ghost/);
+    assert.match(styles, /@media \(pointer: coarse\)/);
 });

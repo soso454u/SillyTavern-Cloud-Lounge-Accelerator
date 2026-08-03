@@ -5,6 +5,7 @@ import {
     isGenerating,
     reloadCurrentChat,
     saveSettingsDebounced,
+    scrollChatToBottom,
 } from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
 import { CacheController } from './modules/cache-controller.js';
@@ -73,6 +74,7 @@ function ensureModules() {
         isGenerating,
         scheduler,
         saveSettings: saveSettingsDebounced,
+        scrollToBottom: scrollChatToBottom,
         onStatus: updateRuntimeStatus,
     });
     startupOptimizer = new StartupOptimizer({

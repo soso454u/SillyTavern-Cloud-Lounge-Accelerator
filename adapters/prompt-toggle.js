@@ -1,6 +1,7 @@
 const TOGGLE_SELECTOR = '.prompt-manager-toggle-action';
 const ROW_SELECTOR = '[data-pm-identifier]';
 const LOG_PREFIX = '[Cloud Lounge Accelerator]';
+const TOUCH_CLICK_SUPPRESS_MS = 900;
 
 export class PromptToggleAdapter {
     constructor({ isGenerating = () => false, eventSource, eventTypes }) {
@@ -11,6 +12,9 @@ export class PromptToggleAdapter {
         this.started = false;
         this.pendingManagers = new Set();
         this.flushTimer = null;
+        this.suppressClickUntil = 0;
+        this.suppressedToggle = null;
+        this.onPointerUp = this.onPointerUp.bind(this);
         this.onClick = this.onClick.bind(this);
         this.onGenerationFinished = this.onGenerationFinished.bind(this);
     }
@@ -24,6 +28,7 @@ export class PromptToggleAdapter {
             return false;
         }
         this.started = true;
+        document.addEventListener('pointerup', this.onPointerUp, true);
         document.addEventListener('click', this.onClick, true);
         for (const name of [this.eventTypes?.GENERATION_STOPPED, this.eventTypes?.GENERATION_ENDED]) {
             if (name) this.eventSource?.on?.(name, this.onGenerationFinished);
@@ -37,6 +42,10 @@ export class PromptToggleAdapter {
         return manager;
     }
 
+    getToggle(event) {
+        return event.target instanceof Element ? event.target.closest(TOGGLE_SELECTOR) : null;
+    }
+
     updateRow(row, toggle, manager, enabled) {
         const prefix = String(manager.configuration?.prefix || '');
         row.classList.toggle(`${prefix}prompt_manager_prompt_disabled`, !enabled);
@@ -45,18 +54,38 @@ export class PromptToggleAdapter {
         toggle.setAttribute('aria-pressed', String(enabled));
     }
 
-    onClick(event) {
+    onPointerUp(event) {
         if (!this.started || !this.isGenerating?.()) return;
-        const toggle = event.target instanceof Element ? event.target.closest(TOGGLE_SELECTOR) : null;
+        if (event.pointerType === 'mouse' || event.isPrimary === false) return;
+        if (typeof event.button === 'number' && event.button !== 0) return;
+        const toggle = this.getToggle(event);
+        if (!toggle || !this.toggleEntry(event, toggle)) return;
+        this.suppressedToggle = toggle;
+        this.suppressClickUntil = Date.now() + TOUCH_CLICK_SUPPRESS_MS;
+    }
+
+    onClick(event) {
+        const toggle = this.getToggle(event);
+        if (!toggle) return;
+        if (toggle === this.suppressedToggle && Date.now() < this.suppressClickUntil) {
+            if (event.cancelable) event.preventDefault();
+            event.stopImmediatePropagation();
+            return;
+        }
+        if (!this.started || !this.isGenerating?.()) return;
+        this.toggleEntry(event, toggle);
+    }
+
+    toggleEntry(event, toggle) {
         const row = toggle?.closest(ROW_SELECTOR);
         const manager = this.getManagerForRow(row);
         const promptId = row?.dataset?.pmIdentifier;
         const entry = manager && promptId
             ? manager.getPromptOrderEntry?.(manager.activeCharacter, promptId)
             : null;
-        if (!toggle || !row || !manager || !entry || typeof manager.saveServiceSettings !== 'function') return;
+        if (!row || !manager || !entry || typeof manager.saveServiceSettings !== 'function') return false;
 
-        event.preventDefault();
+        if (event.cancelable) event.preventDefault();
         event.stopImmediatePropagation();
 
         const previous = Boolean(entry.enabled);
@@ -84,6 +113,7 @@ export class PromptToggleAdapter {
             console.error(LOG_PREFIX, '生成期间预设开关保存失败', error);
             globalThis.toastr?.error?.('预设开关保存失败，已恢复原状态', '云酒馆加速器');
         }
+        return true;
     }
 
     onGenerationFinished() {
@@ -116,6 +146,7 @@ export class PromptToggleAdapter {
     stop() {
         if (!this.started) return;
         this.started = false;
+        document.removeEventListener('pointerup', this.onPointerUp, true);
         document.removeEventListener('click', this.onClick, true);
         for (const name of [this.eventTypes?.GENERATION_STOPPED, this.eventTypes?.GENERATION_ENDED]) {
             if (name) this.eventSource?.removeListener?.(name, this.onGenerationFinished);
@@ -123,6 +154,8 @@ export class PromptToggleAdapter {
         clearTimeout(this.flushTimer);
         this.flushTimer = null;
         this.pendingManagers.clear();
+        this.suppressClickUntil = 0;
+        this.suppressedToggle = null;
         this.openai = null;
     }
 }

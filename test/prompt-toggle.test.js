@@ -77,6 +77,7 @@ test('intercepts a generating prompt toggle, saves it, and defers the full rende
 
         adapter.onClick({
             target: toggle,
+            cancelable: true,
             preventDefault: () => { prevented += 1; },
             stopImmediatePropagation: () => { stopped += 1; },
         });
@@ -94,4 +95,82 @@ test('intercepts a generating prompt toggle, saves it, and defers the full rende
         if (originalElement === undefined) delete globalThis.Element;
         else globalThis.Element = originalElement;
     }
+});
+
+test('handles a generating touch pointer once and suppresses its ghost click', async () => {
+    const originalElement = globalThis.Element;
+    class FakeElement { }
+    globalThis.Element = FakeElement;
+    try {
+        const row = new FakeElement();
+        row.dataset = { pmIdentifier: 'main' };
+        row.classList = createClassList();
+        const toggle = new FakeElement();
+        toggle.classList = createClassList(['fa-toggle-on']);
+        toggle.setAttribute = () => {};
+        toggle.closest = selector => selector === '.prompt-manager-toggle-action' ? toggle : row;
+        const entry = { enabled: true };
+        let saves = 0;
+        const manager = {
+            activeCharacter: { id: 100001 },
+            configuration: { prefix: 'completion_' },
+            listElement: { contains: candidate => candidate === row },
+            tokenHandler: { getCounts: () => ({ main: 1 }) },
+            getPromptOrderEntry: () => entry,
+            saveServiceSettings: () => {
+                saves += 1;
+                return Promise.resolve();
+            },
+        };
+        const adapter = new PromptToggleAdapter({ isGenerating: () => true });
+        adapter.started = true;
+        adapter.openai = { promptManager: manager };
+        adapter.queueFlush = () => {};
+        let pointerStops = 0;
+        let clickStops = 0;
+
+        adapter.onPointerUp({
+            target: toggle,
+            pointerType: 'touch',
+            isPrimary: true,
+            button: 0,
+            cancelable: true,
+            preventDefault: () => {},
+            stopImmediatePropagation: () => { pointerStops += 1; },
+        });
+        adapter.onClick({
+            target: toggle,
+            cancelable: true,
+            preventDefault: () => {},
+            stopImmediatePropagation: () => { clickStops += 1; },
+        });
+        await Promise.resolve();
+
+        assert.equal(entry.enabled, false);
+        assert.equal(saves, 1);
+        assert.equal(pointerStops, 1);
+        assert.equal(clickStops, 1);
+    } finally {
+        if (originalElement === undefined) delete globalThis.Element;
+        else globalThis.Element = originalElement;
+    }
+});
+
+test('leaves non-generating touch and mouse pointer events to SillyTavern', () => {
+    const adapter = new PromptToggleAdapter({ isGenerating: () => false });
+    adapter.started = true;
+    let toggles = 0;
+    adapter.getToggle = () => ({});
+    adapter.toggleEntry = () => {
+        toggles += 1;
+        return true;
+    };
+
+    adapter.onPointerUp({ pointerType: 'touch', isPrimary: true, button: 0 });
+    assert.equal(toggles, 0);
+
+    adapter.isGenerating = () => true;
+    adapter.onPointerUp({ pointerType: 'mouse', isPrimary: true, button: 0 });
+    assert.equal(toggles, 0);
+    assert.equal(adapter.suppressClickUntil, 0);
 });
