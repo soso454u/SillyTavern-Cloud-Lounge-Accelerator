@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
 import { StartupOptimizer } from '../modules/startup-optimizer.js';
 
@@ -55,4 +56,17 @@ test('deduplicates simultaneous first recent-chat requests', async () => {
     assert.deepEqual(await firstResponse.json(), [{ version: 1 }]);
     assert.deepEqual(await secondResponse.json(), [{ version: 1 }]);
     assert.equal(calls, 1);
+});
+
+test('keeps welcome recovery out of the chat layout and uses a short top notice', async () => {
+    const [source, styles] = await Promise.all([
+        readFile(new URL('../modules/startup-optimizer.js', import.meta.url), 'utf8'),
+        readFile(new URL('../style.css', import.meta.url), 'utf8'),
+    ]);
+    assert.doesNotMatch(source, /cla-welcome-placeholder|showWelcomePlaceholder|重新读取最近聊天/);
+    assert.doesNotMatch(styles, /\.cla-welcome-placeholder/);
+    assert.match(source, /BACKGROUND_NOTICE_MS = 1800/);
+    const noticeStyles = styles.match(/\.cla-background-init-banner\s*\{[^}]*\}/)?.[0] || '';
+    assert.match(noticeStyles, /top:/);
+    assert.doesNotMatch(noticeStyles, /bottom:/);
 });

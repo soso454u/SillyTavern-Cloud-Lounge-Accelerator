@@ -2,7 +2,8 @@ import { classifyStartupRequest } from '../client-core.js';
 
 const FETCH_TTL_MS = 20000;
 const LOG_PREFIX = '[Cloud Lounge Accelerator]';
-const WELCOME_RETRY_DELAY_MS = 6000;
+const BACKGROUND_NOTICE_MS = 1800;
+const RECOVERY_NOTICE_MS = 3200;
 
 function cloneResponse(response) {
     try {
@@ -69,8 +70,7 @@ export class StartupOptimizer {
         this.timers = new Set();
         this.handlers = [];
         this.banner = null;
-        this.placeholder = null;
-        this.placeholderTimer = null;
+        this.bannerTimer = null;
         this.recoveringWelcome = false;
         this.onOnline = () => void this.recoverWelcomeScreen();
         this.started = false;
@@ -102,11 +102,7 @@ export class StartupOptimizer {
             if (!handle || !this.started) return;
             await loaderModule.loader.hide(handle);
             document.body?.classList.add('cla-early-ui');
-            this.banner = document.createElement('div');
-            this.banner.className = 'cla-background-init-banner';
-            this.banner.textContent = '酒馆界面已可操作 · 其余内容正在后台初始化';
-            document.body.append(this.banner);
-            this.showWelcomePlaceholder();
+            this.showBackgroundNotice('正在后台加载最近聊天…');
         } catch (error) {
             console.debug(LOG_PREFIX, '提前显示界面不可用，保留酒馆原生启动流程', error);
         }
@@ -114,69 +110,58 @@ export class StartupOptimizer {
 
     onAppReady() {
         document.body?.classList.remove('cla-early-ui');
-        this.banner?.remove();
-        this.banner = null;
         this.entries.clear();
         if (this.getCurrentChatId?.() != null || document.querySelector('#chat .welcomePanel')) {
-            this.removeWelcomePlaceholder();
+            this.removeBackgroundNotice();
         } else {
             void this.recoverWelcomeScreen();
         }
     }
 
-    showWelcomePlaceholder() {
-        if (this.getCurrentChatId?.() != null || this.placeholder?.isConnected) return;
-        const chatElement = document.querySelector('#chat');
-        if (!chatElement || chatElement.querySelector('.welcomePanel, .mes, #show_more_messages')) return;
-
-        const placeholder = document.createElement('section');
-        placeholder.className = 'cla-welcome-placeholder';
-        placeholder.setAttribute('role', 'status');
-        placeholder.innerHTML = `
-            <div class="cla-welcome-placeholder-spinner" aria-hidden="true"></div>
-            <strong>酒馆界面已打开</strong>
-            <span>正在后台读取最近聊天…</span>
-            <button type="button" class="menu_button cla-welcome-retry" hidden>重新读取最近聊天</button>
-        `;
-        placeholder.querySelector('.cla-welcome-retry')?.addEventListener('click', () => {
-            void this.recoverWelcomeScreen();
-        });
-        chatElement.append(placeholder);
-        this.placeholder = placeholder;
-        clearTimeout(this.placeholderTimer);
-        this.placeholderTimer = setTimeout(() => {
-            this.placeholderTimer = null;
-            const retry = this.placeholder?.querySelector('.cla-welcome-retry');
-            if (retry instanceof HTMLButtonElement) retry.hidden = false;
-        }, WELCOME_RETRY_DELAY_MS);
+    showBackgroundNotice(message, duration = BACKGROUND_NOTICE_MS) {
+        if (!this.started) return;
+        if (!this.banner?.isConnected) {
+            this.banner = document.createElement('div');
+            this.banner.className = 'cla-background-init-banner';
+            this.banner.setAttribute('role', 'status');
+            this.banner.setAttribute('aria-live', 'polite');
+            const spinner = document.createElement('span');
+            spinner.className = 'cla-background-init-spinner';
+            spinner.setAttribute('aria-hidden', 'true');
+            const text = document.createElement('span');
+            text.dataset.claBackgroundNotice = '';
+            this.banner.append(spinner, text);
+            document.body?.append(this.banner);
+        }
+        const text = this.banner?.querySelector('[data-cla-background-notice]');
+        if (text) text.textContent = message;
+        clearTimeout(this.bannerTimer);
+        this.bannerTimer = setTimeout(() => this.removeBackgroundNotice(), duration);
     }
 
-    removeWelcomePlaceholder() {
-        clearTimeout(this.placeholderTimer);
-        this.placeholderTimer = null;
-        this.placeholder?.remove();
-        this.placeholder = null;
+    removeBackgroundNotice() {
+        clearTimeout(this.bannerTimer);
+        this.bannerTimer = null;
+        this.banner?.remove();
+        this.banner = null;
     }
 
     async recoverWelcomeScreen() {
         if (!this.started || this.getCurrentChatId?.() != null || this.recoveringWelcome) return;
         if (document.querySelector('#chat .welcomePanel')) {
-            this.removeWelcomePlaceholder();
+            this.removeBackgroundNotice();
             return;
         }
-        this.showWelcomePlaceholder();
+        this.showBackgroundNotice('正在后台读取最近聊天…');
         this.recoveringWelcome = true;
-        const retry = this.placeholder?.querySelector('.cla-welcome-retry');
-        if (retry instanceof HTMLButtonElement) retry.disabled = true;
         try {
             const module = await import('../../../../welcome-screen.js');
             await module.openWelcomeScreen?.({ force: true });
-            if (document.querySelector('#chat .welcomePanel')) this.removeWelcomePlaceholder();
+            if (document.querySelector('#chat .welcomePanel')) this.removeBackgroundNotice();
         } catch (error) {
             console.debug(LOG_PREFIX, '最近聊天读取失败，等待联网后重试', error);
-            if (retry instanceof HTMLButtonElement && retry.isConnected) retry.hidden = false;
+            this.showBackgroundNotice('最近聊天暂未载入 · 网络恢复后自动重试', RECOVERY_NOTICE_MS);
         } finally {
-            if (retry instanceof HTMLButtonElement && retry.isConnected) retry.disabled = false;
             this.recoveringWelcome = false;
         }
     }
@@ -303,9 +288,7 @@ export class StartupOptimizer {
         this.fetchWrapper = null;
         this.nativeFetch = null;
         document.body?.classList.remove('cla-early-ui');
-        this.banner?.remove();
-        this.banner = null;
-        this.removeWelcomePlaceholder();
+        this.removeBackgroundNotice();
         this.recoveringWelcome = false;
         this.startupFeatures = true;
     }
