@@ -92,7 +92,7 @@ export class SettingsPanel {
             status,
             createSwitch('pageAcceleration', '页面加载加速', '让酒馆第二次打开更快', this.settings.pageAcceleration, this.onSettingChange),
             createSwitch('chatOptimization', '聊天与重美化优化', '减少长聊天、人物面板和复杂正则造成的卡顿', this.settings.chatOptimization, this.onSettingChange),
-            createSwitch('interactionOptimization', '界面操作优化', '生成时可立即切换预设，拖拽仍使用酒馆原生流程', this.settings.interactionOptimization, this.onSettingChange),
+            createSwitch('interactionOptimization', '界面操作优化', '生成时可立即切换预设，并自愈手机透明遮罩', this.settings.interactionOptimization, this.onSettingChange),
         );
 
         const actions = document.createElement('div');
