@@ -3,6 +3,7 @@ import {
     eventSource,
     event_types,
     getCurrentChatId,
+    getRequestHeaders,
     isGenerating,
     refreshSwipeButtons,
     reloadCurrentChat,
@@ -13,6 +14,7 @@ import { extension_settings } from '../../../extensions.js';
 import { CacheController } from './modules/cache-controller.js';
 import { ChatOptimizer } from './modules/chat-optimizer.js';
 import { InteractionOptimizer } from './modules/interaction-optimizer.js';
+import { PerformanceConfigController } from './modules/performance-config.js';
 import { RegexRefreshController } from './modules/regex-refresh.js';
 import { RegexUiAdapter } from './modules/regex-ui-adapter.js';
 import { repairAccelerator } from './modules/repair.js';
@@ -38,6 +40,7 @@ let chatOptimizer = null;
 let regexRefresh = null;
 let regexUiAdapter = null;
 let interactionOptimizer = null;
+let performanceConfig = null;
 let scheduler = null;
 const runtimeStatus = { chat: '自动', interaction: '自动' };
 
@@ -103,6 +106,7 @@ function ensureModules() {
         eventTypes: event_types,
         onStatus: updateRuntimeStatus,
     });
+    performanceConfig = new PerformanceConfigController({ getRequestHeaders });
 }
 
 async function startEnabledModules({ skipCache = false, forceCache = false } = {}) {
@@ -187,12 +191,22 @@ async function changeSetting(key, enabled) {
 }
 
 async function getPanelStatus() {
-    if (cacheController?.state === 'available') await cacheController.refreshStats();
+    const [, performance] = await Promise.all([
+        cacheController?.state === 'available' ? cacheController.refreshStats() : null,
+        performanceConfig?.refresh(),
+    ]);
     return {
         ...cacheController?.getStatus(),
         chat: settings.chatOptimization ? runtimeStatus.chat : '关闭',
         interaction: settings.interactionOptimization ? runtimeStatus.interaction : '关闭',
+        performance,
     };
+}
+
+async function changePerformanceSetting(key, enabled) {
+    const result = await performanceConfig.set(key, enabled);
+    await panel?.refresh();
+    return result;
 }
 
 function mountPanel() {
@@ -200,6 +214,7 @@ function mountPanel() {
     panel ??= new SettingsPanel({
         settings,
         onSettingChange: changeSetting,
+        onPerformanceChange: changePerformanceSetting,
         onRerender: () => regexRefresh.reapply({ automatic: false }),
         onRepair: () => settings.pageAcceleration
             ? repairAccelerator({ cacheController, restartModules })
@@ -256,6 +271,7 @@ async function cleanup() {
     regexRefresh = null;
     regexUiAdapter = null;
     interactionOptimizer = null;
+    performanceConfig = null;
 }
 
 export async function onDisable() {

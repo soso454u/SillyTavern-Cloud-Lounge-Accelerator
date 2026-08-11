@@ -1,4 +1,5 @@
 import { createAdvancedPanel } from './advanced-panel.js';
+import { createPerformancePanel } from './performance-panel.js';
 
 const ROOT_ID = 'cloud-lounge-accelerator-settings';
 
@@ -54,14 +55,16 @@ function createButton(label, icon, onClick, className = '') {
 }
 
 export class SettingsPanel {
-    constructor({ settings, onSettingChange, onRerender, onRepair, getStatus }) {
+    constructor({ settings, onSettingChange, onPerformanceChange, onRerender, onRepair, getStatus }) {
         this.settings = settings;
         this.onSettingChange = onSettingChange;
+        this.onPerformanceChange = onPerformanceChange;
         this.onRerender = onRerender;
         this.onRepair = onRepair;
         this.getStatus = getStatus;
         this.root = null;
         this.advanced = null;
+        this.performance = null;
     }
 
     mount() {
@@ -109,8 +112,9 @@ export class SettingsPanel {
             const result = await this.onRepair();
             globalThis.toastr?.success?.(`修复完成，已预热 ${result?.warmed || 0} 个资源`, '云酒馆加速器');
         }, 'cla-repair-button'));
+        this.performance = createPerformancePanel(this.onPerformanceChange);
         this.advanced = createAdvancedPanel();
-        body.append(actions, repairBox, this.advanced.element);
+        body.append(this.performance.element, actions, repairBox, this.advanced.element);
         header.append(title, body);
         root.append(header);
         host.append(root);
@@ -122,6 +126,7 @@ export class SettingsPanel {
     async refresh() {
         if (!this.root) return;
         const status = await this.getStatus();
+        this.performance?.update(status.performance);
         this.advanced?.update(status);
         const label = this.root.querySelector('[data-cla-overall-status]');
         const problem = status.warning === true || status.cache === '错误' || status.chat === '错误' || status.interaction === '错误';

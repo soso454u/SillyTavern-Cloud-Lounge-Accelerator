@@ -3,13 +3,21 @@ param(
     [Parameter(Position = 0)]
     [string]$SillyTavernRoot = $env:SILLYTAVERN_ROOT,
 
-    [switch]$LazyCharacters
+    [switch]$LazyCharacters,
+
+    [switch]$KeepAlive,
+
+    [switch]$FastStart
 )
 
 $ErrorActionPreference = 'Stop'
 $RepositoryUrl = if ($env:ACCELERATOR_REPOSITORY) { $env:ACCELERATOR_REPOSITORY } else { 'https://github.com/soso454u/SillyTavern-Cloud-Lounge-Accelerator.git' }
 $RepositoryBranch = if ($env:ACCELERATOR_BRANCH) { $env:ACCELERATOR_BRANCH } else { 'main' }
 $ProjectDirectory = 'cloud-lounge-accelerator'
+if ($FastStart) {
+    $LazyCharacters = $true
+    $KeepAlive = $true
+}
 
 function Write-Step([string]$Message) {
     Write-Host "[云酒馆加速器] $Message" -ForegroundColor Cyan
@@ -89,14 +97,36 @@ function Set-Configuration([string]$ConfigPath) {
             Write-Step '已开启 performance.lazyLoadCharacters'
         }
         else {
-            Write-Step '未在 config.yaml 中找到 lazyLoadCharacters，已跳过该可选设置。'
+            if ($Content -match '(?m)^performance\s*:\s*$') {
+                $Content = [regex]::Replace($Content, '(?m)^(performance\s*:\s*)$', '$1' + [Environment]::NewLine + '  lazyLoadCharacters: true', 1)
+            }
+            else {
+                $Content = $Content.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + '# Enabled by Cloud Lounge Accelerator installer' + [Environment]::NewLine + 'performance:' + [Environment]::NewLine + '  lazyLoadCharacters: true' + [Environment]::NewLine
+            }
+            Write-Step '已添加并开启 performance.lazyLoadCharacters'
         }
+    }
+
+    if ($KeepAlive) {
+        if ($Content -match '(?m)^enableKeepAlive\s*:') {
+            $Content = [regex]::Replace($Content, '(?m)^enableKeepAlive\s*:.*$', 'enableKeepAlive: true')
+        }
+        else {
+            $Content = $Content.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + '# Enabled by Cloud Lounge Accelerator installer' + [Environment]::NewLine + 'enableKeepAlive: true' + [Environment]::NewLine
+        }
+        Write-Step '已开启 HTTP/HTTPS Keep-Alive；若出现 ECONNRESET 或连接中断，请在设置面板关闭'
     }
 
     $Utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($ConfigPath, $Content, $Utf8WithoutBom)
     if ([System.IO.File]::ReadAllText($ConfigPath) -notmatch '(?m)^enableServerPlugins\s*:\s*true(?:\s|$)') {
         throw 'config.yaml 更新验证失败，请使用自动备份恢复。'
+    }
+    if ($KeepAlive -and [System.IO.File]::ReadAllText($ConfigPath) -notmatch '(?m)^enableKeepAlive\s*:\s*true(?:\s|$)') {
+        throw 'enableKeepAlive 更新验证失败，请使用自动备份恢复。'
+    }
+    if ($LazyCharacters -and [System.IO.File]::ReadAllText($ConfigPath) -notmatch '(?m)^\s+lazyLoadCharacters\s*:\s*true(?:\s|$)') {
+        throw 'performance.lazyLoadCharacters 更新验证失败，请使用自动备份恢复。'
     }
 }
 
@@ -109,6 +139,9 @@ $ServerPluginDirectory = Join-Path $Root "plugins\$ProjectDirectory"
 $UiExtensionDirectory = Join-Path $Root "public\scripts\extensions\third-party\$ProjectDirectory"
 
 Write-Step "SillyTavern 根目录：$Root"
+if ($LazyCharacters) {
+    Write-Step '注意：角色卡懒加载可能不兼容部分旧扩展，高级模糊搜索将只按角色名搜索'
+}
 Install-OrUpdateRepository $ServerPluginDirectory '服务端插件'
 Install-OrUpdateRepository $UiExtensionDirectory '全局 UI 扩展'
 Set-Configuration (Join-Path $Root 'config.yaml')

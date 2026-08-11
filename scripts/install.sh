@@ -7,18 +7,22 @@ REPOSITORY_BRANCH="${ACCELERATOR_BRANCH:-main}"
 PROJECT_DIRECTORY="cloud-lounge-accelerator"
 ROOT_ARGUMENT=""
 ENABLE_LAZY_CHARACTERS=0
+ENABLE_KEEP_ALIVE=0
+ENABLE_FAST_START=0
 
 usage() {
     cat <<'EOF'
 云酒馆加速器一键安装/更新器
 
 用法：
-  bash install.sh [SillyTavern 根目录] [--lazy-characters]
-  bash install.sh --root /path/to/SillyTavern [--lazy-characters]
+  bash install.sh [SillyTavern 根目录] [性能选项]
+  bash install.sh --root /path/to/SillyTavern [性能选项]
 
 选项：
   --root PATH          指定 SillyTavern 根目录
-  --lazy-characters    同时开启官方角色卡懒加载
+  --keep-alive         开启 HTTP/HTTPS Keep-Alive；网络异常时请关闭
+  --lazy-characters    开启角色卡懒加载；旧扩展和模糊搜索可能受影响
+  --fast-start         同时开启上面两项（普通安装默认不开启）
   -h, --help           显示帮助
 
 如未指定路径，安装器会先检查 SILLYTAVERN_ROOT，
@@ -46,6 +50,14 @@ while (($# > 0)); do
             ENABLE_LAZY_CHARACTERS=1
             shift
             ;;
+        --keep-alive)
+            ENABLE_KEEP_ALIVE=1
+            shift
+            ;;
+        --fast-start)
+            ENABLE_FAST_START=1
+            shift
+            ;;
         -h|--help)
             usage
             exit 0
@@ -60,6 +72,11 @@ while (($# > 0)); do
             ;;
     esac
 done
+
+if ((ENABLE_FAST_START == 1)); then
+    ENABLE_KEEP_ALIVE=1
+    ENABLE_LAZY_CHARACTERS=1
+fi
 
 is_sillytavern_root() {
     local candidate="$1"
@@ -142,10 +159,11 @@ update_config() {
     cp -p "$config_path" "$backup_path"
     info "已备份配置：$backup_path"
 
-    node - "$config_path" "$ENABLE_LAZY_CHARACTERS" <<'NODE'
+    node - "$config_path" "$ENABLE_LAZY_CHARACTERS" "$ENABLE_KEEP_ALIVE" <<'NODE'
 const fs = require('node:fs');
 const configPath = process.argv[2];
 const enableLazyCharacters = process.argv[3] === '1';
+const enableKeepAlive = process.argv[4] === '1';
 let content = fs.readFileSync(configPath, 'utf8');
 
 if (/^enableServerPlugins\s*:/m.test(content)) {
@@ -154,8 +172,35 @@ if (/^enableServerPlugins\s*:/m.test(content)) {
     content = `${content.trimEnd()}\n\n# Enabled by Cloud Lounge Accelerator installer\nenableServerPlugins: true\n`;
 }
 
-if (enableLazyCharacters && /^\s+lazyLoadCharacters\s*:/m.test(content)) {
-    content = content.replace(/^(\s*)lazyLoadCharacters\s*:.*$/m, '$1lazyLoadCharacters: true');
+if (enableKeepAlive) {
+    if (/^enableKeepAlive\s*:/m.test(content)) {
+        content = content.replace(/^enableKeepAlive\s*:.*$/m, 'enableKeepAlive: true');
+    } else {
+        content = `${content.trimEnd()}\n\n# Enabled by Cloud Lounge Accelerator installer\nenableKeepAlive: true\n`;
+    }
+}
+
+if (enableLazyCharacters) {
+    const lines = content.split(/\r?\n/);
+    const performanceIndex = lines.findIndex(line => /^performance\s*:/.test(line));
+    if (performanceIndex < 0) {
+        lines.push('', '# Enabled by Cloud Lounge Accelerator installer', 'performance:', '  lazyLoadCharacters: true');
+    } else {
+        let blockEnd = lines.length;
+        for (let index = performanceIndex + 1; index < lines.length; index += 1) {
+            if (!lines[index].trim() || /^\s*#/.test(lines[index])) continue;
+            if (!/^\s/.test(lines[index])) { blockEnd = index; break; }
+        }
+        const relativeIndex = lines.slice(performanceIndex + 1, blockEnd)
+            .findIndex(line => /^\s+lazyLoadCharacters\s*:/.test(line));
+        if (relativeIndex >= 0) {
+            const index = performanceIndex + 1 + relativeIndex;
+            lines[index] = lines[index].replace(/^(\s*)lazyLoadCharacters\s*:.*$/, '$1lazyLoadCharacters: true');
+        } else {
+            lines.splice(performanceIndex + 1, 0, '  lazyLoadCharacters: true');
+        }
+    }
+    content = lines.join(content.includes('\r\n') ? '\r\n' : '\n');
 }
 
 fs.writeFileSync(configPath, content, 'utf8');
@@ -173,6 +218,12 @@ NODE
         fi
     fi
 
+    if ((ENABLE_KEEP_ALIVE == 1)); then
+        grep -Eq '^enableKeepAlive[[:space:]]*:[[:space:]]*true([[:space:]]|$)' "$config_path" \
+            || die 'enableKeepAlive 更新验证失败，请使用自动备份恢复。'
+        info '已开启 HTTP/HTTPS Keep-Alive；若出现 ECONNRESET 或连接中断，请在设置面板关闭'
+    fi
+
     grep -Eq '^enableServerPlugins[[:space:]]*:[[:space:]]*true([[:space:]]|$)' "$config_path" \
         || die 'config.yaml 更新验证失败，请使用自动备份恢复。'
 }
@@ -186,6 +237,9 @@ SERVER_PLUGIN_DIRECTORY="$SILLYTAVERN_DIRECTORY/plugins/$PROJECT_DIRECTORY"
 UI_EXTENSION_DIRECTORY="$SILLYTAVERN_DIRECTORY/public/scripts/extensions/third-party/$PROJECT_DIRECTORY"
 
 info "SillyTavern 根目录：$SILLYTAVERN_DIRECTORY"
+if ((ENABLE_LAZY_CHARACTERS == 1)); then
+    info '注意：角色卡懒加载可能不兼容部分旧扩展，高级模糊搜索将只按角色名搜索'
+fi
 install_or_update_repository "$SERVER_PLUGIN_DIRECTORY" '服务端插件'
 install_or_update_repository "$UI_EXTENSION_DIRECTORY" '全局 UI 扩展'
 update_config "$SILLYTAVERN_DIRECTORY/config.yaml"

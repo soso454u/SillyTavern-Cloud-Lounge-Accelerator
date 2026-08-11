@@ -28,10 +28,13 @@ test('registers health and root-scoped worker endpoints', async () => {
         get(path, handler) {
             routes.set(path, handler);
         },
+        post(path, handler) {
+            routes.set(`POST ${path}`, handler);
+        },
     };
     await init(router);
 
-    assert.deepEqual([...routes.keys()], ['/health', '/service-worker.js']);
+    assert.deepEqual([...routes.keys()], ['/health', '/performance', 'POST /performance', '/service-worker.js']);
 
     const health = createResponse();
     routes.get('/health')({}, health);

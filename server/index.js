@@ -1,6 +1,29 @@
 import { ACCELERATOR_VERSION, createServiceWorkerSource } from './worker-template.js';
+import { readPerformanceSettings, resolveConfigPath, writePerformanceSetting } from './performance-config.js';
+import { constants } from 'node:fs';
+import { access, readFile } from 'node:fs/promises';
 
 const workerSource = createServiceWorkerSource();
+const configPath = resolveConfigPath();
+let configWriteQueue = Promise.resolve();
+
+function noStore(response) {
+    response.set({
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+    });
+}
+
+async function readPerformanceResponse() {
+    const content = await readFile(configPath, 'utf8');
+    const writable = await access(configPath, constants.W_OK).then(() => true).catch(() => false);
+    return {
+        ok: true,
+        settings: readPerformanceSettings(content),
+        writable,
+        restartRequired: false,
+    };
+}
 
 export const info = Object.freeze({
     id: 'cloud-lounge-accelerator',
@@ -14,15 +37,38 @@ export const info = Object.freeze({
  */
 export async function init(router) {
     router.get('/health', (_request, response) => {
-        response.set({
-            'Cache-Control': 'no-store',
-            'X-Content-Type-Options': 'nosniff',
-        });
+        noStore(response);
         response.json({
             ok: true,
             id: info.id,
             version: ACCELERATOR_VERSION,
             workerPath: `/api/plugins/${info.id}/service-worker.js`,
+        });
+    });
+
+    router.get('/performance', async (_request, response) => {
+        noStore(response);
+        try {
+            response.json(await readPerformanceResponse());
+        } catch (error) {
+            response.status(503).json({ ok: false, error: `无法读取 config.yaml：${error.message}` });
+        }
+    });
+
+    router.post('/performance', (request, response) => {
+        noStore(response);
+        const { setting, enabled } = request.body || {};
+        if (!['keepAlive', 'lazyCharacters'].includes(setting) || typeof enabled !== 'boolean') {
+            response.status(400).json({ ok: false, error: '性能设置参数无效' });
+            return;
+        }
+
+        const operation = configWriteQueue.then(() => writePerformanceSetting(configPath, setting, enabled));
+        configWriteQueue = operation.catch(() => {});
+        operation.then(result => {
+            response.json({ ok: true, ...result, restartRequired: result.changed });
+        }).catch(error => {
+            response.status(500).json({ ok: false, error: `无法更新 config.yaml：${error.message}` });
         });
     });
 

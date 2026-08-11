@@ -1,4 +1,4 @@
-# 云酒馆加速器 2.0.9
+# 云酒馆加速器 2.1.0
 
 让云端 SillyTavern 打开更快、长聊天更流畅，同时避免重复接管预设、正则和世界书的原生交互。安装后大部分功能都会自动工作，不需要手动调整复杂参数。
 
@@ -35,6 +35,14 @@ curl -fsSL https://raw.githubusercontent.com/soso454u/SillyTavern-Cloud-Lounge-A
 ```
 
 更多安装、更新、卸载、1Panel 和 HTTPS 步骤见 [完整使用教程](docs/完整使用教程.md)。
+
+普通安装不会改动 SillyTavern 的性能开关。需要在安装时直接开启时，可单独使用 `--keep-alive`、`--lazy-characters`，或用 `--fast-start` 同时开启两项：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/soso454u/SillyTavern-Cloud-Lounge-Accelerator/main/scripts/install.sh | bash -s -- --fast-start
+```
+
+Keep-Alive 在部分网络环境可能引发 `ECONNRESET` 或连接中断；角色卡懒加载可能不兼容旧扩展，并会让高级模糊搜索只按角色名搜索。两项都要重启 SillyTavern 才生效。
 
 ## 主要功能
 
@@ -89,6 +97,10 @@ curl -fsSL https://raw.githubusercontent.com/soso454u/SillyTavern-Cloud-Lounge-A
 聊天与重美化优化                [开]
 界面操作优化                    [开]
 
+启动性能优化
+HTTP Keep-Alive                 [关]
+角色卡懒加载                    [关]
+
 [重新渲染当前聊天]
 
 遇到显示异常？
@@ -98,6 +110,8 @@ curl -fsSL https://raw.githubusercontent.com/soso454u/SillyTavern-Cloud-Lounge-A
 ```
 
 展开“高级信息”可以查看插件版本、页面缓存、服务端插件、缓存资源数和各项优化的运行状态。
+
+“启动性能优化”直接读取并修改 SillyTavern 根目录的 `config.yaml`。两项互不绑定，开启前会显示副作用确认；每次实际修改都会先生成带时间戳的备份，并提示重启后生效。仅安装 UI 扩展时，这两个开关会保持不可用。
 
 ## 支持模式
 
@@ -144,7 +158,7 @@ Initializing plugin from .../cloud-lounge-accelerator/server/index.js
 
 ## 更新与修复
 
-升级 2.0.9 后，弱网返回欢迎页会先显示可恢复的后台读取状态；切换进入角色或群聊会校准到最后一条，并让 SillyTavern 官方重算 Swipe 小三角。移动端还会看护 Safari 残留的透明 modal 遮罩，只清理已经失效的关闭/加载状态；真正正在运行的任务不会被擅自中断。UI 仍会在注册 Worker 前核对服务端插件版本；请同步更新两个目录并重启 SillyTavern。
+升级 2.1.0 后，完整安装用户可在面板中分别控制 Keep-Alive 和角色卡懒加载；修改会自动备份配置并明确提示副作用与重启要求。UI 仍会在注册 Worker 前核对服务端插件版本；请同步更新两个目录并重启 SillyTavern。
 
 遇到样式、Worker 或资源不同步时，打开面板点击“修复插件”。它会：
 
@@ -157,7 +171,7 @@ Initializing plugin from .../cloud-lounge-accelerator/server/index.js
 
 ## 安全与边界
 
-- 服务端插件只提供健康检查和 Service Worker 脚本，不读写用户数据或 SillyTavern 配置。
+- 服务端插件只提供健康检查、Service Worker 脚本和两项明确授权的性能配置接口；只有用户操作开关时才会备份并修改 `enableKeepAlive` 或 `performance.lazyLoadCharacters`，不读写聊天、角色卡或密钥。
 - 页面缓存只改善第二次及以后访问的静态资源往返，不会缩短 AI 生成时间。
 - 第一次访问速度主要依赖服务器、线路、TLS、反向代理和 SillyTavern 本身。
 - 如果根作用域已有其他 Service Worker，本插件拒绝覆盖。
