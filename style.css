@@ -239,7 +239,6 @@
     body.cla-fast-ui .drawer-content.cla-ui-closing {
         -webkit-backdrop-filter: none !important;
         backdrop-filter: none !important;
-        will-change: height;
     }
 
     body.cla-fast-ui .drawer-content.cla-ui-closing,

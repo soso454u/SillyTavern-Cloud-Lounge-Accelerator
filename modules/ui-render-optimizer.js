@@ -1,4 +1,93 @@
 const TRANSITION_CLASSES = ['cla-ui-opening', 'cla-ui-closing'];
+const LEGACY_DRAWER_HAS_MARKERS = [
+    'body:has(.drawer-content.maximized)',
+    'body:has(.drawer-content.open)',
+    'body:has(#character_popup.open)',
+    '#top-settings-holder:has(.drawer-content.openDrawer:not(.fillLeft):not(.fillRight))',
+];
+
+function readCssRules(sheet) {
+    try {
+        return sheet?.cssRules || null;
+    } catch {
+        // Cross-origin and browser-managed stylesheets may deny CSSOM access.
+        return null;
+    }
+}
+
+function findRuleIndex(rules, target) {
+    if (!rules || !target) return -1;
+    for (let index = 0; index < rules.length; index += 1) {
+        if (rules[index] === target) return index;
+    }
+    return -1;
+}
+
+export function isLegacyMobileDrawerHasRule(rule) {
+    const selector = typeof rule?.selectorText === 'string' ? rule.selectorText : '';
+    const zIndex = String(rule?.style?.zIndex || '');
+    return zIndex === '4005' && LEGACY_DRAWER_HAS_MARKERS.every(marker => selector.includes(marker));
+}
+
+export function patchLegacyMobileDrawerHasRules(documentRef = globalThis.document) {
+    const patches = [];
+    for (const sheet of Array.from(documentRef?.styleSheets || [])) {
+        const rules = readCssRules(sheet);
+        if (!rules || typeof sheet.insertRule !== 'function' || typeof sheet.deleteRule !== 'function') continue;
+
+        for (let index = 0; index < rules.length; index += 1) {
+            const rule = rules[index];
+            if (!isLegacyMobileDrawerHasRule(rule)) continue;
+
+            const originalText = rule.cssText;
+            let replacementRule = null;
+            try {
+                const insertedIndex = sheet.insertRule(
+                    `@media (min-width: 1001px) { ${originalText} }`,
+                    index + 1,
+                );
+                replacementRule = readCssRules(sheet)?.[insertedIndex ?? index + 1] || null;
+                sheet.deleteRule(index);
+            } catch {
+                const currentRules = readCssRules(sheet);
+                const replacementIndex = findRuleIndex(currentRules, replacementRule);
+                if (replacementIndex >= 0) {
+                    try {
+                        sheet.deleteRule(replacementIndex);
+                    } catch {
+                        // Leaving the original rule intact is safer than forcing a partial patch.
+                    }
+                }
+                continue;
+            }
+
+            patches.push({
+                sheet,
+                originalText,
+                originalIndex: index,
+                replacementRule,
+            });
+        }
+    }
+    return patches;
+}
+
+export function restoreLegacyMobileDrawerHasRules(patches = []) {
+    for (const patch of [...patches].reverse()) {
+        const rules = readCssRules(patch.sheet);
+        const replacementIndex = findRuleIndex(rules, patch.replacementRule);
+        if (replacementIndex < 0) continue;
+
+        try {
+            patch.sheet.insertRule(patch.originalText, replacementIndex);
+            const updatedRules = readCssRules(patch.sheet);
+            const shiftedReplacementIndex = findRuleIndex(updatedRules, patch.replacementRule);
+            if (shiftedReplacementIndex >= 0) patch.sheet.deleteRule(shiftedReplacementIndex);
+        } catch {
+            // A page reload restores the source stylesheet if another extension rewrites it first.
+        }
+    }
+}
 
 export function detectRenderProfile({
     userAgent = globalThis.navigator?.userAgent || '',
@@ -36,6 +125,7 @@ export class UiRenderOptimizer {
         this.cancelFrame = cancelFrame;
         this.profile = null;
         this.pending = new Map();
+        this.drawerHasPatches = [];
         this.started = false;
         this.onClick = this.onClick.bind(this);
         this.onPageVisible = this.onPageVisible.bind(this);
@@ -60,6 +150,7 @@ export class UiRenderOptimizer {
         this.started = true;
         this.document.body.classList?.add('cla-fast-ui');
         this.document.body.classList?.add(`cla-ui-${this.profile}`);
+        this.drawerHasPatches = patchLegacyMobileDrawerHasRules(this.document);
         this.document.addEventListener('click', this.onClick, true);
         this.document.addEventListener('visibilitychange', this.onPageVisible);
         this.window?.addEventListener?.('pageshow', this.onPageVisible);
@@ -123,6 +214,8 @@ export class UiRenderOptimizer {
         this.document.removeEventListener('visibilitychange', this.onPageVisible);
         this.window?.removeEventListener?.('pageshow', this.onPageVisible);
         for (const content of [...this.pending.keys()]) this.clearTransition(content);
+        restoreLegacyMobileDrawerHasRules(this.drawerHasPatches);
+        this.drawerHasPatches = [];
         this.document.body?.classList?.remove(
             'cla-fast-ui',
             'cla-ui-desktop',

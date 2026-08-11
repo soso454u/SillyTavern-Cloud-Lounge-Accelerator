@@ -1,5 +1,13 @@
 # 更新记录
 
+## 2.1.5 — 移动端抽屉帧稳定
+
+- 针对 SillyTavern #5819：运行时精确识别官方仍未修复的三联顶栏 `:has()` 规则，并通过 CSSOM 原位包入 `min-width: 1001px`；手机不再执行该选择器，桌面行为保持不变。
+- 补丁只匹配已知的 `z-index: 4005` 官方规则；上游套入桌面媒体查询后会自动 no-op，不修改 SillyTavern 磁盘文件，关闭“界面操作优化”时恢复原 CSSOM 规则。
+- 移除抽屉高度动画期间的 `will-change: height`；继续只在动画窗口临时关闭毛玻璃，并保留桌面、普通触屏和 WebKit 的动画时长分档。
+- 确认 `UiRenderOptimizer` 仍由 `InteractionOptimizer` 启动，`MobileInteractionGuard` 仍采用 body 结构观察 + dialog 局部属性观察，没有重新引入全局 attributes observer。
+- 版本统一升级到 2.1.5，Worker 使用新版本缓存名。
+
 ## 2.1.4 — 全平台 UI 流畅模式
 
 - 确认并保留 2.1.3 已接入的 `UiRenderOptimizer` 运行链路；修复的是其“仅触屏启用”的设备策略，而不是重复实例化模块。
