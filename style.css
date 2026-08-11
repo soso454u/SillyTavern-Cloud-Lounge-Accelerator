@@ -235,6 +235,30 @@
 }
 
 @media (pointer: coarse) {
+    body.cla-fast-ui .drawer-content.cla-ui-opening,
+    body.cla-fast-ui .drawer-content.cla-ui-closing {
+        -webkit-backdrop-filter: none !important;
+        backdrop-filter: none !important;
+        will-change: height;
+    }
+
+    body.cla-fast-ui .drawer-content.cla-ui-opening {
+        transition-duration: 150ms !important;
+    }
+
+    body.cla-fast-ui .drawer-content.cla-ui-closing {
+        transition-duration: 110ms !important;
+        pointer-events: none !important;
+    }
+
+    body.cla-fast-ui.cla-ui-webkit .drawer-content.cla-ui-opening {
+        transition-duration: 130ms !important;
+    }
+
+    body.cla-fast-ui.cla-ui-webkit .drawer-content.cla-ui-closing {
+        transition-duration: 90ms !important;
+    }
+
     .prompt-manager-toggle-action {
         display: inline-flex;
         align-items: center;

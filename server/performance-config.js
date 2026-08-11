@@ -1,5 +1,6 @@
-import { copyFile, open, readFile, rename, stat, unlink } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { isAbsolute, join, resolve } from 'node:path';
+import { writeConfigWithBackup } from './config-backup.js';
 
 const BOOLEAN_TEXT = '(?:true|false)';
 
@@ -90,38 +91,24 @@ export function updatePerformanceSetting(content, setting, enabled) {
     return `${lines.join(lineEnding)}${hadFinalNewline ? lineEnding : ''}`;
 }
 
-function backupSuffix(date = new Date()) {
-    return date.toISOString().replace(/[-:]/g, '').replace('.', '');
-}
-
 export async function writePerformanceSetting(configPath, setting, enabled) {
     const current = await readFile(configPath, 'utf8');
     const updated = updatePerformanceSetting(current, setting, enabled);
-    if (updated === current) {
-        return { changed: false, backup: null, settings: readPerformanceSettings(current) };
-    }
-
-    const fileStat = await stat(configPath);
-    const backupPath = `${configPath}.backup-cloud-lounge-performance-${backupSuffix()}-${process.hrtime.bigint()}`;
-    const temporaryPath = join(dirname(configPath), `.${basename(configPath)}.cloud-lounge-${process.pid}-${Date.now()}.tmp`);
-    await copyFile(configPath, backupPath);
-    let temporaryFile;
-    try {
-        temporaryFile = await open(temporaryPath, 'wx', fileStat.mode);
-        await temporaryFile.writeFile(updated, 'utf8');
-        await temporaryFile.sync();
-        await temporaryFile.close();
-        temporaryFile = null;
-        await rename(temporaryPath, configPath);
-    } catch (error) {
-        await temporaryFile?.close().catch(() => {});
-        await unlink(temporaryPath).catch(() => {});
-        throw error;
-    }
-
+    const result = await writeConfigWithBackup({
+        configPath,
+        updatedContent: updated,
+        validate(content) {
+            const value = readPerformanceSettings(content);
+            return setting === 'keepAlive'
+                ? value.keepAlive === enabled
+                : value.lazyCharacters === enabled;
+        },
+    });
     return {
-        changed: true,
-        backup: basename(backupPath),
-        settings: readPerformanceSettings(updated),
+        changed: result.changed,
+        backup: result.backup,
+        migrated: result.migrated,
+        pruned: result.pruned,
+        settings: readPerformanceSettings(result.changed ? updated : current),
     };
 }

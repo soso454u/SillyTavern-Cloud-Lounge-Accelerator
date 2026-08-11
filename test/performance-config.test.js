@@ -56,21 +56,22 @@ test('rejects unknown performance setting names', () => {
     assert.throws(() => updatePerformanceSetting(SAMPLE, 'everything', true), /未知的性能设置/);
 });
 
-test('backs up every real write and skips no-op writes', async () => {
+test('uses the shared bounded backup policy and skips no-op writes', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'cloud-lounge-performance-'));
     const configPath = join(directory, 'config.yaml');
     try {
         await writeFile(configPath, SAMPLE, 'utf8');
         const changed = await writePerformanceSetting(configPath, 'keepAlive', true);
         assert.equal(changed.changed, true);
-        assert.match(changed.backup, /^config\.yaml\.backup-cloud-lounge-performance-/);
+        assert.equal(changed.backup, '.cloud-lounge-accelerator/backups/config.original.yaml');
         assert.equal(await readFile(join(directory, changed.backup), 'utf8'), SAMPLE);
         assert.match(await readFile(configPath, 'utf8'), /^enableKeepAlive: true/m);
 
         const unchanged = await writePerformanceSetting(configPath, 'keepAlive', true);
         assert.equal(unchanged.changed, false);
         assert.equal(unchanged.backup, null);
-        assert.equal((await readdir(directory)).filter(name => name.includes('.backup-')).length, 1);
+        assert.equal((await readdir(directory)).filter(name => name.includes('.backup-')).length, 0);
+        assert.deepEqual(await readdir(join(directory, '.cloud-lounge-accelerator', 'backups')), ['config.original.yaml']);
     } finally {
         await rm(directory, { recursive: true, force: true });
     }

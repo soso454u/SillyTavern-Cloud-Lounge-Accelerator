@@ -46,6 +46,8 @@ export class MobileInteractionGuard {
         onRecovered = null,
         setTimer = globalThis.setTimeout,
         clearTimer = globalThis.clearTimeout,
+        requestFrame = callback => globalThis.requestAnimationFrame?.(callback) ?? setTimer(callback, 16),
+        cancelFrame = handle => globalThis.cancelAnimationFrame?.(handle) ?? clearTimer(handle),
     } = {}) {
         this.document = documentRef;
         this.window = windowRef;
@@ -56,13 +58,17 @@ export class MobileInteractionGuard {
         this.onRecovered = onRecovered;
         this.setTimer = setTimer;
         this.clearTimer = clearTimer;
-        this.observer = null;
+        this.requestFrame = requestFrame;
+        this.cancelFrame = cancelFrame;
+        this.bodyObserver = null;
+        this.dialogObservers = new Map();
         this.dialogTimers = new Map();
         this.knownLoaderDialogs = new WeakSet();
-        this.scanTimer = null;
+        this.scanHandle = null;
         this.started = false;
 
-        this.onMutations = this.onMutations.bind(this);
+        this.onBodyMutations = this.onBodyMutations.bind(this);
+        this.onDialogMutations = this.onDialogMutations.bind(this);
         this.onPointerEnd = this.onPointerEnd.bind(this);
         this.onPageVisible = this.onPageVisible.bind(this);
     }
@@ -81,12 +87,10 @@ export class MobileInteractionGuard {
         this.window?.addEventListener?.('pageshow', this.onPageVisible);
 
         if (typeof this.MutationObserver === 'function') {
-            this.observer = new this.MutationObserver(this.onMutations);
-            this.observer.observe(this.document.body, {
+            this.bodyObserver = new this.MutationObserver(this.onBodyMutations);
+            this.bodyObserver.observe(this.document.body, {
                 subtree: true,
                 childList: true,
-                attributes: true,
-                attributeFilter: ['open', 'closing', 'class'],
             });
         }
 
@@ -94,30 +98,54 @@ export class MobileInteractionGuard {
         return true;
     }
 
-    onMutations(mutations) {
+    onBodyMutations(mutations) {
         const relevant = mutations.some(mutation => {
-            const target = mutation.target;
-            if (target?.matches?.('dialog.popup, #loader, #qr--modalEditor')) return true;
-            if (target?.closest?.('dialog.popup')) return true;
             return [...(mutation.addedNodes || []), ...(mutation.removedNodes || [])].some(node => (
-                node?.matches?.('dialog.popup, #loader, #qr--modalEditor')
-                || node?.querySelector?.('dialog.popup, #loader, #qr--modalEditor')
+                node?.matches?.('dialog.popup')
+                || node?.querySelector?.('dialog.popup')
             ));
         });
         if (relevant) this.scheduleScan();
     }
 
+    onDialogMutations() {
+        this.scheduleScan();
+    }
+
     scheduleScan() {
-        if (!this.started || this.scanTimer !== null) return;
-        this.scanTimer = this.setTimer(() => {
-            this.scanTimer = null;
+        if (!this.started || this.scanHandle !== null) return;
+        this.scanHandle = this.requestFrame(() => {
+            this.scanHandle = null;
             this.scanDialogs();
-        }, 0);
+        });
+    }
+
+    syncDialogObservers(dialogs) {
+        if (typeof this.MutationObserver !== 'function') return;
+        const present = new Set(dialogs);
+        for (const [dialog, observer] of this.dialogObservers) {
+            if (!present.has(dialog) || !dialog.isConnected) {
+                observer.disconnect?.();
+                this.dialogObservers.delete(dialog);
+            }
+        }
+        for (const dialog of dialogs) {
+            if (this.dialogObservers.has(dialog)) continue;
+            const observer = new this.MutationObserver(this.onDialogMutations);
+            observer.observe(dialog, {
+                subtree: true,
+                childList: true,
+                attributes: true,
+                attributeFilter: ['open', 'closing', 'class'],
+            });
+            this.dialogObservers.set(dialog, observer);
+        }
     }
 
     scanDialogs() {
         if (!this.started) return;
         const dialogs = this.document.querySelectorAll?.('dialog.popup') || [];
+        this.syncDialogObservers(dialogs);
         const present = new Set(dialogs);
 
         for (const [dialog] of this.dialogTimers) {
@@ -267,10 +295,12 @@ export class MobileInteractionGuard {
         this.document.removeEventListener('pointercancel', this.onPointerEnd, true);
         this.document.removeEventListener('visibilitychange', this.onPageVisible);
         this.window?.removeEventListener?.('pageshow', this.onPageVisible);
-        this.observer?.disconnect?.();
-        this.observer = null;
-        if (this.scanTimer !== null) this.clearTimer(this.scanTimer);
-        this.scanTimer = null;
+        this.bodyObserver?.disconnect?.();
+        this.bodyObserver = null;
+        for (const observer of this.dialogObservers.values()) observer.disconnect?.();
+        this.dialogObservers.clear();
+        if (this.scanHandle !== null) this.cancelFrame(this.scanHandle);
+        this.scanHandle = null;
         for (const { timer } of this.dialogTimers.values()) this.clearTimer(timer);
         this.dialogTimers.clear();
         this.knownLoaderDialogs = new WeakSet();

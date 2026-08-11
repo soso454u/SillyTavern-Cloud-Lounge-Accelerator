@@ -147,85 +147,10 @@ install_or_update_repository() {
 
 update_config() {
     local config_path="$1"
-    local timestamp backup_base backup_path backup_counter
-    timestamp="$(date '+%Y%m%d-%H%M%S')"
-    backup_base="${config_path}.backup-cloud-lounge-${timestamp}"
-    backup_path="$backup_base"
-    backup_counter=1
-    while [[ -e "$backup_path" ]]; do
-        backup_path="${backup_base}-${backup_counter}"
-        ((backup_counter += 1))
-    done
-    cp -p "$config_path" "$backup_path"
-    info "已备份配置：$backup_path"
-
-    node - "$config_path" "$ENABLE_LAZY_CHARACTERS" "$ENABLE_KEEP_ALIVE" <<'NODE'
-const fs = require('node:fs');
-const configPath = process.argv[2];
-const enableLazyCharacters = process.argv[3] === '1';
-const enableKeepAlive = process.argv[4] === '1';
-let content = fs.readFileSync(configPath, 'utf8');
-
-if (/^enableServerPlugins\s*:/m.test(content)) {
-    content = content.replace(/^enableServerPlugins\s*:.*$/m, 'enableServerPlugins: true');
-} else {
-    content = `${content.trimEnd()}\n\n# Enabled by Cloud Lounge Accelerator installer\nenableServerPlugins: true\n`;
-}
-
-if (enableKeepAlive) {
-    if (/^enableKeepAlive\s*:/m.test(content)) {
-        content = content.replace(/^enableKeepAlive\s*:.*$/m, 'enableKeepAlive: true');
-    } else {
-        content = `${content.trimEnd()}\n\n# Enabled by Cloud Lounge Accelerator installer\nenableKeepAlive: true\n`;
-    }
-}
-
-if (enableLazyCharacters) {
-    const lines = content.split(/\r?\n/);
-    const performanceIndex = lines.findIndex(line => /^performance\s*:/.test(line));
-    if (performanceIndex < 0) {
-        lines.push('', '# Enabled by Cloud Lounge Accelerator installer', 'performance:', '  lazyLoadCharacters: true');
-    } else {
-        let blockEnd = lines.length;
-        for (let index = performanceIndex + 1; index < lines.length; index += 1) {
-            if (!lines[index].trim() || /^\s*#/.test(lines[index])) continue;
-            if (!/^\s/.test(lines[index])) { blockEnd = index; break; }
-        }
-        const relativeIndex = lines.slice(performanceIndex + 1, blockEnd)
-            .findIndex(line => /^\s+lazyLoadCharacters\s*:/.test(line));
-        if (relativeIndex >= 0) {
-            const index = performanceIndex + 1 + relativeIndex;
-            lines[index] = lines[index].replace(/^(\s*)lazyLoadCharacters\s*:.*$/, '$1lazyLoadCharacters: true');
-        } else {
-            lines.splice(performanceIndex + 1, 0, '  lazyLoadCharacters: true');
-        }
-    }
-    content = lines.join(content.includes('\r\n') ? '\r\n' : '\n');
-}
-
-fs.writeFileSync(configPath, content, 'utf8');
-NODE
-
-    if ((ENABLE_LAZY_CHARACTERS == 1)); then
-        if grep -Eq '^[[:space:]]+lazyLoadCharacters[[:space:]]*:' "$config_path"; then
-            if grep -Eq '^[[:space:]]+lazyLoadCharacters[[:space:]]*:[[:space:]]*true([[:space:]]|$)' "$config_path"; then
-                info '已开启 performance.lazyLoadCharacters'
-            else
-                die 'performance.lazyLoadCharacters 更新验证失败，请使用自动备份恢复。'
-            fi
-        else
-            info '未在 config.yaml 中找到 lazyLoadCharacters，已跳过该可选设置。'
-        fi
-    fi
-
-    if ((ENABLE_KEEP_ALIVE == 1)); then
-        grep -Eq '^enableKeepAlive[[:space:]]*:[[:space:]]*true([[:space:]]|$)' "$config_path" \
-            || die 'enableKeepAlive 更新验证失败，请使用自动备份恢复。'
-        info '已开启 HTTP/HTTPS Keep-Alive；若出现 ECONNRESET 或连接中断，请在设置面板关闭'
-    fi
-
-    grep -Eq '^enableServerPlugins[[:space:]]*:[[:space:]]*true([[:space:]]|$)' "$config_path" \
-        || die 'config.yaml 更新验证失败，请使用自动备份恢复。'
+    local arguments=(--config "$config_path")
+    ((ENABLE_KEEP_ALIVE == 1)) && arguments+=(--keep-alive)
+    ((ENABLE_LAZY_CHARACTERS == 1)) && arguments+=(--lazy-characters)
+    node "$SERVER_PLUGIN_DIRECTORY/scripts/configure.mjs" "${arguments[@]}"
 }
 
 require_command git

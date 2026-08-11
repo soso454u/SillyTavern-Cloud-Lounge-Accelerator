@@ -107,3 +107,66 @@ test('does not close an orphaned loader while an official blocking task is activ
     assert.equal(await guard.recoverDialog(dialog, 'orphan-loader'), false);
     assert.equal(dialog.closes, 0);
 });
+
+test('observes body structure only and scopes attribute tracking to popup dialogs', () => {
+    const observations = [];
+    class FakeObserver {
+        constructor(callback) {
+            this.callback = callback;
+        }
+        observe(target, options) {
+            observations.push({ target, options });
+        }
+        disconnect() {}
+    }
+    const dialog = { isConnected: true, hasAttribute: () => false, querySelector: () => null };
+    const body = {};
+    const documentRef = {
+        body,
+        addEventListener() {},
+        removeEventListener() {},
+        querySelectorAll: () => [dialog],
+    };
+    const guard = new MobileInteractionGuard({
+        documentRef,
+        windowRef: { addEventListener() {}, removeEventListener() {} },
+        navigatorRef: { maxTouchPoints: 5 },
+        matchMedia: () => ({ matches: true }),
+        mutationObserver: FakeObserver,
+    });
+
+    assert.equal(guard.start(), true);
+    assert.deepEqual(observations[0], {
+        target: body,
+        options: { subtree: true, childList: true },
+    });
+    assert.equal(observations[1].target, dialog);
+    assert.deepEqual(observations[1].options, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ['open', 'closing', 'class'],
+    });
+    guard.stop();
+});
+
+test('coalesces repeated recovery scans into one animation frame', () => {
+    let queued = null;
+    let scans = 0;
+    const guard = new MobileInteractionGuard({
+        requestFrame(callback) {
+            queued = callback;
+            return 7;
+        },
+    });
+    guard.started = true;
+    guard.scanDialogs = () => { scans += 1; };
+
+    guard.scheduleScan();
+    guard.scheduleScan();
+    assert.equal(typeof queued, 'function');
+    assert.equal(scans, 0);
+    queued();
+    assert.equal(scans, 1);
+    assert.equal(guard.scanHandle, null);
+});

@@ -1,5 +1,16 @@
 # 更新记录
 
+## 2.1.3 — 有界配置备份与移动端顶栏快收
+
+- Linux/macOS 与 Windows 安装器、服务端性能开关统一使用同一套配置安全写入器：内容无变化时不备份、不重写。
+- 第一次实际修改前永久保存 `.cloud-lounge-accelerator/backups/config.original.yaml`，之后只滚动保留最近 3 份内容不同的修改前快照。
+- 自动迁移根目录中旧 `config.yaml.backup-cloud-lounge-*`：最早一份作为基线，最近不同内容作为快照；复制成功后才删除旧式文件，其他来源的备份不处理。
+- 配置写入后立即验证；写入或验证失败会自动恢复本次修改前内容。
+- 新增触屏顶栏渲染优化：iOS/iPadOS 关闭动画缩短为 90ms，其他触屏为 110ms，只在动画期间临时停用抽屉模糊和添加 `will-change`。
+- MobileInteractionGuard 不再观察整个页面的属性变化；全局只筛选弹窗结构变化，具体弹窗单独观察，并以 `requestAnimationFrame` 合并同帧检查。
+- 桌面端、SillyTavern 原生按钮和抽屉状态管理保持不变；未默认启用大型角色列表的实验性 `content-visibility`。
+- 版本统一升级到 2.1.3，Worker 使用新版本缓存名。
+
 ## 2.1.2 — iOS 主屏幕 Basic Auth 兼容模式
 
 - 服务端健康接口只读返回 `basicAuthMode` 和基于 SillyTavern 核心程序文件生成的版本签名，不返回 Basic Auth 用户名、密码或其他凭据。

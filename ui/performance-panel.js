@@ -38,7 +38,7 @@ function createOption(option, onChange) {
             const result = await onChange(option.key, enabled);
             globalThis.toastr?.success?.(
                 result.changed
-                    ? `已写入并备份 config.yaml（${result.backup}），重启 SillyTavern 后生效`
+                    ? `config.yaml 已安全保存（备份：${result.backup}），重启 SillyTavern 后生效`
                     : '配置已经是这个状态，无需修改',
                 '云酒馆加速器',
             );

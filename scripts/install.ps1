@@ -78,60 +78,18 @@ function Install-OrUpdateRepository([string]$Destination, [string]$Label) {
 }
 
 function Set-Configuration([string]$ConfigPath) {
-    $Timestamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
-    $BackupPath = "$ConfigPath.backup-cloud-lounge-$Timestamp"
-    Copy-Item -LiteralPath $ConfigPath -Destination $BackupPath
-    Write-Step "已备份配置：$BackupPath"
-
-    $Content = [System.IO.File]::ReadAllText($ConfigPath)
-    if ($Content -match '(?m)^enableServerPlugins\s*:') {
-        $Content = [regex]::Replace($Content, '(?m)^enableServerPlugins\s*:.*$', 'enableServerPlugins: true')
-    }
-    else {
-        $Content = $Content.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + '# Enabled by Cloud Lounge Accelerator installer' + [Environment]::NewLine + 'enableServerPlugins: true' + [Environment]::NewLine
-    }
-
-    if ($LazyCharacters) {
-        if ($Content -match '(?m)^\s+lazyLoadCharacters\s*:') {
-            $Content = [regex]::Replace($Content, '(?m)^(\s*)lazyLoadCharacters\s*:.*$', '${1}lazyLoadCharacters: true')
-            Write-Step '已开启 performance.lazyLoadCharacters'
-        }
-        else {
-            if ($Content -match '(?m)^performance\s*:\s*$') {
-                $Content = [regex]::Replace($Content, '(?m)^(performance\s*:\s*)$', '$1' + [Environment]::NewLine + '  lazyLoadCharacters: true', 1)
-            }
-            else {
-                $Content = $Content.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + '# Enabled by Cloud Lounge Accelerator installer' + [Environment]::NewLine + 'performance:' + [Environment]::NewLine + '  lazyLoadCharacters: true' + [Environment]::NewLine
-            }
-            Write-Step '已添加并开启 performance.lazyLoadCharacters'
-        }
-    }
-
-    if ($KeepAlive) {
-        if ($Content -match '(?m)^enableKeepAlive\s*:') {
-            $Content = [regex]::Replace($Content, '(?m)^enableKeepAlive\s*:.*$', 'enableKeepAlive: true')
-        }
-        else {
-            $Content = $Content.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + '# Enabled by Cloud Lounge Accelerator installer' + [Environment]::NewLine + 'enableKeepAlive: true' + [Environment]::NewLine
-        }
-        Write-Step '已开启 HTTP/HTTPS Keep-Alive；若出现 ECONNRESET 或连接中断，请在设置面板关闭'
-    }
-
-    $Utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($ConfigPath, $Content, $Utf8WithoutBom)
-    if ([System.IO.File]::ReadAllText($ConfigPath) -notmatch '(?m)^enableServerPlugins\s*:\s*true(?:\s|$)') {
-        throw 'config.yaml 更新验证失败，请使用自动备份恢复。'
-    }
-    if ($KeepAlive -and [System.IO.File]::ReadAllText($ConfigPath) -notmatch '(?m)^enableKeepAlive\s*:\s*true(?:\s|$)') {
-        throw 'enableKeepAlive 更新验证失败，请使用自动备份恢复。'
-    }
-    if ($LazyCharacters -and [System.IO.File]::ReadAllText($ConfigPath) -notmatch '(?m)^\s+lazyLoadCharacters\s*:\s*true(?:\s|$)') {
-        throw 'performance.lazyLoadCharacters 更新验证失败，请使用自动备份恢复。'
-    }
+    $Arguments = @((Join-Path $ServerPluginDirectory 'scripts\configure.mjs'), '--config', $ConfigPath)
+    if ($KeepAlive) { $Arguments += '--keep-alive' }
+    if ($LazyCharacters) { $Arguments += '--lazy-characters' }
+    & node @Arguments
+    if ($LASTEXITCODE -ne 0) { throw 'config.yaml 安全更新失败' }
 }
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     throw '缺少 Git。请先安装 Git for Windows，然后重新打开 PowerShell。'
+}
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    throw '缺少 Node.js。请先完成 SillyTavern 的 Node.js 安装。'
 }
 
 $Root = Resolve-SillyTavernRoot
