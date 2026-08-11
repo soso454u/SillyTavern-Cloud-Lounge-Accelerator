@@ -16,23 +16,35 @@ https://github.com/soso454u/SillyTavern-Cloud-Lounge-Accelerator
 
 一键安装会同时安装界面扩展和服务端加速。安装完成后，请手动重启 SillyTavern。
 
-### Linux、macOS、1Panel Xterminal
-
-先进入 SillyTavern 根目录：
+### VPS / 1Panel XTerminal
 
 ```bash
 cd /root/SillyTavern
-
 curl -fsSL https://raw.githubusercontent.com/soso454u/SillyTavern-Cloud-Lounge-Accelerator/main/scripts/install.sh | bash
 ```
 
-如果你的 SillyTavern 不在 `/root/SillyTavern`，请把第一行改成实际路径。
+### Android / Termux
+
+```bash
+pkg install curl -y
+cd ~/SillyTavern
+curl -fsSL https://raw.githubusercontent.com/soso454u/SillyTavern-Cloud-Lounge-Accelerator/main/scripts/install.sh | bash
+```
+
+### Mac / 终端
+
+```bash
+cd ~/SillyTavern
+curl -fsSL https://raw.githubusercontent.com/soso454u/SillyTavern-Cloud-Lounge-Accelerator/main/scripts/install.sh | bash
+```
 
 ### Windows PowerShell
 
 ```powershell
-& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/soso454u/SillyTavern-Cloud-Lounge-Accelerator/main/scripts/install.ps1'))) -SillyTavernRoot 'C:\SillyTavern'
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/soso454u/SillyTavern-Cloud-Lounge-Accelerator/main/scripts/install.ps1'))) -SillyTavernRoot 'D:\SillyTavern\SillyTavern'
 ```
+
+这些命令同时适用于首次安装和以后更新。路径与教程不同时，只修改 `cd` 后的路径或 Windows 的 `-SillyTavernRoot`；安装完成后重启 SillyTavern。
 
 更多安装、更新、卸载、1Panel 和 HTTPS 步骤见 [完整使用教程](docs/完整使用教程.md)。
 
