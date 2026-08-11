@@ -234,7 +234,7 @@
     }
 }
 
-@media (pointer: coarse) {
+@media (prefers-reduced-motion: no-preference) {
     body.cla-fast-ui .drawer-content.cla-ui-opening,
     body.cla-fast-ui .drawer-content.cla-ui-closing {
         -webkit-backdrop-filter: none !important;
@@ -242,13 +242,25 @@
         will-change: height;
     }
 
-    body.cla-fast-ui .drawer-content.cla-ui-opening {
+    body.cla-fast-ui .drawer-content.cla-ui-closing,
+    body.cla-fast-ui dialog.popup[closing] {
+        pointer-events: none !important;
+    }
+
+    body.cla-fast-ui.cla-ui-desktop .drawer-content.cla-ui-opening {
+        transition-duration: 160ms !important;
+    }
+
+    body.cla-fast-ui.cla-ui-desktop .drawer-content.cla-ui-closing {
+        transition-duration: 130ms !important;
+    }
+
+    body.cla-fast-ui.cla-ui-balanced .drawer-content.cla-ui-opening {
         transition-duration: 150ms !important;
     }
 
-    body.cla-fast-ui .drawer-content.cla-ui-closing {
+    body.cla-fast-ui.cla-ui-balanced .drawer-content.cla-ui-closing {
         transition-duration: 110ms !important;
-        pointer-events: none !important;
     }
 
     body.cla-fast-ui.cla-ui-webkit .drawer-content.cla-ui-opening {
@@ -258,6 +270,56 @@
     body.cla-fast-ui.cla-ui-webkit .drawer-content.cla-ui-closing {
         transition-duration: 90ms !important;
     }
+
+    body.cla-fast-ui dialog.popup[opening],
+    body.cla-fast-ui dialog.popup[closing] {
+        will-change: transform, opacity;
+    }
+
+    body.cla-fast-ui dialog.popup[opening]::backdrop,
+    body.cla-fast-ui dialog.popup[closing]::backdrop {
+        -webkit-backdrop-filter: none !important;
+        backdrop-filter: none !important;
+    }
+
+    body.cla-fast-ui.cla-ui-desktop dialog.popup[opening] {
+        --popup-animation-speed: 160ms;
+    }
+
+    body.cla-fast-ui.cla-ui-desktop dialog.popup[closing] {
+        --popup-animation-speed: 130ms;
+    }
+
+    body.cla-fast-ui.cla-ui-balanced dialog.popup[opening] {
+        --popup-animation-speed: 150ms;
+    }
+
+    body.cla-fast-ui.cla-ui-balanced dialog.popup[closing] {
+        --popup-animation-speed: 110ms;
+    }
+
+    body.cla-fast-ui.cla-ui-webkit dialog.popup[opening] {
+        --popup-animation-speed: 130ms;
+    }
+
+    body.cla-fast-ui.cla-ui-webkit dialog.popup[closing] {
+        --popup-animation-speed: 90ms;
+    }
+}
+
+body.cla-fast-ui dialog.popup:has(.ui-sortable-helper, .sortable-drag, .sortable-chosen)::backdrop {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+}
+
+body.cla-fast-ui :is(.drawer-content, dialog.popup, .inline-drawer-content, #WorldInfo, #floatingPrompt):has(.ui-sortable-helper, .sortable-drag, .sortable-chosen) {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    box-shadow: none !important;
+    transition-property: none !important;
+}
+
+@media (pointer: coarse) {
 
     .prompt-manager-toggle-action {
         display: inline-flex;

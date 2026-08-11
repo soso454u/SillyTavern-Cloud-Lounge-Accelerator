@@ -1,5 +1,16 @@
 # 更新记录
 
+## 2.1.4 — 全平台 UI 流畅模式
+
+- 确认并保留 2.1.3 已接入的 `UiRenderOptimizer` 运行链路；修复的是其“仅触屏启用”的设备策略，而不是重复实例化模块。
+- 新增 desktop profile：桌面顶栏抽屉打开/关闭调整为 160/130ms；普通触屏维持 150/110ms，iOS/iPadOS 维持 130/90ms。
+- Popup 直接使用 SillyTavern 官方 `[opening]` / `[closing]` 属性分档缩短动画；动画期间才临时停用 backdrop blur，关闭阶段阻止重复交互。
+- 拖动期间通过官方 `.ui-sortable-helper`、`.sortable-drag`、`.sortable-chosen` 状态只给当前面板降重，helper 消失后 CSS 自动恢复。
+- 不增加全局 MutationObserver，不监听或阻止桌面 `pointerdown/click`，不调用 popup `close()`，不改写 drawer 或 sortable。
+- 不启用全局 `translateZ(0)`、永久 `will-change`、全局关闭毛玻璃或实验性大型列表 `content-visibility`。
+- 尊重系统“减少动态效果”：仅在 `prefers-reduced-motion: no-preference` 时调整抽屉与 Popup 动画。
+- 高级状态可显示“桌面流畅”“触屏流畅”或“WebKit 流畅”；版本统一升级到 2.1.4。
+
 ## 2.1.3 — 有界配置备份与移动端顶栏快收
 
 - Linux/macOS 与 Windows 安装器、服务端性能开关统一使用同一套配置安全写入器：内容无变化时不备份、不重写。

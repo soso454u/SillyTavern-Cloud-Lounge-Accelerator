@@ -29,7 +29,9 @@ export class InteractionOptimizer {
         }
         const status = [
             promptToggleActive ? '生成可切换' : null,
-            renderProfile === 'webkit' ? 'WebKit 流畅' : (renderProfile ? '移动端流畅' : null),
+            renderProfile === 'webkit'
+                ? 'WebKit 流畅'
+                : (renderProfile === 'balanced' ? '触屏流畅' : (renderProfile === 'desktop' ? '桌面流畅' : null)),
             mobileGuardActive ? '触控自愈' : null,
         ].filter(Boolean).join(' · ');
         this.onStatus?.('interaction', status || '原生');

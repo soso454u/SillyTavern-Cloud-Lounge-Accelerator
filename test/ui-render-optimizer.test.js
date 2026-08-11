@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
-import { detectMobileRenderProfile, UiRenderOptimizer } from '../modules/ui-render-optimizer.js';
+import { detectRenderProfile, UiRenderOptimizer } from '../modules/ui-render-optimizer.js';
 
 function classList(initial = []) {
     const values = new Set(initial);
@@ -14,10 +15,10 @@ function classList(initial = []) {
 }
 
 test('selects WebKit, balanced, and desktop render profiles automatically', () => {
-    assert.equal(detectMobileRenderProfile({ userAgent: 'iPhone', maxTouchPoints: 5 }), 'webkit');
-    assert.equal(detectMobileRenderProfile({ platform: 'MacIntel', maxTouchPoints: 5 }), 'webkit');
-    assert.equal(detectMobileRenderProfile({ userAgent: 'Android', maxTouchPoints: 5 }), 'balanced');
-    assert.equal(detectMobileRenderProfile({ userAgent: 'Macintosh', maxTouchPoints: 0 }), null);
+    assert.equal(detectRenderProfile({ userAgent: 'iPhone', maxTouchPoints: 5 }), 'webkit');
+    assert.equal(detectRenderProfile({ platform: 'MacIntel', maxTouchPoints: 5 }), 'webkit');
+    assert.equal(detectRenderProfile({ userAgent: 'Android', maxTouchPoints: 5 }), 'balanced');
+    assert.equal(detectRenderProfile({ userAgent: 'Macintosh', maxTouchPoints: 0 }), 'desktop');
 });
 
 test('marks only the active top drawer and cleans temporary render hints', () => {
@@ -61,4 +62,15 @@ test('marks only the active top drawer and cleans temporary render hints', () =>
     assert.equal(contentClasses.contains('cla-ui-closing'), false);
     optimizer.stop();
     assert.equal(bodyClasses.contains('cla-fast-ui'), false);
+    assert.equal(bodyClasses.contains('cla-ui-webkit'), false);
+});
+
+test('styles desktop, popup lifecycle, and native sortable helpers without global layers', async () => {
+    const styles = await readFile(new URL('../style.css', import.meta.url), 'utf8');
+    assert.match(styles, /@media \(prefers-reduced-motion: no-preference\)/);
+    assert.match(styles, /cla-ui-desktop[\s\S]*transition-duration: 160ms/);
+    assert.match(styles, /dialog\.popup\[closing\]/);
+    assert.match(styles, /--popup-animation-speed: 130ms/);
+    assert.match(styles, /:has\(\.ui-sortable-helper, \.sortable-drag, \.sortable-chosen\)/);
+    assert.doesNotMatch(styles, /\.drawer-content\s*\{[^}]*will-change/s);
 });

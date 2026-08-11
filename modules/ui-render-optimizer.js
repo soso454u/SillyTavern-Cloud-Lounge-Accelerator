@@ -1,13 +1,13 @@
 const TRANSITION_CLASSES = ['cla-ui-opening', 'cla-ui-closing'];
 
-export function detectMobileRenderProfile({
+export function detectRenderProfile({
     userAgent = globalThis.navigator?.userAgent || '',
     platform = globalThis.navigator?.platform || '',
     maxTouchPoints = globalThis.navigator?.maxTouchPoints || 0,
     coarsePointer = false,
 } = {}) {
     const touch = Number(maxTouchPoints) > 0 || coarsePointer === true;
-    if (!touch) return null;
+    if (!touch) return 'desktop';
     const webkitMobile = !/Android/i.test(userAgent) && (
         /iPad|iPhone|iPod/i.test(userAgent)
         || (platform === 'MacIntel' && Number(maxTouchPoints) > 1)
@@ -49,7 +49,7 @@ export class UiRenderOptimizer {
         } catch {
             coarsePointer = false;
         }
-        this.profile = detectMobileRenderProfile({
+        this.profile = detectRenderProfile({
             userAgent: this.navigator?.userAgent,
             platform: this.navigator?.platform,
             maxTouchPoints: this.navigator?.maxTouchPoints,
@@ -59,7 +59,7 @@ export class UiRenderOptimizer {
 
         this.started = true;
         this.document.body.classList?.add('cla-fast-ui');
-        if (this.profile === 'webkit') this.document.body.classList?.add('cla-ui-webkit');
+        this.document.body.classList?.add(`cla-ui-${this.profile}`);
         this.document.addEventListener('click', this.onClick, true);
         this.document.addEventListener('visibilitychange', this.onPageVisible);
         this.window?.addEventListener?.('pageshow', this.onPageVisible);
@@ -89,9 +89,12 @@ export class UiRenderOptimizer {
         content.classList.remove(...TRANSITION_CLASSES);
         content.classList.add(`cla-ui-${phase}`);
 
-        const duration = phase === 'closing'
-            ? (this.profile === 'webkit' ? 90 : 110)
-            : (this.profile === 'webkit' ? 130 : 150);
+        const durations = {
+            desktop: { opening: 160, closing: 130 },
+            balanced: { opening: 150, closing: 110 },
+            webkit: { opening: 130, closing: 90 },
+        };
+        const duration = durations[this.profile]?.[phase] ?? durations.desktop[phase];
         const state = { frame: null, timer: null };
         state.frame = this.requestFrame(() => {
             state.frame = null;
@@ -120,7 +123,12 @@ export class UiRenderOptimizer {
         this.document.removeEventListener('visibilitychange', this.onPageVisible);
         this.window?.removeEventListener?.('pageshow', this.onPageVisible);
         for (const content of [...this.pending.keys()]) this.clearTransition(content);
-        this.document.body?.classList?.remove('cla-fast-ui', 'cla-ui-webkit');
+        this.document.body?.classList?.remove(
+            'cla-fast-ui',
+            'cla-ui-desktop',
+            'cla-ui-balanced',
+            'cla-ui-webkit',
+        );
         this.profile = null;
     }
 }
