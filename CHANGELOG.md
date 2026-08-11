@@ -1,5 +1,15 @@
 # 更新记录
 
+## 2.1.2 — iOS 主屏幕 Basic Auth 兼容模式
+
+- 服务端健康接口只读返回 `basicAuthMode` 和基于 SillyTavern 核心程序文件生成的版本签名，不返回 Basic Auth 用户名、密码或其他凭据。
+- iOS/iPadOS 主屏幕独立 Web App 与 Basic Auth 同时使用时，自动注销旧根作用域 Worker、清理本插件缓存并停止重新注册。
+- iOS 兼容模式只停用 Service Worker 静态缓存；页面加载总开关、启动请求合并、聊天、正则和界面交互优化继续工作。
+- 删除登录完成后的额外 `HEAD /` 版本探测，改用健康接口签名在 SillyTavern 核心文件更新后清理旧缓存。
+- 高级信息新增“运行环境”，兼容模式显示为正常降级状态而不是插件故障。
+- 新增 iPhone、iPadOS 桌面模式、非独立 Safari、macOS 和 Android 环境识别测试，以及 Basic Auth/签名服务端测试。
+- 版本统一升级到 2.1.2，Worker 使用新版本缓存名。
+
 ## 2.1.1 — 后台欢迎页恢复提示瘦身
 
 - README 与完整教程按 VPS/1Panel、Android/Termux、Mac/终端和 Windows/PowerShell 分别提供可直接复制的一键安装/更新命令，并使用各部署教程的实际默认路径。

@@ -1,5 +1,6 @@
 import { ACCELERATOR_VERSION, createServiceWorkerSource } from './worker-template.js';
 import { readPerformanceSettings, resolveConfigPath, writePerformanceSetting } from './performance-config.js';
+import { readRuntimeInfo } from './runtime-info.js';
 import { constants } from 'node:fs';
 import { access, readFile } from 'node:fs/promises';
 
@@ -36,13 +37,17 @@ export const info = Object.freeze({
  * @param {import('express').Router} router
  */
 export async function init(router) {
-    router.get('/health', (_request, response) => {
+    router.get('/health', async (request, response) => {
         noStore(response);
+        const runtime = await readRuntimeInfo({ configPath, version: ACCELERATOR_VERSION });
+        const authorization = request.headers?.authorization || request.get?.('authorization') || '';
         response.json({
             ok: true,
             id: info.id,
             version: ACCELERATOR_VERSION,
             workerPath: `/api/plugins/${info.id}/service-worker.js`,
+            basicAuthMode: runtime.basicAuthMode === true || /^Basic\s/i.test(authorization),
+            appSignature: runtime.appSignature,
         });
     });
 

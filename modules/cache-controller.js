@@ -18,9 +18,32 @@ export function serverVersionMatchesClient(version) {
     return typeof version === 'string' && version === CLIENT_VERSION;
 }
 
+export function isIOSStandaloneEnvironment({
+    userAgent = '',
+    platform = '',
+    maxTouchPoints = 0,
+    standalone = false,
+    displayModeStandalone = false,
+} = {}) {
+    const isIOS = /iPad|iPhone|iPod/i.test(userAgent)
+        || (platform === 'MacIntel' && Number(maxTouchPoints) > 1);
+    return isIOS && (standalone === true || displayModeStandalone === true);
+}
+
+export function isIOSStandalone() {
+    return isIOSStandaloneEnvironment({
+        userAgent: navigator.userAgent,
+        platform: navigator.platform,
+        maxTouchPoints: navigator.maxTouchPoints,
+        standalone: navigator.standalone,
+        displayModeStandalone: window.matchMedia?.('(display-mode: standalone)')?.matches,
+    });
+}
+
 export class CacheController {
-    constructor({ onStatus = null } = {}) {
+    constructor({ onStatus = null, detectIOSStandalone = isIOSStandalone } = {}) {
         this.onStatus = onStatus;
+        this.detectIOSStandalone = detectIOSStandalone;
         this.registration = undefined;
         this.health = null;
         this.state = 'unknown';
@@ -115,12 +138,10 @@ export class CacheController {
         return [...urls];
     }
 
-    async readNavigationSignature() {
-        const options = { method: 'HEAD', credentials: 'same-origin', cache: 'no-store', redirect: 'follow' };
-        const response = await fetch(new URL('/', location.href), options);
-        if (response.status !== 200 || response.headers.has('www-authenticate') || response.headers.has('proxy-authenticate')) return '';
-        const validator = response.headers.get('etag') || response.headers.get('last-modified') || '';
-        return validator ? `${CLIENT_VERSION}:${validator}` : CLIENT_VERSION;
+    readVersionSignature() {
+        return typeof this.health?.appSignature === 'string' && this.health.appSignature
+            ? this.health.appSignature
+            : CLIENT_VERSION;
     }
 
     async startAfterLogin({ force = false } = {}) {
@@ -134,15 +155,21 @@ export class CacheController {
             this.onStatus?.('cache', '已停用（服务端需更新）');
             return null;
         }
+        if (this.detectIOSStandalone() && this.health?.basicAuthMode === true) {
+            await this.retireIncompatibleWorker();
+            this.state = 'ios-basic-auth';
+            this.onStatus?.('cache', '已停用（iOS 主屏幕 + Basic Auth）');
+            return null;
+        }
         const registration = await this.register();
         if (generation !== this.generation) {
             if (registration && this.isOurs(registration)) await registration.unregister();
             return null;
         }
-        const signature = await this.readNavigationSignature();
+        const signature = this.readVersionSignature();
         if (generation !== this.generation) return null;
-        if (signature) await this.message('VERSION_SIGNATURE', { signature });
-        this.scheduleWarmup(signature || CLIENT_VERSION, force);
+        await this.message('VERSION_SIGNATURE', { signature });
+        this.scheduleWarmup(signature, force);
         this.onStatus?.('cache', '正常');
         return this.registration;
     }
@@ -214,6 +241,17 @@ export class CacheController {
     }
 
     getStatus() {
+        if (this.state === 'ios-basic-auth') {
+            return {
+                state: this.state,
+                cache: '已停用',
+                server: '正常',
+                entries: null,
+                compatibility: 'iOS 主屏幕 + Basic Auth',
+                warning: false,
+                overall: 'iOS 兼容模式',
+            };
+        }
         if (this.state === 'version-mismatch') {
             return {
                 state: this.state,

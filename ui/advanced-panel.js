@@ -22,6 +22,7 @@ export function createAdvancedPanel() {
     body.append(
         row('插件版本', 'version'),
         row('页面缓存', 'cache'),
+        row('运行环境', 'compatibility'),
         row('服务端插件', 'server'),
         row('已缓存资源', 'entries'),
         row('聊天优化', 'chat'),
@@ -35,6 +36,7 @@ export function createAdvancedPanel() {
             const values = {
                 version: CLIENT_VERSION,
                 cache: status.cache || '检测中…',
+                compatibility: status.compatibility || '正常',
                 server: status.server || '检测中…',
                 entries: Number.isFinite(status.entries) ? String(status.entries) : '—',
                 chat: status.chat || '自动',

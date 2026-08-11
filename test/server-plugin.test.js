@@ -37,9 +37,11 @@ test('registers health and root-scoped worker endpoints', async () => {
     assert.deepEqual([...routes.keys()], ['/health', '/performance', 'POST /performance', '/service-worker.js']);
 
     const health = createResponse();
-    routes.get('/health')({}, health);
+    await routes.get('/health')({}, health);
     assert.equal(health.body.ok, true);
     assert.equal(health.body.id, info.id);
+    assert.equal(typeof health.body.basicAuthMode, 'boolean');
+    assert.equal(typeof health.body.appSignature, 'string');
     assert.equal(health.headers['Cache-Control'], 'no-store');
 
     const worker = createResponse();
