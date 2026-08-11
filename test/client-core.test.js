@@ -25,7 +25,7 @@ test('keeps every published version source in sync', async () => {
         import('../manifest.json', { with: { type: 'json' } }),
         import('../package.json', { with: { type: 'json' } }),
     ]);
-    assert.equal(CLIENT_VERSION, '2.0.7');
+    assert.equal(CLIENT_VERSION, '2.0.8');
     assert.equal(manifest.version, CLIENT_VERSION);
     assert.equal(packageJson.version, CLIENT_VERSION);
     assert.equal(ACCELERATOR_VERSION, CLIENT_VERSION);
@@ -96,6 +96,10 @@ test('strictly scopes startup request observation and reuse', () => {
     assert.equal(classifyStartupRequest({ pathname: '/api/characters/all', method: 'POST' }), 'reuse');
     assert.equal(classifyStartupRequest({ pathname: '/scripts/extensions/regex/editor.html', method: 'GET' }), 'reuse');
     assert.equal(classifyStartupRequest({ pathname: '/api/chats/get', method: 'POST' }), 'observe-chat');
+    assert.equal(classifyStartupRequest({ pathname: '/api/chats/recent', method: 'POST' }), 'stale-recent');
+    assert.equal(classifyStartupRequest({ pathname: '/api/chats/save', method: 'POST' }), 'invalidate');
+    assert.equal(classifyStartupRequest({ pathname: '/api/chats/group/delete', method: 'POST' }), 'invalidate');
+    assert.equal(classifyStartupRequest({ pathname: '/api/groups/edit', method: 'POST' }), 'invalidate');
     assert.equal(classifyStartupRequest({ pathname: '/api/characters/delete', method: 'POST' }), 'invalidate');
     assert.equal(classifyStartupRequest({ pathname: '/api/settings/save', method: 'POST' }), 'native');
 });

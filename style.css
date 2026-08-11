@@ -135,6 +135,35 @@
     pointer-events: none;
 }
 
+.cla-welcome-placeholder {
+    display: grid;
+    place-items: center;
+    align-content: center;
+    gap: 0.7rem;
+    min-height: min(46vh, 28rem);
+    padding: 2rem;
+    text-align: center;
+    opacity: 0.78;
+}
+
+.cla-welcome-placeholder-spinner {
+    width: 1.7rem;
+    height: 1.7rem;
+    border: 0.18rem solid color-mix(in srgb, var(--SmartThemeBodyColor) 22%, transparent);
+    border-top-color: var(--SmartThemeBodyColor);
+    border-radius: 50%;
+    animation: cla-welcome-spin 0.8s linear infinite;
+}
+
+.cla-welcome-placeholder .cla-welcome-retry {
+    margin-top: 0.35rem;
+    pointer-events: auto;
+}
+
+@keyframes cla-welcome-spin {
+    to { transform: rotate(1turn); }
+}
+
 #chat pre.cla-code-collapsed {
     position: relative;
     max-height: 8rem;

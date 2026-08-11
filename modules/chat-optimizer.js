@@ -23,14 +23,27 @@ export function hasRenderedChatTail(chatElement, expectedLastId) {
 }
 
 export class ChatOptimizer {
-    constructor({ eventSource, eventTypes, chat = [], isGenerating = () => false, scheduler, saveSettings, scrollToBottom = null, onStatus = null }) {
+    constructor({
+        eventSource,
+        eventTypes,
+        chat = [],
+        isGenerating = () => false,
+        getCurrentChatId = () => true,
+        scheduler,
+        saveSettings,
+        scrollToBottom = null,
+        refreshSwipeButtons = null,
+        onStatus = null,
+    }) {
         this.eventSource = eventSource;
         this.eventTypes = eventTypes;
         this.chat = chat;
         this.isGenerating = isGenerating;
+        this.getCurrentChatId = getCurrentChatId;
         this.scheduler = scheduler;
         this.saveSettings = saveSettings;
         this.scrollToBottom = scrollToBottom;
+        this.refreshSwipeButtons = refreshSwipeButtons;
         this.onStatus = onStatus;
         this.started = false;
         this.powerUser = null;
@@ -185,7 +198,7 @@ export class ChatOptimizer {
     settleInitialBottom() {
         this.cancelInitialBottom();
         const chatElement = this.chatElement;
-        if (!chatElement || !this.started || typeof this.scrollToBottom !== 'function') return;
+        if (!chatElement || !this.started || this.getCurrentChatId?.() == null) return;
 
         const expectedLastId = this.chat.length - 1;
         const cancelByUser = () => this.cancelInitialBottom();
@@ -205,7 +218,9 @@ export class ChatOptimizer {
         const snapToBottom = () => {
             if (!this.started || this.chatElement !== chatElement) return;
             if (!hasRenderedChatTail(chatElement, expectedLastId)) return;
-            this.scrollToBottom({ waitForFrame: true });
+            this.refreshSwipeButtons?.(true, false);
+            this.scrollToBottom?.({ waitForFrame: true });
+            chatElement.scrollTo?.(0, chatElement.scrollHeight);
         };
 
         for (const delay of [0, 80, 220, 500, 900]) schedule(snapToBottom, delay);

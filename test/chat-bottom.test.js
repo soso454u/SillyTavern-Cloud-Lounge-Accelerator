@@ -11,6 +11,8 @@ function createChatElement(lastId) {
         },
     };
     return {
+        scrollHeight: 2400,
+        scrollCalls: [],
         querySelectorAll() {
             return lastId === null ? [] : [lastMessage];
         },
@@ -22,6 +24,9 @@ function createChatElement(lastId) {
         },
         dispatch(type) {
             listeners.get(type)?.();
+        },
+        scrollTo(left, top) {
+            this.scrollCalls.push([left, top]);
         },
         listeners,
     };
@@ -60,14 +65,29 @@ test('settles a switched chat with the official scroll helper and stops on user 
         timers.delete(firstTimer[0]);
         firstTimer[1].callback();
         assert.deepEqual(scrollCalls, [{ waitForFrame: true }]);
+        assert.deepEqual(chatElement.scrollCalls, [[0, 2400]]);
 
         chatElement.dispatch('pointerdown');
         for (const [, task] of [...timers]) task.callback();
         assert.equal(scrollCalls.length, 1);
+        assert.equal(chatElement.scrollCalls.length, 1);
         assert.equal(timers.size, 0);
         assert.equal(chatElement.listeners.size, 0);
     } finally {
         globalThis.setTimeout = originalSetTimeout;
         globalThis.clearTimeout = originalClearTimeout;
     }
+});
+
+test('does not force the welcome screen to the bottom', () => {
+    const chatElement = createChatElement(1);
+    const optimizer = new ChatOptimizer({
+        chat: [{}, {}],
+        getCurrentChatId: () => undefined,
+        scrollToBottom: () => assert.fail('welcome screen must keep its native position'),
+    });
+    optimizer.started = true;
+    optimizer.chatElement = chatElement;
+    optimizer.settleInitialBottom();
+    assert.deepEqual(chatElement.scrollCalls, []);
 });

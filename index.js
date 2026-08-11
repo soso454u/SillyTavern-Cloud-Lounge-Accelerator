@@ -2,7 +2,9 @@ import {
     chat,
     eventSource,
     event_types,
+    getCurrentChatId,
     isGenerating,
+    refreshSwipeButtons,
     reloadCurrentChat,
     saveSettingsDebounced,
     scrollChatToBottom,
@@ -72,14 +74,17 @@ function ensureModules() {
         eventTypes: event_types,
         chat,
         isGenerating,
+        getCurrentChatId,
         scheduler,
         saveSettings: saveSettingsDebounced,
         scrollToBottom: scrollChatToBottom,
+        refreshSwipeButtons,
         onStatus: updateRuntimeStatus,
     });
     startupOptimizer = new StartupOptimizer({
         eventSource,
         eventTypes: event_types,
+        getCurrentChatId,
         onChatPayload: messages => chatOptimizer.inspectPayload(messages),
         onStatus: value => updateRuntimeStatus('startup', value),
     });
