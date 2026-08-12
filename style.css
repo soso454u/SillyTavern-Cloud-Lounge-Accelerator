@@ -255,19 +255,19 @@
     }
 
     body.cla-fast-ui.cla-ui-balanced .drawer-content.cla-ui-opening {
-        transition-duration: 150ms !important;
+        transition-duration: 90ms !important;
     }
 
     body.cla-fast-ui.cla-ui-balanced .drawer-content.cla-ui-closing {
-        transition-duration: 110ms !important;
+        transition-duration: 70ms !important;
     }
 
     body.cla-fast-ui.cla-ui-webkit .drawer-content.cla-ui-opening {
-        transition-duration: 130ms !important;
+        transition-duration: 80ms !important;
     }
 
     body.cla-fast-ui.cla-ui-webkit .drawer-content.cla-ui-closing {
-        transition-duration: 90ms !important;
+        transition-duration: 60ms !important;
     }
 
     body.cla-fast-ui dialog.popup[opening],
@@ -303,6 +303,41 @@
 
     body.cla-fast-ui.cla-ui-webkit dialog.popup[closing] {
         --popup-animation-speed: 90ms;
+    }
+}
+
+@media (max-width: 1000px) and (pointer: coarse) and (prefers-reduced-motion: no-preference) {
+    body.cla-fast-ui:is(.cla-ui-balanced, .cla-ui-webkit)
+    #top-settings-holder .drawer-content:not(.fillLeft):not(.fillRight) {
+        height: auto !important;
+        opacity: 0;
+        transform: translate3d(0, -5px, 0);
+        transition-property: opacity, transform, display !important;
+        transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1) !important;
+        transition-behavior: allow-discrete !important;
+        -webkit-backdrop-filter: none !important;
+        backdrop-filter: none !important;
+    }
+
+    body.cla-fast-ui:is(.cla-ui-balanced, .cla-ui-webkit)
+    #top-settings-holder .drawer-content.openDrawer:not(.fillLeft):not(.fillRight) {
+        height: auto !important;
+        opacity: 1;
+        transform: translate3d(0, 0, 0);
+        animation: none !important;
+    }
+
+    @starting-style {
+        body.cla-fast-ui:is(.cla-ui-balanced, .cla-ui-webkit)
+        #top-settings-holder .drawer-content.openDrawer:not(.fillLeft):not(.fillRight) {
+            opacity: 0;
+            transform: translate3d(0, -5px, 0);
+        }
+    }
+
+    body.cla-fast-ui:is(.cla-ui-balanced, .cla-ui-webkit)
+    #top-settings-holder .drawer-content:is(.cla-ui-opening, .cla-ui-closing):not(.fillLeft):not(.fillRight) {
+        will-change: transform, opacity;
     }
 }
 

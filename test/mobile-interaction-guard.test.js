@@ -2,31 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-    getDialogRecoveryReason,
+    getQuickReplyRecoveryReason,
     isTouchEnvironment,
     MobileInteractionGuard,
 } from '../modules/mobile-interaction-guard.js';
 
-function createDialog({ closing = false, loader = false } = {}) {
-    const attributes = new Set(['open', ...(closing ? ['closing'] : [])]);
-    let closes = 0;
-    return {
-        isConnected: true,
-        classList: { contains: () => false, remove: () => {} },
-        hasAttribute: name => attributes.has(name),
-        removeAttribute: name => attributes.delete(name),
-        querySelector: selector => selector === '#loader' && loader ? {} : null,
-        close() {
-            closes += 1;
-            attributes.delete('open');
-        },
-        get closes() {
-            return closes;
-        },
-    };
-}
-
-test('enables the interaction guard only for touch or coarse-pointer devices', () => {
+test('enables the mobile guard only for touch or coarse-pointer devices', () => {
     assert.equal(isTouchEnvironment({
         navigatorRef: { maxTouchPoints: 5 },
         matchMedia: () => ({ matches: false }),
@@ -41,41 +22,20 @@ test('enables the interaction guard only for touch or coarse-pointer devices', (
     }), false);
 });
 
-test('recovers only stale popup states and leaves active loaders alone', () => {
-    assert.equal(getDialogRecoveryReason({ open: true, closing: true }), 'closing');
-    assert.equal(getDialogRecoveryReason({
-        open: true,
-        knownLoader: true,
-        loaderPresent: false,
-        activeBlockingLoader: false,
-    }), 'orphan-loader');
-    assert.equal(getDialogRecoveryReason({
-        open: true,
-        knownLoader: true,
-        loaderPresent: false,
-        activeBlockingLoader: true,
-    }), null);
-    assert.equal(getDialogRecoveryReason({
-        open: true,
-        knownLoader: true,
-        loaderPresent: true,
-    }), null);
-});
-
 test('reveals a minimized quick reply runner only after its modal backdrop is tapped', () => {
     const state = {
         open: true,
         quickReplyExecuting: true,
         quickReplyMinimized: true,
     };
-    assert.equal(getDialogRecoveryReason(state), null);
-    assert.equal(getDialogRecoveryReason({ ...state, backdropTap: true }), 'quick-reply');
-    assert.equal(getDialogRecoveryReason({
+    assert.equal(getQuickReplyRecoveryReason(state), null);
+    assert.equal(getQuickReplyRecoveryReason({ ...state, backdropTap: true }), 'quick-reply');
+    assert.equal(getQuickReplyRecoveryReason({
         open: true,
         backdropTap: true,
         quickReplyHidden: true,
     }), 'quick-reply');
-    assert.equal(getDialogRecoveryReason({
+    assert.equal(getQuickReplyRecoveryReason({
         open: true,
         backdropTap: true,
         quickReplyExecuting: false,
@@ -83,90 +43,55 @@ test('reveals a minimized quick reply runner only after its modal backdrop is ta
     }), null);
 });
 
-test('forces a stale closing dialog out of the native modal layer', async () => {
-    const dialog = createDialog({ closing: true });
+test('releases touch pointer capture without taking over mouse input', () => {
+    let released = null;
+    const target = {
+        hasPointerCapture: () => true,
+        releasePointerCapture: pointerId => { released = pointerId; },
+        matches: () => false,
+    };
     const guard = new MobileInteractionGuard({});
     guard.started = true;
-
-    assert.equal(await guard.recoverDialog(dialog, 'closing'), true);
-    assert.equal(dialog.closes, 1);
-    assert.equal(dialog.hasAttribute('open'), false);
-    assert.equal(dialog.hasAttribute('closing'), false);
+    guard.onPointerEnd({ target, type: 'pointercancel', pointerType: 'touch', pointerId: 7 });
+    assert.equal(released, 7);
 });
 
-test('does not close an orphaned loader while an official blocking task is active', async () => {
-    const dialog = createDialog();
-    const guard = new MobileInteractionGuard({
-        importActionLoader: async () => ({
-            loader: { active: () => [{ isActive: true, isBlocking: true }] },
-        }),
-    });
-    guard.started = true;
-    guard.knownLoaderDialogs.add(dialog);
-
-    assert.equal(await guard.recoverDialog(dialog, 'orphan-loader'), false);
-    assert.equal(dialog.closes, 0);
-});
-
-test('observes body structure only and scopes attribute tracking to popup dialogs', () => {
-    const observations = [];
-    class FakeObserver {
-        constructor(callback) {
-            this.callback = callback;
-        }
-        observe(target, options) {
-            observations.push({ target, options });
-        }
-        disconnect() {}
-    }
-    const dialog = { isConnected: true, hasAttribute: () => false, querySelector: () => null };
-    const body = {};
-    const documentRef = {
-        body,
-        addEventListener() {},
-        removeEventListener() {},
-        querySelectorAll: () => [dialog],
-    };
-    const guard = new MobileInteractionGuard({
-        documentRef,
-        windowRef: { addEventListener() {}, removeEventListener() {} },
-        navigatorRef: { maxTouchPoints: 5 },
-        matchMedia: () => ({ matches: true }),
-        mutationObserver: FakeObserver,
-    });
-
-    assert.equal(guard.start(), true);
-    assert.deepEqual(observations[0], {
-        target: body,
-        options: { subtree: true, childList: true },
-    });
-    assert.equal(observations[1].target, dialog);
-    assert.deepEqual(observations[1].options, {
-        subtree: true,
-        childList: true,
-        attributes: true,
-        attributeFilter: ['open', 'closing', 'class'],
-    });
-    guard.stop();
-});
-
-test('coalesces repeated recovery scans into one animation frame', () => {
-    let queued = null;
-    let scans = 0;
-    const guard = new MobileInteractionGuard({
-        requestFrame(callback) {
-            queued = callback;
-            return 7;
+test('expands a hidden running quick reply instead of stopping it', () => {
+    const values = new Set(['qr--isExecuting', 'qr--minimized']);
+    const quickReply = {
+        classList: {
+            contains: name => values.has(name),
+            remove: name => values.delete(name),
         },
-    });
+    };
+    let maximized = 0;
+    const dialogClasses = new Set(['qr--hide']);
+    const dialog = {
+        matches: selector => selector === 'dialog.popup[open]',
+        hasAttribute: name => name === 'open',
+        classList: {
+            contains: name => dialogClasses.has(name),
+            remove: name => dialogClasses.delete(name),
+        },
+        querySelector(selector) {
+            if (selector === '#qr--modalEditor') return quickReply;
+            if (selector === '#qr--modal-maximize') return { click: () => { maximized += 1; } };
+            return null;
+        },
+    };
+    const guard = new MobileInteractionGuard({});
     guard.started = true;
-    guard.scanDialogs = () => { scans += 1; };
+    guard.onPointerEnd({
+        target: dialog,
+        type: 'pointerup',
+        pointerType: 'touch',
+        pointerId: 1,
+        cancelable: true,
+        preventDefault() {},
+        stopImmediatePropagation() {},
+    });
 
-    guard.scheduleScan();
-    guard.scheduleScan();
-    assert.equal(typeof queued, 'function');
-    assert.equal(scans, 0);
-    queued();
-    assert.equal(scans, 1);
-    assert.equal(guard.scanHandle, null);
+    assert.equal(dialogClasses.has('qr--hide'), false);
+    assert.equal(values.has('qr--minimized'), false);
+    assert.equal(maximized, 1);
 });

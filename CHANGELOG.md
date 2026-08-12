@@ -1,5 +1,15 @@
 # 更新记录
 
+## 2.1.6 — 全平台交互自愈与移动端合成抽屉
+
+- 新增 `InteractionRecoveryGuard`：Windows、macOS、Linux、Android、iOS 与 PWA 都会看护 SillyTavern popup 生命周期；只关闭超时 `closing` 或已确认没有活动 blocking handle 的孤儿 loader。
+- 用户明确点按 `#send_textarea` 却未获得焦点时，检查 `disabled`、`readonly`、`inert`、可见性、pointer-events 和 hit-test；确认输入框可用且没有合法 modal 后才恢复焦点，不轮询、不抢其他编辑框。
+- 残留 popup 挡住普通按钮时只解除 blocker，不重放点击；高级状态记录最近恢复原因、阻塞元素和累计次数，控制台额外记录浏览器与触控环境。
+- `MobileInteractionGuard` 缩回触屏特例，只负责释放异常 Pointer Capture 和展开被隐藏的快捷回复执行窗；全平台 guard 只观察 popup 自身 `open/closing` 与子节点增删，不监听子树 class，也不再被两个 guard 重复观察。
+- 1000px 以下粗指针设备的普通顶栏抽屉不再动画 `height: 0 → auto`，改为一次完成布局后使用 `transform + opacity`；普通触屏打开/关闭为 90/70ms，WebKit 为 80/60ms。
+- 手机普通顶栏抽屉打开期间持续关闭实时 `backdrop-filter` 并禁用官方滚动条隐藏动画；左右大抽屉、桌面布局和“减少动态效果”保持原生行为。
+- 版本统一升级到 2.1.6，Worker 使用新版本缓存名。
+
 ## 2.1.5 — 移动端抽屉帧稳定
 
 - 针对 SillyTavern #5819：运行时精确识别官方仍未修复的三联顶栏 `:has()` 规则，并通过 CSSOM 原位包入 `min-width: 1001px`；手机不再执行该选择器，桌面行为保持不变。

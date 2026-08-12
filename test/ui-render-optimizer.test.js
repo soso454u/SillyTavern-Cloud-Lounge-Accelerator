@@ -137,4 +137,9 @@ test('styles desktop, popup lifecycle, and native sortable helpers without globa
     assert.match(styles, /--popup-animation-speed: 130ms/);
     assert.match(styles, /:has\(\.ui-sortable-helper, \.sortable-drag, \.sortable-chosen\)/);
     assert.doesNotMatch(styles, /will-change:\s*height/);
+    assert.match(styles, /@media \(max-width: 1000px\) and \(pointer: coarse\)/);
+    assert.match(styles, /transition-property:\s*opacity, transform, display/);
+    assert.match(styles, /height:\s*auto !important/);
+    assert.match(styles, /@starting-style/);
+    assert.match(styles, /drawer-content:is\(\.cla-ui-opening, \.cla-ui-closing\)[\s\S]*will-change:\s*transform, opacity/);
 });

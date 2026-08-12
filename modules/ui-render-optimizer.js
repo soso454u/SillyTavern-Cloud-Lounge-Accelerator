@@ -182,8 +182,8 @@ export class UiRenderOptimizer {
 
         const durations = {
             desktop: { opening: 160, closing: 130 },
-            balanced: { opening: 150, closing: 110 },
-            webkit: { opening: 130, closing: 90 },
+            balanced: { opening: 90, closing: 70 },
+            webkit: { opening: 80, closing: 60 },
         };
         const duration = durations[this.profile]?.[phase] ?? durations.desktop[phase];
         const state = { frame: null, timer: null };
