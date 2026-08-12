@@ -1,5 +1,13 @@
 # 更新记录
 
+## 2.1.7 — 历史消息阅读位置稳定
+
+- 首屏落底改为按聊天身份触发：实际进入或切换聊天时只执行一次，同一聊天内后续 `CHAT_CHANGED` 不再重启自动落底。
+- 保留 SillyTavern 原生 “Show more messages” 的高度差定位；`MORE_MESSAGES_LOADED` 会取消尚未结束的首屏校准，加载更早消息后保持当前阅读位置。
+- 首屏校准改用同步滚动，不再留下可能在取消之后执行的延迟动画帧；触摸、点击或滚轮输入都会立即停止校准。
+- 新增同聊天历史更新、跨聊天切换、离开后重进及用户点击取消的回归测试。
+- 版本统一升级到 2.1.7，Worker 使用新版本缓存名。
+
 ## 2.1.6 — 全平台交互自愈与移动端合成抽屉
 
 - 新增 `InteractionRecoveryGuard`：Windows、macOS、Linux、Android、iOS 与 PWA 都会看护 SillyTavern popup 生命周期；只关闭超时 `closing` 或已确认没有活动 blocking handle 的孤儿 loader。

@@ -66,6 +66,7 @@ export class ChatOptimizer {
         this.generation = 0;
         this.bottomSettleTimers = new Set();
         this.bottomSettleCleanup = null;
+        this.activeChatKey = null;
     }
 
     async start({ legacyTruncation = null } = {}) {
@@ -96,11 +97,7 @@ export class ChatOptimizer {
         } catch (error) {
             console.debug(LOG_PREFIX, '官方聊天截断接口不可用', error);
         }
-        this.bind(this.eventTypes.CHAT_CHANGED, () => {
-            this.inspectPayload(this.chat);
-            this.refreshChatBindings();
-            this.settleInitialBottom();
-        });
+        this.bind(this.eventTypes.CHAT_CHANGED, () => this.handleChatChanged());
         this.bind(this.eventTypes.MORE_MESSAGES_LOADED, () => this.cancelInitialBottom());
         this.bind(this.eventTypes.GENERATION_STARTED, () => this.pauseCodeScanning());
         this.bind(this.eventTypes.GENERATION_STOPPED, () => this.refreshAfterGeneration());
@@ -187,6 +184,23 @@ export class ChatOptimizer {
         waitForUnlock();
     }
 
+    handleChatChanged() {
+        this.inspectPayload(this.chat);
+        this.refreshChatBindings();
+
+        const chatId = this.getCurrentChatId?.();
+        const nextChatKey = chatId == null ? null : String(chatId);
+        if (nextChatKey === null) {
+            this.activeChatKey = null;
+            this.cancelInitialBottom();
+            return;
+        }
+        if (nextChatKey === this.activeChatKey) return;
+
+        this.activeChatKey = nextChatKey;
+        this.settleInitialBottom();
+    }
+
     cancelInitialBottom() {
         for (const timer of this.bottomSettleTimers) clearTimeout(timer);
         this.bottomSettleTimers.clear();
@@ -202,7 +216,7 @@ export class ChatOptimizer {
 
         const expectedLastId = this.chat.length - 1;
         const cancelByUser = () => this.cancelInitialBottom();
-        const cancelEvents = ['touchstart', 'pointerdown', 'wheel'];
+        const cancelEvents = ['touchstart', 'pointerdown', 'wheel', 'click'];
         for (const type of cancelEvents) chatElement.addEventListener(type, cancelByUser, { passive: true, once: true });
         this.bottomSettleCleanup = () => {
             for (const type of cancelEvents) chatElement.removeEventListener(type, cancelByUser);
@@ -219,7 +233,9 @@ export class ChatOptimizer {
             if (!this.started || this.chatElement !== chatElement) return;
             if (!hasRenderedChatTail(chatElement, expectedLastId)) return;
             this.refreshSwipeButtons?.(true, false);
-            this.scrollToBottom?.({ waitForFrame: true });
+            // Keep the settling frame fully owned here so a queued native rAF cannot
+            // fire after MORE_MESSAGES_LOADED has cancelled the initial auto-scroll.
+            this.scrollToBottom?.({ waitForFrame: false });
             chatElement.scrollTo?.(0, chatElement.scrollHeight);
         };
 
@@ -388,6 +404,7 @@ export class ChatOptimizer {
         this.started = false;
         this.generation += 1;
         this.cancelInitialBottom();
+        this.activeChatKey = null;
         for (const [name, handler] of this.eventHandlers) this.eventSource.removeListener(name, handler);
         this.eventHandlers = [];
         this.chatElement = null;

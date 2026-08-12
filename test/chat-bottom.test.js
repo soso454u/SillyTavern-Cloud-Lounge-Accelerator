@@ -38,7 +38,7 @@ test('recognizes only a rendered final chat message as the initial tail', () => 
     assert.equal(hasRenderedChatTail(createChatElement(null), 32), false);
 });
 
-test('settles a switched chat with the official scroll helper and stops on user input', () => {
+test('settles a switched chat synchronously and stops on user input', () => {
     const originalSetTimeout = globalThis.setTimeout;
     const originalClearTimeout = globalThis.clearTimeout;
     let nextTimer = 1;
@@ -64,10 +64,10 @@ test('settles a switched chat with the official scroll helper and stops on user 
         const firstTimer = [...timers].sort((left, right) => left[1].delay - right[1].delay)[0];
         timers.delete(firstTimer[0]);
         firstTimer[1].callback();
-        assert.deepEqual(scrollCalls, [{ waitForFrame: true }]);
+        assert.deepEqual(scrollCalls, [{ waitForFrame: false }]);
         assert.deepEqual(chatElement.scrollCalls, [[0, 2400]]);
 
-        chatElement.dispatch('pointerdown');
+        chatElement.dispatch('click');
         for (const [, task] of [...timers]) task.callback();
         assert.equal(scrollCalls.length, 1);
         assert.equal(chatElement.scrollCalls.length, 1);
@@ -77,6 +77,37 @@ test('settles a switched chat with the official scroll helper and stops on user 
         globalThis.setTimeout = originalSetTimeout;
         globalThis.clearTimeout = originalClearTimeout;
     }
+});
+
+test('settles only once per actual chat entry and not for same-chat history updates', () => {
+    let currentChatId = 'chat-a';
+    const optimizer = new ChatOptimizer({
+        chat: [{ id: 1 }],
+        getCurrentChatId: () => currentChatId,
+    });
+    optimizer.started = true;
+    optimizer.inspectPayload = () => {};
+    optimizer.refreshChatBindings = () => {};
+    let settleCalls = 0;
+    let cancelCalls = 0;
+    optimizer.settleInitialBottom = () => settleCalls++;
+    optimizer.cancelInitialBottom = () => cancelCalls++;
+
+    optimizer.handleChatChanged();
+    optimizer.handleChatChanged();
+    assert.equal(settleCalls, 1, 'same-chat events must not restart initial auto-scroll');
+
+    currentChatId = 'chat-b';
+    optimizer.handleChatChanged();
+    assert.equal(settleCalls, 2, 'switching chats should settle the new chat once');
+
+    currentChatId = null;
+    optimizer.handleChatChanged();
+    assert.equal(cancelCalls, 1, 'leaving chat cancels pending initial auto-scroll');
+
+    currentChatId = 'chat-a';
+    optimizer.handleChatChanged();
+    assert.equal(settleCalls, 3, 're-entering a chat should settle it again');
 });
 
 test('does not force the welcome screen to the bottom', () => {
