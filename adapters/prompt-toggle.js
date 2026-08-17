@@ -46,16 +46,21 @@ export class PromptToggleAdapter {
         return event.target instanceof Element ? event.target.closest(TOGGLE_SELECTOR) : null;
     }
 
-    updateRow(row, toggle, manager, enabled) {
+    updateRow(row, toggle, manager, enabled, { invalidateTokens = true } = {}) {
         const prefix = String(manager.configuration?.prefix || '');
         row.classList.toggle(`${prefix}prompt_manager_prompt_disabled`, !enabled);
         toggle.classList.toggle('fa-toggle-on', enabled);
         toggle.classList.toggle('fa-toggle-off', !enabled);
         toggle.setAttribute('aria-pressed', String(enabled));
+        const tokens = row.querySelector?.('.prompt_manager_prompt_tokens');
+        if (tokens && invalidateTokens) {
+            tokens.dataset.pmTokens = '-';
+            tokens.textContent = '-';
+        }
     }
 
     onPointerUp(event) {
-        if (!this.started || !this.isGenerating?.()) return;
+        if (!this.started) return;
         if (event.pointerType === 'mouse' || event.isPrimary === false) return;
         if (typeof event.button === 'number' && event.button !== 0) return;
         const toggle = this.getToggle(event);
@@ -72,7 +77,7 @@ export class PromptToggleAdapter {
             event.stopImmediatePropagation();
             return;
         }
-        if (!this.started || !this.isGenerating?.()) return;
+        if (!this.started) return;
         this.toggleEntry(event, toggle);
     }
 
@@ -90,27 +95,41 @@ export class PromptToggleAdapter {
 
         const previous = Boolean(entry.enabled);
         const enabled = !previous;
+        const tokenElement = row.querySelector?.('.prompt_manager_prompt_tokens');
+        const tokenSnapshot = tokenElement ? {
+            html: tokenElement.innerHTML,
+            text: tokenElement.textContent,
+            value: tokenElement.dataset?.pmTokens,
+        } : null;
+        const rollback = () => {
+            if (entry.enabled !== enabled) return;
+            entry.enabled = previous;
+            this.updateRow(row, toggle, manager, previous, { invalidateTokens: false });
+            if (!tokenElement || !tokenSnapshot) return;
+            if (typeof tokenSnapshot.html === 'string') tokenElement.innerHTML = tokenSnapshot.html;
+            else tokenElement.textContent = tokenSnapshot.text;
+            if (tokenSnapshot.value === undefined) delete tokenElement.dataset.pmTokens;
+            else tokenElement.dataset.pmTokens = tokenSnapshot.value;
+        };
         entry.enabled = enabled;
         const counts = manager.tokenHandler?.getCounts?.();
         if (counts) counts[promptId] = null;
         this.updateRow(row, toggle, manager, enabled);
-        this.pendingManagers.add(manager);
-        this.queueFlush();
+        if (this.isGenerating?.()) {
+            this.pendingManagers.add(manager);
+            this.queueFlush();
+        }
 
         try {
             const saving = manager.saveServiceSettings();
             Promise.resolve(saving).catch(error => {
-                if (entry.enabled === enabled) {
-                    entry.enabled = previous;
-                    this.updateRow(row, toggle, manager, previous);
-                }
-                console.error(LOG_PREFIX, '生成期间预设开关保存失败', error);
+                rollback();
+                console.error(LOG_PREFIX, '预设开关保存失败', error);
                 globalThis.toastr?.error?.('预设开关保存失败，已恢复原状态', '云酒馆加速器');
             });
         } catch (error) {
-            entry.enabled = previous;
-            this.updateRow(row, toggle, manager, previous);
-            console.error(LOG_PREFIX, '生成期间预设开关保存失败', error);
+            rollback();
+            console.error(LOG_PREFIX, '预设开关保存失败', error);
             globalThis.toastr?.error?.('预设开关保存失败，已恢复原状态', '云酒馆加速器');
         }
         return true;

@@ -355,6 +355,12 @@ body.cla-fast-ui :is(.drawer-content, dialog.popup, .inline-drawer-content, #Wor
 
 @media (pointer: coarse) {
 
+    body.cla-fast-ui.cla-chat-keyboard #sheld {
+        height: calc(var(--cla-visual-viewport-bottom, 100dvh) - var(--topBarBlockSize) - 1px) !important;
+        max-height: calc(var(--cla-visual-viewport-bottom, 100dvh) - var(--topBarBlockSize) - 1px) !important;
+        transition: none !important;
+    }
+
     .prompt-manager-toggle-action {
         display: inline-flex;
         align-items: center;

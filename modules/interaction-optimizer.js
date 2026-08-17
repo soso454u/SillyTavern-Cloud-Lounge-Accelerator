@@ -1,6 +1,7 @@
 import { PromptToggleAdapter } from '../adapters/prompt-toggle.js';
 import { InteractionRecoveryGuard } from './interaction-recovery-guard.js';
 import { MobileInteractionGuard } from './mobile-interaction-guard.js';
+import { MobileViewportGuard } from './mobile-viewport-guard.js';
 import { UiRenderOptimizer } from './ui-render-optimizer.js';
 
 export class InteractionOptimizer {
@@ -10,6 +11,7 @@ export class InteractionOptimizer {
         this.mobileGuard = new MobileInteractionGuard({
             onRecovered: diagnostic => this.reportRecovery(diagnostic),
         });
+        this.mobileViewport = new MobileViewportGuard();
         this.recoveryGuard = new InteractionRecoveryGuard({
             onRecovered: diagnostic => this.reportRecovery(diagnostic),
         });
@@ -23,20 +25,22 @@ export class InteractionOptimizer {
     async start() {
         if (this.started) return;
         this.started = true;
-        const [promptToggleActive, recoveryGuardActive, mobileGuardActive, renderProfile] = await Promise.all([
+        const [promptToggleActive, recoveryGuardActive, mobileGuardActive, mobileViewportActive, renderProfile] = await Promise.all([
             this.promptToggle.start(),
             this.recoveryGuard.start(),
             this.mobileGuard.start(),
+            this.mobileViewport.start(),
             this.uiRender.start(),
         ]);
         if (!this.started) {
             this.promptToggle.stop();
             this.recoveryGuard.stop();
             this.mobileGuard.stop();
+            this.mobileViewport.stop();
             this.uiRender.stop();
             return;
         }
-        this.features = { promptToggleActive, recoveryGuardActive, mobileGuardActive, renderProfile };
+        this.features = { promptToggleActive, recoveryGuardActive, mobileGuardActive, mobileViewportActive, renderProfile };
         this.emitStatus();
     }
 
@@ -55,15 +59,17 @@ export class InteractionOptimizer {
             promptToggleActive,
             recoveryGuardActive,
             mobileGuardActive,
+            mobileViewportActive,
             renderProfile,
         } = this.features || {};
         const status = [
-            promptToggleActive ? '生成可切换' : null,
+            promptToggleActive ? '预设即时切换' : null,
             renderProfile === 'webkit'
                 ? 'WebKit 流畅'
                 : (renderProfile === 'balanced' ? '触屏流畅' : (renderProfile === 'desktop' ? '桌面流畅' : null)),
             recoveryGuardActive ? '全平台自愈' : null,
             mobileGuardActive ? '触控保护' : null,
+            mobileViewportActive ? '键盘避让' : null,
             this.lastRecovery
                 ? `已恢复 ${this.lastRecovery.reason}${this.lastRecovery.blocker ? `（${this.lastRecovery.blocker}）` : ''} ×${this.recoveryCount}`
                 : null,
@@ -77,6 +83,7 @@ export class InteractionOptimizer {
         this.promptToggle.stop();
         this.recoveryGuard.stop();
         this.mobileGuard.stop();
+        this.mobileViewport.stop();
         this.uiRender.stop();
         this.features = null;
         this.lastRecovery = null;

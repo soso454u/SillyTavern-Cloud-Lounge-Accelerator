@@ -2,6 +2,14 @@ const LOG_PREFIX = '[Cloud Lounge Accelerator]';
 const CLOSING_GRACE_MS = 900;
 const ORPHAN_LOADER_GRACE_MS = 1200;
 const EXPLICIT_BLOCKER_GRACE_MS = 450;
+const HIDDEN_DIALOG_GRACE_MS = 900;
+const LEGACY_OVERLAY_GRACE_MS = 700;
+const LEGACY_OVERLAY_SELECTOR = '#shadow_popup, #shadow_character_popup, #shadow_select_chat_popup';
+const LEGACY_OVERLAY_CONTENT = new Map([
+    ['shadow_popup', '#dialogue_popup'],
+    ['shadow_character_popup', '#character_popup'],
+    ['shadow_select_chat_popup', '#select_chat_popup'],
+]);
 
 function isPointInside(rect, x, y) {
     return Boolean(rect)
@@ -52,6 +60,62 @@ export function isControlActionable(control, {
     return true;
 }
 
+function isElementRendered(element, windowRef) {
+    if (!element?.isConnected) return false;
+    for (let current = element; current; current = current.parentElement) {
+        try {
+            const style = windowRef?.getComputedStyle?.(current);
+            if (style && (
+                style.display === 'none'
+                || style.visibility === 'hidden'
+                || Number.parseFloat(style.opacity) <= 0.01
+            )) return false;
+        } catch {
+            return true;
+        }
+    }
+    const rect = element.getBoundingClientRect?.();
+    return !rect || (rect.width > 1 && rect.height > 1);
+}
+
+export function isDialogVisuallyHidden(dialog, { windowRef = globalThis.window } = {}) {
+    if (!dialog?.hasAttribute?.('open')) return false;
+    try {
+        const style = windowRef?.getComputedStyle?.(dialog);
+        if (style && (
+            style.display === 'none'
+            || style.visibility === 'hidden'
+            || style.pointerEvents === 'none'
+            || Number.parseFloat(style.opacity) <= 0.01
+        )) return true;
+    } catch {
+        return false;
+    }
+    const rect = dialog.getBoundingClientRect?.();
+    return Boolean(rect && (rect.width <= 1 || rect.height <= 1));
+}
+
+export function getStaleLegacyOverlay(element, {
+    documentRef = globalThis.document,
+    windowRef = globalThis.window,
+} = {}) {
+    const overlay = element?.closest?.(LEGACY_OVERLAY_SELECTOR);
+    if (!overlay?.isConnected) return null;
+    try {
+        const style = windowRef?.getComputedStyle?.(overlay);
+        if (style && (
+            style.display === 'none'
+            || style.visibility === 'hidden'
+            || style.pointerEvents === 'none'
+        )) return null;
+    } catch {
+        return null;
+    }
+    const contentSelector = LEGACY_OVERLAY_CONTENT.get(String(overlay.id || ''));
+    const content = contentSelector ? documentRef?.querySelector?.(contentSelector) : null;
+    return isElementRendered(content, windowRef) ? null : overlay;
+}
+
 export class InteractionRecoveryGuard {
     constructor({
         documentRef = globalThis.document,
@@ -82,7 +146,10 @@ export class InteractionRecoveryGuard {
         this.bodyObserver = null;
         this.dialogObservers = new Map();
         this.dialogTimers = new Map();
+        this.legacyOverlayObservers = new Map();
+        this.legacyOverlayTimers = new Map();
         this.closingSince = new WeakMap();
+        this.hiddenSince = new WeakMap();
         this.knownLoaderDialogs = new WeakSet();
         this.scanHandle = null;
         this.recoveryCount = 0;
@@ -112,7 +179,8 @@ export class InteractionRecoveryGuard {
     onBodyMutations(mutations) {
         const relevant = mutations.some(mutation => (
             [...(mutation.addedNodes || []), ...(mutation.removedNodes || [])].some(node => (
-                node?.matches?.('dialog.popup') || node?.querySelector?.('dialog.popup')
+                node?.matches?.(`dialog.popup, ${LEGACY_OVERLAY_SELECTOR}`)
+                || node?.querySelector?.(`dialog.popup, ${LEGACY_OVERLAY_SELECTOR}`)
             ))
         ));
         if (relevant) this.scheduleScan();
@@ -156,7 +224,7 @@ export class InteractionRecoveryGuard {
             const stateObserver = new this.MutationObserver(mutations => this.onDialogMutations(dialog, mutations));
             stateObserver.observe(dialog, {
                 attributes: true,
-                attributeFilter: ['open', 'closing'],
+                attributeFilter: ['open', 'closing', 'class', 'style'],
             });
             const contentObserver = new this.MutationObserver(mutations => this.onDialogMutations(dialog, mutations));
             contentObserver.observe(dialog, {
@@ -167,10 +235,34 @@ export class InteractionRecoveryGuard {
         }
     }
 
+    syncLegacyOverlayObservers() {
+        if (typeof this.MutationObserver !== 'function') return;
+        const overlays = this.document.querySelectorAll?.(LEGACY_OVERLAY_SELECTOR) || [];
+        const present = new Set(overlays);
+        for (const [overlay, observer] of this.legacyOverlayObservers) {
+            if (!present.has(overlay) || !overlay.isConnected) {
+                observer.disconnect?.();
+                this.legacyOverlayObservers.delete(overlay);
+                this.cancelLegacyOverlayTimer(overlay);
+            }
+        }
+        for (const overlay of overlays) {
+            if (this.legacyOverlayObservers.has(overlay)) continue;
+            const observer = new this.MutationObserver(() => this.scheduleLegacyOverlayRecovery(overlay));
+            observer.observe(overlay, {
+                attributes: true,
+                attributeFilter: ['class', 'style'],
+            });
+            this.legacyOverlayObservers.set(overlay, observer);
+            this.scheduleLegacyOverlayRecovery(overlay);
+        }
+    }
+
     scanDialogs() {
         if (!this.started) return;
         const dialogs = this.document.querySelectorAll?.('dialog.popup') || [];
         this.syncDialogObservers(dialogs);
+        this.syncLegacyOverlayObservers();
         const present = new Set(dialogs);
 
         for (const [dialog] of this.dialogTimers) {
@@ -185,6 +277,7 @@ export class InteractionRecoveryGuard {
             if (!dialog.hasAttribute?.('open')) {
                 this.cancelDialogTimer(dialog);
                 this.closingSince.delete(dialog);
+                this.hiddenSince.delete(dialog);
                 continue;
             }
             if (dialog.hasAttribute?.('closing')) {
@@ -192,9 +285,15 @@ export class InteractionRecoveryGuard {
                 this.scheduleDialogRecovery(dialog, 'closing', CLOSING_GRACE_MS);
             } else if (this.knownLoaderDialogs.has(dialog) && !loaderPresent) {
                 this.closingSince.delete(dialog);
+                this.hiddenSince.delete(dialog);
                 this.scheduleDialogRecovery(dialog, 'orphan-loader', ORPHAN_LOADER_GRACE_MS);
+            } else if (isDialogVisuallyHidden(dialog, { windowRef: this.window })) {
+                this.closingSince.delete(dialog);
+                if (!this.hiddenSince.has(dialog)) this.hiddenSince.set(dialog, this.now());
+                this.scheduleDialogRecovery(dialog, 'hidden-dialog', HIDDEN_DIALOG_GRACE_MS);
             } else {
                 this.closingSince.delete(dialog);
+                this.hiddenSince.delete(dialog);
                 this.cancelDialogTimer(dialog);
             }
         }
@@ -218,6 +317,25 @@ export class InteractionRecoveryGuard {
         this.dialogTimers.delete(dialog);
     }
 
+    scheduleLegacyOverlayRecovery(overlay) {
+        this.cancelLegacyOverlayTimer(overlay);
+        if (!this.started) return;
+        const stale = getStaleLegacyOverlay(overlay, { documentRef: this.document, windowRef: this.window });
+        if (stale !== overlay) return;
+        const timer = this.setTimer(() => {
+            this.legacyOverlayTimers.delete(overlay);
+            this.recoverLegacyOverlay(overlay);
+        }, LEGACY_OVERLAY_GRACE_MS);
+        this.legacyOverlayTimers.set(overlay, timer);
+    }
+
+    cancelLegacyOverlayTimer(overlay) {
+        const timer = this.legacyOverlayTimers.get(overlay);
+        if (timer === undefined) return;
+        this.clearTimer(timer);
+        this.legacyOverlayTimers.delete(overlay);
+    }
+
     async hasActiveBlockingLoader() {
         try {
             const module = await this.importActionLoader();
@@ -229,10 +347,11 @@ export class InteractionRecoveryGuard {
     }
 
     async recoverDialog(dialog, reason) {
-        if (!['closing', 'orphan-loader'].includes(reason)) return false;
+        if (!['closing', 'orphan-loader', 'hidden-dialog'].includes(reason)) return false;
         if (!this.started || !dialog?.isConnected || !dialog.hasAttribute?.('open')) return false;
         if (typeof dialog.close !== 'function') return false;
         if (reason === 'closing' && !dialog.hasAttribute?.('closing')) return false;
+        if (reason === 'hidden-dialog' && !isDialogVisuallyHidden(dialog, { windowRef: this.window })) return false;
         if (reason === 'orphan-loader') {
             if (!this.knownLoaderDialogs.has(dialog) || dialog.querySelector?.('#loader')) return false;
             if (await this.hasActiveBlockingLoader()) return false;
@@ -241,13 +360,17 @@ export class InteractionRecoveryGuard {
 
         const blockerLabel = reason === 'orphan-loader'
             ? 'dialog.popup[loader-orphan]'
-            : describeInteractionBlocker(dialog);
+            : (reason === 'hidden-dialog' ? 'dialog.popup[open][hidden]' : describeInteractionBlocker(dialog));
         try {
             dialog.close();
             dialog.removeAttribute?.('closing');
             this.cancelDialogTimer(dialog);
             this.closingSince.delete(dialog);
-            this.notifyRecovered(reason === 'closing' ? '残留关闭弹窗' : '残留加载遮罩', blockerLabel);
+            this.hiddenSince.delete(dialog);
+            const recoveryReason = reason === 'closing'
+                ? '残留关闭弹窗'
+                : (reason === 'hidden-dialog' ? '不可见弹窗' : '残留加载遮罩');
+            this.notifyRecovered(recoveryReason, blockerLabel);
             return true;
         } catch (error) {
             console.debug(LOG_PREFIX, '交互阻塞层自愈失败', error);
@@ -257,6 +380,8 @@ export class InteractionRecoveryGuard {
 
     getStaleBlocker(event) {
         const hit = this.document.elementFromPoint?.(event.clientX, event.clientY) || event.target;
+        const overlay = getStaleLegacyOverlay(hit, { documentRef: this.document, windowRef: this.window });
+        if (overlay) return { overlay, reason: 'legacy-overlay' };
         const dialog = hit?.closest?.('dialog.popup[open]') || event.target?.closest?.('dialog.popup[open]');
         if (!dialog) return null;
         if (dialog.hasAttribute?.('closing')) {
@@ -268,7 +393,23 @@ export class InteractionRecoveryGuard {
         if (this.knownLoaderDialogs.has(dialog) && !dialog.querySelector?.('#loader')) {
             return { dialog, reason: 'orphan-loader' };
         }
+        if (isDialogVisuallyHidden(dialog, { windowRef: this.window })) {
+            const since = this.hiddenSince.get(dialog);
+            if (Number.isFinite(since) && this.now() - since >= EXPLICIT_BLOCKER_GRACE_MS) {
+                return { dialog, reason: 'hidden-dialog' };
+            }
+        }
         return null;
+    }
+
+    recoverLegacyOverlay(overlay) {
+        if (!this.started || !overlay?.isConnected || !overlay.style) return false;
+        const stale = getStaleLegacyOverlay(overlay, { documentRef: this.document, windowRef: this.window });
+        if (stale !== overlay) return false;
+        overlay.style.display = 'none';
+        this.cancelLegacyOverlayTimer(overlay);
+        this.notifyRecovered('残留页面遮罩', `#${overlay.id}`);
+        return true;
     }
 
     async onPointerEnd(event) {
@@ -293,7 +434,9 @@ export class InteractionRecoveryGuard {
 
         const blocker = this.getStaleBlocker(event);
         if (!blocker) return;
-        const recovered = await this.recoverDialog(blocker.dialog, blocker.reason);
+        const recovered = blocker.overlay
+            ? this.recoverLegacyOverlay(blocker.overlay)
+            : await this.recoverDialog(blocker.dialog, blocker.reason);
         if (!recovered || !this.started || !textareaIntent) return;
         this.requestFrame(() => {
             if (isControlActionable(textarea, { windowRef: this.window })) {
@@ -332,11 +475,16 @@ export class InteractionRecoveryGuard {
             for (const observer of observers) observer.disconnect?.();
         }
         this.dialogObservers.clear();
+        for (const observer of this.legacyOverlayObservers.values()) observer.disconnect?.();
+        this.legacyOverlayObservers.clear();
         if (this.scanHandle !== null) this.cancelFrame(this.scanHandle);
         this.scanHandle = null;
         for (const { timer } of this.dialogTimers.values()) this.clearTimer(timer);
         this.dialogTimers.clear();
+        for (const timer of this.legacyOverlayTimers.values()) this.clearTimer(timer);
+        this.legacyOverlayTimers.clear();
         this.closingSince = new WeakMap();
+        this.hiddenSince = new WeakMap();
         this.knownLoaderDialogs = new WeakSet();
         this.recoveryCount = 0;
     }

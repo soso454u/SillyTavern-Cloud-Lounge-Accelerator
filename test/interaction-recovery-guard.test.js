@@ -4,8 +4,10 @@ import assert from 'node:assert/strict';
 import {
     describeInteractionBlocker,
     detectInteractionEnvironment,
+    getStaleLegacyOverlay,
     InteractionRecoveryGuard,
     isControlActionable,
+    isDialogVisuallyHidden,
 } from '../modules/interaction-recovery-guard.js';
 
 function createDialog({ closing = false, loader = false } = {}) {
@@ -93,7 +95,7 @@ test('observes body structure only and scopes attributes to popup dialogs on eve
         body,
         addEventListener() {},
         removeEventListener() {},
-        querySelectorAll: () => [dialog],
+        querySelectorAll: selector => selector === 'dialog.popup' ? [dialog] : [],
     };
     const guard = new InteractionRecoveryGuard({
         documentRef,
@@ -109,7 +111,7 @@ test('observes body structure only and scopes attributes to popup dialogs on eve
     assert.equal(observations[1].target, dialog);
     assert.deepEqual(observations[1].options, {
         attributes: true,
-        attributeFilter: ['open', 'closing'],
+        attributeFilter: ['open', 'closing', 'class', 'style'],
     });
     assert.equal(observations[2].target, dialog);
     assert.deepEqual(observations[2].options, {
@@ -179,6 +181,87 @@ test('leaves an orphaned loader alone while an official blocking task remains ac
 
     assert.equal(await guard.recoverDialog(dialog, 'orphan-loader'), false);
     assert.equal(dialog.closes, 0);
+});
+
+test('recovers an open modal only after it remains visually hidden', async () => {
+    const dialog = createDialog();
+    dialog.getBoundingClientRect = () => ({ width: 0, height: 0 });
+    const recovered = [];
+    const guard = new InteractionRecoveryGuard({
+        windowRef: visibleWindow,
+        onRecovered: value => recovered.push(value),
+    });
+    guard.started = true;
+    guard.hiddenSince.set(dialog, 0);
+
+    assert.equal(isDialogVisuallyHidden(dialog, { windowRef: visibleWindow }), true);
+    assert.equal(await guard.recoverDialog(dialog, 'hidden-dialog'), true);
+    assert.equal(dialog.closes, 1);
+    assert.equal(recovered[0].reason, '不可见弹窗');
+    assert.equal(recovered[0].blocker, 'dialog.popup[open][hidden]');
+});
+
+test('removes a legacy shadow only when its matching popup is no longer rendered', () => {
+    const overlay = {
+        id: 'shadow_popup',
+        isConnected: true,
+        style: { display: 'block' },
+        closest: selector => selector.includes('#shadow_popup') ? overlay : null,
+    };
+    const hiddenPopup = { isConnected: false };
+    const documentRef = {
+        querySelector: selector => selector === '#dialogue_popup' ? hiddenPopup : null,
+    };
+    const recovered = [];
+    const guard = new InteractionRecoveryGuard({
+        documentRef,
+        windowRef: visibleWindow,
+        onRecovered: value => recovered.push(value),
+    });
+    guard.started = true;
+
+    assert.equal(getStaleLegacyOverlay(overlay, { documentRef, windowRef: visibleWindow }), overlay);
+    assert.equal(guard.recoverLegacyOverlay(overlay), true);
+    assert.equal(overlay.style.display, 'none');
+    assert.equal(recovered[0].reason, '残留页面遮罩');
+});
+
+test('keeps a legacy shadow while its matching popup is visible', () => {
+    const overlay = {
+        id: 'shadow_popup',
+        isConnected: true,
+        closest: selector => selector.includes('#shadow_popup') ? overlay : null,
+    };
+    const popup = {
+        isConnected: true,
+        getBoundingClientRect: () => ({ width: 300, height: 200 }),
+    };
+    const documentRef = { querySelector: () => popup };
+    assert.equal(getStaleLegacyOverlay(overlay, { documentRef, windowRef: visibleWindow }), null);
+});
+
+test('recognizes a transparent legacy parent as stale even while its child has a rect', () => {
+    const overlay = {
+        id: 'shadow_popup',
+        isConnected: true,
+        parentElement: null,
+        closest: selector => selector.includes('#shadow_popup') ? overlay : null,
+    };
+    const popup = {
+        isConnected: true,
+        parentElement: overlay,
+        getBoundingClientRect: () => ({ width: 300, height: 200 }),
+    };
+    const windowRef = {
+        getComputedStyle: element => ({
+            display: 'block',
+            visibility: 'visible',
+            pointerEvents: 'auto',
+            opacity: element === overlay ? '0' : '1',
+        }),
+    };
+    const documentRef = { querySelector: () => popup };
+    assert.equal(getStaleLegacyOverlay(overlay, { documentRef, windowRef }), overlay);
 });
 
 test('restores the chat textarea only after the user explicitly taps a failed focus target', async () => {
