@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { getVisualViewportBottom, MobileViewportGuard } from '../modules/mobile-viewport-guard.js';
+import {
+    getVisualViewportBottom,
+    getVisualViewportInset,
+    MobileViewportGuard,
+} from '../modules/mobile-viewport-guard.js';
 
 function createEventTarget() {
     const listeners = new Map();
@@ -23,9 +27,12 @@ test('calculates the keyboard-safe bottom edge from the visual viewport', () => 
         document: { documentElement: { clientHeight: 900 } },
     };
     assert.equal(getVisualViewportBottom(windowRef), 532);
+    assert.equal(getVisualViewportInset(windowRef), 368);
     windowRef.visualViewport.height = 1000;
     assert.equal(getVisualViewportBottom(windowRef), 900);
+    assert.equal(getVisualViewportInset(windowRef), 0);
     assert.equal(getVisualViewportBottom({}), null);
+    assert.equal(getVisualViewportInset({}), null);
 });
 
 test('keeps the chat form above a touch keyboard and cleans up on stop', () => {
@@ -72,16 +79,23 @@ test('keeps the chat form above a touch keyboard and cleans up on stop', () => {
 
     assert.equal(guard.start(), true);
     assert.equal(classNames.has('cla-chat-keyboard'), true);
-    assert.equal(properties.get('--cla-visual-viewport-bottom'), '510px');
+    assert.equal(properties.get('--cla-keyboard-shift'), '-310px');
 
     viewportEvents.height = 430;
     viewportEvents.listeners.get('resize')();
     frames.shift()();
-    assert.equal(properties.get('--cla-visual-viewport-bottom'), '440px');
+    assert.equal(properties.get('--cla-keyboard-shift'), '-380px');
+
+    documentRef.activeElement = null;
+    documentEvents.listeners.get('focusout')({ type: 'focusout', target: textarea });
+    viewportEvents.height = 600;
+    viewportEvents.listeners.get('resize')();
+    frames.shift()();
+    assert.equal(properties.get('--cla-keyboard-shift'), '-210px', 'closing animation should keep using compositor movement');
 
     guard.stop();
     assert.equal(classNames.has('cla-chat-keyboard'), false);
-    assert.equal(properties.has('--cla-visual-viewport-bottom'), false);
+    assert.equal(properties.has('--cla-keyboard-shift'), false);
     assert.equal(viewportEvents.listeners.size, 0);
 });
 

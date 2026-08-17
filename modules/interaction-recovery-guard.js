@@ -459,7 +459,6 @@ export class InteractionRecoveryGuard {
             environment: detectInteractionEnvironment(this.navigator),
         };
         console.info(LOG_PREFIX, '全平台交互自愈', diagnostic);
-        globalThis.toastr?.info?.(`已恢复${reason}`, '云酒馆加速器', { timeOut: 2600 });
         this.onRecovered?.(diagnostic);
     }
 

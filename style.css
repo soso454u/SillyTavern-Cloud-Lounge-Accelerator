@@ -355,10 +355,12 @@ body.cla-fast-ui :is(.drawer-content, dialog.popup, .inline-drawer-content, #Wor
 
 @media (pointer: coarse) {
 
-    body.cla-fast-ui.cla-chat-keyboard #sheld {
-        height: calc(var(--cla-visual-viewport-bottom, 100dvh) - var(--topBarBlockSize) - 1px) !important;
-        max-height: calc(var(--cla-visual-viewport-bottom, 100dvh) - var(--topBarBlockSize) - 1px) !important;
+    body.cla-fast-ui.cla-chat-keyboard #form_sheld {
+        position: relative;
+        z-index: 60;
+        transform: translate3d(0, var(--cla-keyboard-shift, 0px), 0);
         transition: none !important;
+        will-change: transform;
     }
 
     .prompt-manager-toggle-action {

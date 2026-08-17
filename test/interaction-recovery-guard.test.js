@@ -78,6 +78,22 @@ test('records browser and input environment without using it as a recovery gate'
     }), 'Firefox · Desktop');
 });
 
+test('reports recovery without opening a user-facing toast', () => {
+    const originalToastr = globalThis.toastr;
+    let toasts = 0;
+    globalThis.toastr = { info: () => { toasts += 1; } };
+    try {
+        const recovered = [];
+        const guard = new InteractionRecoveryGuard({ onRecovered: value => recovered.push(value) });
+        guard.notifyRecovered('输入焦点', null);
+        assert.equal(toasts, 0);
+        assert.equal(recovered[0].reason, '输入焦点');
+    } finally {
+        if (originalToastr === undefined) delete globalThis.toastr;
+        else globalThis.toastr = originalToastr;
+    }
+});
+
 test('observes body structure only and scopes attributes to popup dialogs on every platform', () => {
     const observations = [];
     class FakeObserver {
