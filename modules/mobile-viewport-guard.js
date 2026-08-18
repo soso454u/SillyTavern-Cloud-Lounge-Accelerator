@@ -1,6 +1,8 @@
 const KEYBOARD_CLASS = 'cla-chat-keyboard';
 const KEYBOARD_INSET_PROPERTY = '--cla-keyboard-inset';
 const BOTTOM_ANCHOR_TOLERANCE = 64;
+const KEYBOARD_CLOSE_STABLE_MS = 120;
+const KEYBOARD_CLOSE_FALLBACK_MS = 1800;
 
 export function getVisualViewportBottom(windowRef = globalThis.window) {
     const viewport = windowRef?.visualViewport;
@@ -45,10 +47,12 @@ export class MobileViewportGuard {
         this.cancelFrame = cancelFrame;
         this.started = false;
         this.engaged = false;
+        this.closing = false;
         this.appliedInset = 0;
         this.frame = null;
         this.bottomFrame = null;
         this.blurTimer = null;
+        this.closeTimer = null;
         this.onViewportChange = this.onViewportChange.bind(this);
         this.onFocusChange = this.onFocusChange.bind(this);
     }
@@ -78,15 +82,24 @@ export class MobileViewportGuard {
     onFocusChange(event) {
         this.clearTimer(this.blurTimer);
         this.blurTimer = null;
+        this.clearTimer(this.closeTimer);
+        this.closeTimer = null;
+        const textarea = this.document.querySelector?.('#send_textarea');
         if (event?.type === 'focusout') {
+            if (event?.target !== textarea && !this.engaged) return;
+            this.closing = true;
             this.blurTimer = this.setTimer(() => {
                 this.blurTimer = null;
+                this.closing = false;
                 this.engaged = false;
+                this.clearTimer(this.closeTimer);
+                this.closeTimer = null;
                 this.scheduleSync();
-            }, 450);
+            }, KEYBOARD_CLOSE_FALLBACK_MS);
+            this.scheduleSync();
             return;
         }
-        const textarea = this.document.querySelector?.('#send_textarea');
+        this.closing = false;
         this.engaged = event?.target === textarea || this.document.activeElement === textarea;
         this.scheduleSync();
     }
@@ -119,7 +132,7 @@ export class MobileViewportGuard {
         // Measure only the part of SillyTavern's layout that is actually hidden.
         // Browsers honoring interactive-widget=resizes-content already shorten
         // #sheld; applying the full visualViewport inset again would double-lift
-        // the input form and leave the large gaps seen on iOS.
+        // the input form and leave large gaps on touch browsers.
         const naturalBottom = Number(sheldRect.bottom) + this.appliedInset;
         const measuredInset = Math.max(0, Math.round(naturalBottom - viewportBottom));
         const inset = measuredInset <= 2 ? 0 : measuredInset;
@@ -130,6 +143,30 @@ export class MobileViewportGuard {
         this.document.body.style?.setProperty?.(KEYBOARD_INSET_PROPERTY, `${inset}px`);
         this.document.body.classList?.add?.(KEYBOARD_CLASS);
         if (preserveBottom) this.anchorChatBottom(chat);
+        if (this.closing && inset === 0) this.finishCloseWhenStable();
+        else if (inset > 0 && this.closeTimer !== null) {
+            this.clearTimer(this.closeTimer);
+            this.closeTimer = null;
+        }
+    }
+
+    finishCloseWhenStable() {
+        if (this.closeTimer !== null) return;
+        this.closeTimer = this.setTimer(() => {
+            this.closeTimer = null;
+            if (!this.started || !this.closing) return;
+            const textarea = this.document.querySelector?.('#send_textarea');
+            if (textarea && this.document.activeElement === textarea) {
+                this.closing = false;
+                this.engaged = true;
+                return;
+            }
+            this.clearTimer(this.blurTimer);
+            this.blurTimer = null;
+            this.closing = false;
+            this.engaged = false;
+            this.clearViewportState();
+        }, KEYBOARD_CLOSE_STABLE_MS);
     }
 
     isNearChatBottom(chat) {
@@ -161,6 +198,7 @@ export class MobileViewportGuard {
         if (!this.started) return;
         this.started = false;
         this.engaged = false;
+        this.closing = false;
         this.document.removeEventListener('focusin', this.onFocusChange, true);
         this.document.removeEventListener('focusout', this.onFocusChange, true);
         this.window.visualViewport?.removeEventListener?.('resize', this.onViewportChange);
@@ -172,6 +210,8 @@ export class MobileViewportGuard {
         this.bottomFrame = null;
         this.clearTimer(this.blurTimer);
         this.blurTimer = null;
+        this.clearTimer(this.closeTimer);
+        this.closeTimer = null;
         this.clearViewportState();
     }
 }

@@ -83,10 +83,20 @@ test('keeps the chat form above a touch keyboard and cleans up on stop', () => {
         visualViewport: viewportEvents,
     };
     const frames = [];
+    let nextTimer = 1;
+    const timers = new Map();
     const guard = new MobileViewportGuard({
         documentRef,
         windowRef,
         navigatorRef: { maxTouchPoints: 5 },
+        setTimer(callback, delay) {
+            const id = nextTimer++;
+            timers.set(id, { callback, delay });
+            return id;
+        },
+        clearTimer(id) {
+            timers.delete(id);
+        },
         requestFrame(callback) {
             frames.push(callback);
             return frames.length;
@@ -127,10 +137,64 @@ test('keeps the chat form above a touch keyboard and cleans up on stop', () => {
     assert.equal(properties.get('--cla-keyboard-inset'), '210px', 'closing animation should keep following the visible viewport');
     frames.shift()();
 
+    sheldBottom = 610;
+    viewportEvents.height = 810;
+    viewportEvents.listeners.get('resize')();
+    frames.shift()();
+    assert.equal(properties.get('--cla-keyboard-inset'), '0px');
+    assert.equal(classNames.has('cla-chat-keyboard'), true, 'zero overlap must remain stable briefly before cleanup');
+    frames.shift()();
+    const stableTimer = [...timers].find(([, task]) => task.delay === 120);
+    assert.ok(stableTimer, 'keyboard close should be confirmed from a stable viewport instead of a fixed animation duration');
+    timers.delete(stableTimer[0]);
+    stableTimer[1].callback();
+    assert.equal(classNames.has('cla-chat-keyboard'), false);
+    assert.equal(properties.has('--cla-keyboard-inset'), false);
+    assert.equal([...timers.values()].some(task => task.delay === 1800), false, 'stable close should cancel the fallback timer');
+
     guard.stop();
     assert.equal(classNames.has('cla-chat-keyboard'), false);
     assert.equal(properties.has('--cla-keyboard-inset'), false);
     assert.equal(viewportEvents.listeners.size, 0);
+});
+
+test('uses the same viewport guard on iOS, Android, and Windows touch devices', () => {
+    for (const userAgent of [
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)',
+        'Mozilla/5.0 (Linux; Android 15; Pixel 9)',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; Touch)',
+    ]) {
+        const documentEvents = createEventTarget();
+        const viewportEvents = createEventTarget();
+        Object.assign(viewportEvents, { offsetTop: 0, height: 800 });
+        const windowEvents = createEventTarget();
+        const body = {
+            classList: { add() {}, remove() {} },
+            style: { setProperty() {}, removeProperty() {} },
+        };
+        const documentRef = {
+            ...documentEvents,
+            body,
+            activeElement: null,
+            documentElement: { clientHeight: 800 },
+            querySelector: () => null,
+        };
+        const guard = new MobileViewportGuard({
+            documentRef,
+            windowRef: {
+                ...windowEvents,
+                innerHeight: 800,
+                document: documentRef,
+                visualViewport: viewportEvents,
+            },
+            navigatorRef: { maxTouchPoints: 5, userAgent },
+            requestFrame: () => 1,
+            cancelFrame() {},
+        });
+
+        assert.equal(guard.start(), true, userAgent);
+        guard.stop();
+    }
 });
 
 test('does not install viewport overrides on a non-touch desktop', () => {
