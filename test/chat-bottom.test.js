@@ -110,6 +110,27 @@ test('settles only once per actual chat entry and not for same-chat history upda
     assert.equal(settleCalls, 3, 're-entering a chat should settle it again');
 });
 
+test('claims history pagination as the current chat before a following chat event', () => {
+    const optimizer = new ChatOptimizer({
+        chat: [{ id: 1 }],
+        getCurrentChatId: () => 'chat-a',
+    });
+    optimizer.started = true;
+    optimizer.inspectPayload = () => {};
+    optimizer.refreshChatBindings = () => {};
+    let settleCalls = 0;
+    let cancelCalls = 0;
+    optimizer.settleInitialBottom = () => settleCalls++;
+    optimizer.cancelInitialBottom = () => cancelCalls++;
+
+    optimizer.handleMoreMessagesLoaded();
+    optimizer.handleChatChanged();
+
+    assert.equal(optimizer.activeChatKey, 'chat-a');
+    assert.equal(cancelCalls, 1);
+    assert.equal(settleCalls, 0, 'history pagination must not become an initial-entry bottom settle');
+});
+
 test('does not force the welcome screen to the bottom', () => {
     const chatElement = createChatElement(1);
     const optimizer = new ChatOptimizer({

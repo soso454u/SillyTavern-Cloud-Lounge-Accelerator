@@ -98,7 +98,7 @@ export class ChatOptimizer {
             console.debug(LOG_PREFIX, '官方聊天截断接口不可用', error);
         }
         this.bind(this.eventTypes.CHAT_CHANGED, () => this.handleChatChanged());
-        this.bind(this.eventTypes.MORE_MESSAGES_LOADED, () => this.cancelInitialBottom());
+        this.bind(this.eventTypes.MORE_MESSAGES_LOADED, () => this.handleMoreMessagesLoaded());
         this.bind(this.eventTypes.GENERATION_STARTED, () => this.pauseCodeScanning());
         this.bind(this.eventTypes.GENERATION_STOPPED, () => this.refreshAfterGeneration());
         this.bind(this.eventTypes.GENERATION_ENDED, () => this.refreshAfterGeneration());
@@ -199,6 +199,15 @@ export class ChatOptimizer {
 
         this.activeChatKey = nextChatKey;
         this.settleInitialBottom();
+    }
+
+    handleMoreMessagesLoaded() {
+        // MORE_MESSAGES_LOADED and CHAT_CHANGED are not guaranteed to arrive in
+        // the same order. Claim the current chat here so a following chat event
+        // cannot mistake history pagination for the first entry into the chat.
+        const chatId = this.getCurrentChatId?.();
+        this.activeChatKey = chatId == null ? null : String(chatId);
+        this.cancelInitialBottom();
     }
 
     cancelInitialBottom() {

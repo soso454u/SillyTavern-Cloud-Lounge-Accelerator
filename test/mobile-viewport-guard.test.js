@@ -49,6 +49,18 @@ test('keeps the chat form above a touch keyboard and cleans up on stop', () => {
         },
     };
     const textarea = {};
+    let sheldBottom = 820;
+    const sheld = { getBoundingClientRect: () => ({ bottom: sheldBottom }) };
+    const chat = {
+        scrollHeight: 1600,
+        scrollTop: 780,
+        clientHeight: 820,
+        scrollCalls: [],
+        scrollTo(left, top) {
+            this.scrollCalls.push([left, top]);
+            this.scrollTop = top;
+        },
+    };
     const documentEvents = createEventTarget();
     const viewportEvents = createEventTarget();
     Object.assign(viewportEvents, { offsetTop: 10, height: 500 });
@@ -58,7 +70,11 @@ test('keeps the chat form above a touch keyboard and cleans up on stop', () => {
         body,
         activeElement: textarea,
         documentElement: { clientHeight: 820 },
-        querySelector: selector => selector === '#send_textarea' ? textarea : null,
+        querySelector: selector => ({
+            '#send_textarea': textarea,
+            '#sheld': sheld,
+            '#chat': chat,
+        })[selector] || null,
     };
     const windowRef = {
         ...windowEvents,
@@ -79,23 +95,41 @@ test('keeps the chat form above a touch keyboard and cleans up on stop', () => {
 
     assert.equal(guard.start(), true);
     assert.equal(classNames.has('cla-chat-keyboard'), true);
-    assert.equal(properties.get('--cla-keyboard-shift'), '-310px');
+    assert.equal(properties.get('--cla-keyboard-inset'), '310px');
+    frames.shift()();
+    assert.deepEqual(chat.scrollCalls, [[0, 1600]], 'a chat already at the bottom should remain anchored');
 
+    sheldBottom = 510;
     viewportEvents.height = 430;
     viewportEvents.listeners.get('resize')();
     frames.shift()();
-    assert.equal(properties.get('--cla-keyboard-shift'), '-380px');
+    assert.equal(properties.get('--cla-keyboard-inset'), '380px');
+    frames.shift()();
+
+    sheldBottom = 60;
+    windowRef.innerHeight = 440;
+    documentRef.documentElement.clientHeight = 440;
+    viewportEvents.offsetTop = 10;
+    viewportEvents.height = 430;
+    viewportEvents.listeners.get('resize')();
+    frames.shift()();
+    assert.equal(properties.get('--cla-keyboard-inset'), '0px', 'a layout already resized for the keyboard must not be lifted twice');
+    frames.shift()();
 
     documentRef.activeElement = null;
     documentEvents.listeners.get('focusout')({ type: 'focusout', target: textarea });
+    sheldBottom = 820;
+    windowRef.innerHeight = 820;
+    documentRef.documentElement.clientHeight = 820;
     viewportEvents.height = 600;
     viewportEvents.listeners.get('resize')();
     frames.shift()();
-    assert.equal(properties.get('--cla-keyboard-shift'), '-210px', 'closing animation should keep using compositor movement');
+    assert.equal(properties.get('--cla-keyboard-inset'), '210px', 'closing animation should keep following the visible viewport');
+    frames.shift()();
 
     guard.stop();
     assert.equal(classNames.has('cla-chat-keyboard'), false);
-    assert.equal(properties.has('--cla-keyboard-shift'), false);
+    assert.equal(properties.has('--cla-keyboard-inset'), false);
     assert.equal(viewportEvents.listeners.size, 0);
 });
 
