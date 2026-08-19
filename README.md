@@ -1,4 +1,4 @@
-# 云酒馆加速器 2.1.11
+# 云酒馆加速器 2.1.12
 
 让云端 SillyTavern 打开更快、长聊天更流畅，同时避免重复接管预设、正则和世界书的原生交互。安装后大部分功能都会自动工作，不需要手动调整复杂参数。
 
@@ -179,7 +179,7 @@ Initializing plugin from .../cloud-lounge-accelerator/server/index.js
 
 ## 更新与修复
 
-升级 2.1.11 后，“显示更多”不再被首屏落底逻辑误判。键盘弹出和收回都持续跟随真实可见视口，直到布局恢复稳定才解除避让，不再依赖某个系统的固定键盘动画时长。该逻辑同时适用于 iOS/iPadOS、Android 和 Windows 触屏/软键盘环境；浏览器已自行缩放可见区时不会二次上抬，贴底阅读时保持最后一条与输入区连续。请同步更新 UI 与服务端目录并重启 SillyTavern。
+升级 2.1.12 后，“显示更多”会以点击前的第一条已显示消息作为 DOM 锚点；即使 SillyTavern 首次渲染的媒体回调稍后再次要求落底，也会恢复到原阅读位置。键盘布局不再由插件监听 `visualViewport`、改写 `#sheld` 或逐帧贴底，而是交还 SillyTavern 自带的 `interactive-widget=resizes-content`、`100dvh` 与聊天区 `ResizeObserver`，避免插件和浏览器重复调整造成弹出/收回卡顿、二次上抬、巨大空隙或输入框飞到页面中间。该处理没有 iOS 专用分支，iOS/iPadOS、Android、Windows 触屏及桌面系统均走各自浏览器的原生布局。请同步更新 UI 与服务端目录并重启 SillyTavern。
 
 遇到样式、Worker 或资源不同步时，打开面板点击“修复插件”。它会：
 

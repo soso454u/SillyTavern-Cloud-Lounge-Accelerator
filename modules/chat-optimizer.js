@@ -67,6 +67,9 @@ export class ChatOptimizer {
         this.bottomSettleTimers = new Set();
         this.bottomSettleCleanup = null;
         this.activeChatKey = null;
+        this.historyAnchor = null;
+        this.historyAnchorFrame = null;
+        this.historyAnchorTimers = new Set();
     }
 
     async start({ legacyTruncation = null } = {}) {
@@ -105,6 +108,7 @@ export class ChatOptimizer {
         this.refreshChatBindings();
         await this.installHighlighter(generation);
         if (!this.started || generation !== this.generation) return;
+        this.installHistoryAnchorGuard();
         this.installSwipeGuard();
         this.onStatus?.('chat', '自动');
     }
@@ -193,21 +197,110 @@ export class ChatOptimizer {
         if (nextChatKey === null) {
             this.activeChatKey = null;
             this.cancelInitialBottom();
+            this.cancelHistoryAnchor();
             return;
         }
         if (nextChatKey === this.activeChatKey) return;
 
+        this.cancelHistoryAnchor();
         this.activeChatKey = nextChatKey;
         this.settleInitialBottom();
     }
 
     handleMoreMessagesLoaded() {
-        // MORE_MESSAGES_LOADED and CHAT_CHANGED are not guaranteed to arrive in
-        // the same order. Claim the current chat here so a following chat event
-        // cannot mistake history pagination for the first entry into the chat.
         const chatId = this.getCurrentChatId?.();
         this.activeChatKey = chatId == null ? null : String(chatId);
         this.cancelInitialBottom();
+        this.settleHistoryAnchor();
+    }
+
+    installHistoryAnchorGuard() {
+        this.onHistoryPointerDown = event => {
+            if (event.target?.closest?.('#show_more_messages')) {
+                this.captureHistoryAnchor();
+                return;
+            }
+            this.cancelHistoryAnchor();
+        };
+        this.onHistoryClick = event => {
+            if (event.target?.closest?.('#show_more_messages')) {
+                if (!this.historyAnchor) this.captureHistoryAnchor();
+                return;
+            }
+            this.cancelHistoryAnchor();
+        };
+        this.onHistoryUserInput = () => this.cancelHistoryAnchor();
+        document.addEventListener('pointerdown', this.onHistoryPointerDown, true);
+        document.addEventListener('click', this.onHistoryClick, true);
+        document.addEventListener('wheel', this.onHistoryUserInput, { passive: true, capture: true });
+        document.addEventListener('keydown', this.onHistoryUserInput, true);
+    }
+
+    captureHistoryAnchor() {
+        this.cancelInitialBottom();
+        this.cancelHistoryAnchor();
+        const chatElement = this.chatElement;
+        const anchor = chatElement?.querySelector?.('.mes[mesid]');
+        const top = Number(anchor?.getBoundingClientRect?.().top);
+        const chatId = this.getCurrentChatId?.();
+        if (!chatElement || !Number.isFinite(top) || chatId == null) return;
+        this.historyAnchor = {
+            anchor,
+            chatElement,
+            chatKey: String(chatId),
+            top,
+        };
+    }
+
+    restoreHistoryAnchor() {
+        const state = this.historyAnchor;
+        if (!state || !this.started || this.chatElement !== state.chatElement || state.anchor?.isConnected === false) {
+            this.cancelHistoryAnchor();
+            return;
+        }
+        const chatId = this.getCurrentChatId?.();
+        if (chatId == null || String(chatId) !== state.chatKey) {
+            this.cancelHistoryAnchor();
+            return;
+        }
+        const currentTop = Number(state.anchor?.getBoundingClientRect?.().top);
+        if (!Number.isFinite(currentTop)) {
+            this.cancelHistoryAnchor();
+            return;
+        }
+        const delta = currentTop - state.top;
+        if (Math.abs(delta) <= 0.5) return;
+        const currentScrollTop = Number(state.chatElement.scrollTop || 0);
+        state.chatElement.scrollTop = Math.max(0, currentScrollTop + delta);
+    }
+
+    settleHistoryAnchor() {
+        if (!this.historyAnchor) return;
+        this.restoreHistoryAnchor();
+        this.historyAnchorFrame = requestAnimationFrame(() => {
+            this.historyAnchorFrame = null;
+            this.restoreHistoryAnchor();
+        });
+        const schedule = (callback, delay) => {
+            const timer = setTimeout(() => {
+                this.historyAnchorTimers.delete(timer);
+                callback();
+            }, delay);
+            this.historyAnchorTimers.add(timer);
+        };
+        // SillyTavern starts its media watcher after debounce_timeout.short
+        // (200ms), then accepts loads for another 1000ms. Keep the DOM message
+        // anchor stable across that exact upstream window, then release it.
+        for (const delay of [80, 240, 600, 1100, 1280]) schedule(() => this.restoreHistoryAnchor(), delay);
+        schedule(() => this.cancelHistoryAnchor(), 1400);
+    }
+
+    cancelHistoryAnchor() {
+        if (this.historyAnchorFrame !== null) cancelAnimationFrame(this.historyAnchorFrame);
+        this.historyAnchorFrame = null;
+        for (const timer of this.historyAnchorTimers) clearTimeout(timer);
+        this.historyAnchorTimers.clear();
+        this.historyAnchor = null;
     }
 
     cancelInitialBottom() {
@@ -413,6 +506,7 @@ export class ChatOptimizer {
         this.started = false;
         this.generation += 1;
         this.cancelInitialBottom();
+        this.cancelHistoryAnchor();
         this.activeChatKey = null;
         for (const [name, handler] of this.eventHandlers) this.eventSource.removeListener(name, handler);
         this.eventHandlers = [];
@@ -446,6 +540,10 @@ export class ChatOptimizer {
         document.removeEventListener('touchend', this.onTouchEnd, true);
         document.removeEventListener('touchcancel', this.onTouchEnd, true);
         document.removeEventListener('click', this.onSwipeClick, true);
+        document.removeEventListener('pointerdown', this.onHistoryPointerDown, true);
+        document.removeEventListener('click', this.onHistoryClick, true);
+        document.removeEventListener('wheel', this.onHistoryUserInput, true);
+        document.removeEventListener('keydown', this.onHistoryUserInput, true);
         if (this.powerUser && Number.isFinite(this.originalTruncation)) {
             this.powerUser.chat_truncation = this.originalTruncation;
             this.saveSettings?.();

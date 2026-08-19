@@ -1,5 +1,13 @@
 # 更新记录
 
+## 2.1.12 — 上游消息锚点与原生键盘布局
+
+- 对照 SillyTavern 官方 `release` 与最新 `staging` 源码重做“显示更多”：在官方委托点击处理前记录第一条已显示消息的 DOM 坐标，旧消息插入后恢复同一消息的位置，不再依赖事件到达顺序或单次 `scrollHeight` 差值。
+- 覆盖 SillyTavern `printMessages()` 中约 1.2 秒的完整媒体加载落底窗口；图片、视频或音频稍后触发 `scrollChatToBottom()` 时仍会恢复阅读锚点，用户开始下一次触摸、滚动或按键后立即释放。
+- 移除插件的 `visualViewport` 监听、`#sheld` 高度覆写、键盘 inset CSS 与逐帧聊天落底，让输入区统一回归 SillyTavern 自带的 `interactive-widget=resizes-content`、`100dvh` 和 `ResizeObserver` 布局链。
+- 不再区分 iOS 专用补丁；iOS/iPadOS、Android、Windows 触屏及桌面浏览器均由各自浏览器与 SillyTavern 原生逻辑处理键盘弹出和收回，避免重复上抬、巨大空隙、卡顿和偶发飞位。
+- 版本统一升级到 2.1.12，Worker 使用新版本缓存名。
+
 ## 2.1.11 — 跨平台键盘收回稳定
 
 - 键盘收回不再使用固定 450ms 后直接解除补偿；输入框失焦后继续跟随 `visualViewport` 和实际遮挡高度，可见区归零并稳定 120ms 后才清理键盘布局。

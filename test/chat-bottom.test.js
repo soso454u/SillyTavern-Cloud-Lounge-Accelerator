@@ -131,6 +131,43 @@ test('claims history pagination as the current chat before a following chat even
     assert.equal(settleCalls, 0, 'history pagination must not become an initial-entry bottom settle');
 });
 
+test('restores the rendered message anchor after an upstream delayed bottom scroll', () => {
+    let anchorTop = 180;
+    const anchor = {
+        isConnected: true,
+        getBoundingClientRect: () => ({ top: anchorTop }),
+    };
+    const chatElement = {
+        scrollTop: 420,
+        querySelector: selector => selector === '.mes[mesid]' ? anchor : null,
+    };
+    const optimizer = new ChatOptimizer({ getCurrentChatId: () => 'chat-a' });
+    optimizer.started = true;
+    optimizer.chatElement = chatElement;
+    optimizer.cancelInitialBottom = () => {};
+
+    optimizer.captureHistoryAnchor();
+    chatElement.scrollTop = 2400;
+    anchorTop = -1800;
+    optimizer.restoreHistoryAnchor();
+
+    assert.equal(chatElement.scrollTop, 420, 'the same rendered message must return to its pre-click screen position');
+});
+
+test('releases a history anchor as soon as the user starts another interaction', () => {
+    const optimizer = new ChatOptimizer({ getCurrentChatId: () => 'chat-a' });
+    optimizer.started = true;
+    optimizer.chatElement = {
+        querySelector: () => ({ getBoundingClientRect: () => ({ top: 100 }) }),
+    };
+    optimizer.cancelInitialBottom = () => {};
+    optimizer.captureHistoryAnchor();
+    assert.ok(optimizer.historyAnchor);
+
+    optimizer.cancelHistoryAnchor();
+    assert.equal(optimizer.historyAnchor, null);
+});
+
 test('does not force the welcome screen to the bottom', () => {
     const chatElement = createChatElement(1);
     const optimizer = new ChatOptimizer({
