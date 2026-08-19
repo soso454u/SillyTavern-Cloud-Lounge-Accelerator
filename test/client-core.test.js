@@ -25,7 +25,7 @@ test('keeps every published version source in sync', async () => {
         import('../manifest.json', { with: { type: 'json' } }),
         import('../package.json', { with: { type: 'json' } }),
     ]);
-    assert.equal(CLIENT_VERSION, '2.1.12');
+    assert.equal(CLIENT_VERSION, '2.1.13');
     assert.equal(manifest.version, CLIENT_VERSION);
     assert.equal(packageJson.version, CLIENT_VERSION);
     assert.equal(ACCELERATOR_VERSION, CLIENT_VERSION);
@@ -126,9 +126,10 @@ test('removes the public safe-mode navigation entry and global takeover wording'
 });
 
 test('pauses chat scanning during generation and leaves native sortable ownership untouched', async () => {
-    const [chatSource, interactionSource, promptToggleSource, regexRefreshSource, regexUiSource, styles] = await Promise.all([
+    const [chatSource, interactionSource, keyboardSource, promptToggleSource, regexRefreshSource, regexUiSource, styles] = await Promise.all([
         readFile(new URL('../modules/chat-optimizer.js', import.meta.url), 'utf8'),
         readFile(new URL('../modules/interaction-optimizer.js', import.meta.url), 'utf8'),
+        readFile(new URL('../modules/keyboard-overlay-guard.js', import.meta.url), 'utf8'),
         readFile(new URL('../adapters/prompt-toggle.js', import.meta.url), 'utf8'),
         readFile(new URL('../modules/regex-refresh.js', import.meta.url), 'utf8'),
         readFile(new URL('../modules/regex-ui-adapter.js', import.meta.url), 'utf8'),
@@ -145,7 +146,10 @@ test('pauses chat scanning during generation and leaves native sortable ownershi
     assert.match(chatSource, /GENERATION_ENDED/);
     assert.match(chatSource, /if \(this\.isGenerating\?\.\(\)\) return/);
     assert.doesNotMatch(interactionSource, /SortableBridge|PointerDragEngine|PresetPanelAdapter|DrawerAnimationAdapter/);
+    assert.match(interactionSource, /KeyboardOverlayGuard/);
     assert.doesNotMatch(interactionSource, /MobileViewportGuard|visualViewport/);
+    assert.match(keyboardSource, /#form_sheld/);
+    assert.doesNotMatch(keyboardSource, /#sheld['"`]|scrollTo|scrollTop/);
     assert.match(promptToggleSource, /saveServiceSettings/);
     assert.match(promptToggleSource, /renderDebounced/);
     assert.doesNotMatch(promptToggleSource, /PromptManager\.prototype|\.render\s*=/);
@@ -153,6 +157,7 @@ test('pauses chat scanning during generation and leaves native sortable ownershi
     assert.match(regexRefreshSource, /recordsOnlyAffectChat/);
     assert.match(regexUiSource, /recordsOnlyAffectChat/);
     assert.doesNotMatch(styles, /content-visibility|contain-intrinsic-size|cla-drag-ghost/);
-    assert.doesNotMatch(styles, /cla-chat-keyboard|--cla-keyboard-inset/);
+    assert.match(styles, /cla-keyboard-overlay #form_sheld/);
+    assert.doesNotMatch(styles, /cla-keyboard-overlay #sheld|--cla-keyboard-inset/);
     assert.match(styles, /@media \(pointer: coarse\)/);
 });

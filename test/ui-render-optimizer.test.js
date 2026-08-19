@@ -138,7 +138,8 @@ test('styles desktop, popup lifecycle, and native sortable helpers without globa
     assert.match(styles, /:has\(\.ui-sortable-helper, \.sortable-drag, \.sortable-chosen\)/);
     assert.doesNotMatch(styles, /will-change:\s*height/);
     assert.match(styles, /@media \(max-width: 1000px\) and \(pointer: coarse\)/);
-    assert.doesNotMatch(styles, /cla-chat-keyboard|--cla-keyboard-inset/);
+    assert.match(styles, /cla-keyboard-overlay #form_sheld/);
+    assert.doesNotMatch(styles, /cla-keyboard-overlay #sheld|--cla-keyboard-inset/);
     assert.match(styles, /transition-property:\s*opacity, transform, display/);
     assert.match(styles, /height:\s*auto !important/);
     assert.match(styles, /@starting-style/);
