@@ -1,7 +1,10 @@
 const KEYBOARD_CLASS = 'cla-keyboard-overlay';
+const KEYBOARD_CLOSING_CLASS = 'cla-keyboard-closing';
 const KEYBOARD_SHIFT_PROPERTY = '--cla-keyboard-shift';
-const CLOSE_STABLE_MS = 120;
-const CLOSE_FALLBACK_MS = 2000;
+const CLOSE_RELEASE_DELAY_MS = 160;
+const CLOSE_RELEASE_DURATION_MS = 80;
+const CLOSE_SNAP_MIN_PX = 48;
+const CLOSE_SNAP_MAX_PX = 96;
 
 export function getVisualViewportBottom(windowRef = globalThis.window) {
     const viewport = windowRef?.visualViewport;
@@ -23,6 +26,12 @@ export function calculateKeyboardLift({ formBottom, viewportBottom, appliedLift 
     const naturalBottom = values[0] + Math.max(0, values[2]);
     const lift = Math.max(0, Math.round(naturalBottom - values[1]));
     return lift <= tolerance ? 0 : lift;
+}
+
+export function getCloseSnapThreshold(formHeight) {
+    const height = Number(formHeight);
+    const relativeThreshold = Number.isFinite(height) ? Math.round(height * 0.25) : CLOSE_SNAP_MIN_PX;
+    return Math.min(CLOSE_SNAP_MAX_PX, Math.max(CLOSE_SNAP_MIN_PX, relativeThreshold));
 }
 
 export class KeyboardOverlayGuard {
@@ -47,10 +56,11 @@ export class KeyboardOverlayGuard {
         this.started = false;
         this.engaged = false;
         this.closing = false;
+        this.releasing = false;
         this.appliedLift = 0;
         this.frame = null;
-        this.closeStableTimer = null;
-        this.closeFallbackTimer = null;
+        this.closeReleaseTimer = null;
+        this.releaseCleanupTimer = null;
         this.onFocusChange = this.onFocusChange.bind(this);
         this.onViewportChange = this.onViewportChange.bind(this);
     }
@@ -79,12 +89,9 @@ export class KeyboardOverlayGuard {
 
     onFocusChange(event) {
         const textarea = this.document.querySelector?.('#send_textarea');
-        this.clearTimer(this.closeStableTimer);
-        this.closeStableTimer = null;
-        this.clearTimer(this.closeFallbackTimer);
-        this.closeFallbackTimer = null;
 
         if (event?.type === 'focusin') {
+            this.cancelClosingRelease();
             if (event.target !== textarea) {
                 this.engaged = false;
                 this.closing = false;
@@ -99,13 +106,7 @@ export class KeyboardOverlayGuard {
 
         if (event?.target !== textarea && !this.engaged) return;
         this.closing = true;
-        this.closeFallbackTimer = this.setTimer(() => {
-            this.closeFallbackTimer = null;
-            if (this.document.activeElement === textarea) return;
-            this.engaged = false;
-            this.closing = false;
-            this.clearShift();
-        }, CLOSE_FALLBACK_MS);
+        this.scheduleClosingRelease(textarea);
         this.scheduleSync();
     }
 
@@ -125,14 +126,20 @@ export class KeyboardOverlayGuard {
         if (!this.started) return;
         const textarea = this.document.querySelector?.('#send_textarea');
         const focused = textarea && this.document.activeElement === textarea;
-        if (focused) this.engaged = true;
+        if (focused) {
+            this.cancelClosingRelease();
+            this.engaged = true;
+            this.closing = false;
+        }
         if (!this.engaged) {
             this.clearShift();
             return;
         }
+        if (this.releasing) return;
 
         const form = this.document.querySelector?.('#form_sheld');
-        const formBottom = Number(form?.getBoundingClientRect?.().bottom);
+        const formRect = form?.getBoundingClientRect?.();
+        const formBottom = Number(formRect?.bottom);
         const viewportBottom = getVisualViewportBottom(this.window);
         if (!form || !Number.isFinite(formBottom) || viewportBottom === null) {
             this.clearShift();
@@ -144,47 +151,72 @@ export class KeyboardOverlayGuard {
             viewportBottom,
             appliedLift: this.appliedLift,
         });
-        this.applyLift(lift);
-        if (this.closing && lift === 0) this.finishCloseWhenStable(textarea);
-        else if (lift > 0 && this.closeStableTimer !== null) {
-            this.clearTimer(this.closeStableTimer);
-            this.closeStableTimer = null;
+        if (!this.closing && this.appliedLift > 0 && lift < this.appliedLift) {
+            // iOS may keep the textarea focused when the keyboard is dismissed
+            // from its own UI. A falling measured lift is still a close signal.
+            this.closing = true;
+            this.scheduleClosingRelease(textarea);
         }
+        if (this.closing && lift <= getCloseSnapThreshold(formRect?.height)) {
+            this.beginClosingRelease(form, textarea);
+            return;
+        }
+        this.applyLift(form, lift);
     }
 
-    applyLift(lift) {
+    applyLift(form, lift) {
+        if (!form) return;
         if (lift <= 0) {
             this.clearShift();
             return;
         }
-        if (lift === this.appliedLift && this.document.body.classList?.contains?.(KEYBOARD_CLASS)) return;
+        if (lift === this.appliedLift && form.classList?.contains?.(KEYBOARD_CLASS)) return;
         this.appliedLift = lift;
-        this.document.body.style?.setProperty?.(KEYBOARD_SHIFT_PROPERTY, `${-lift}px`);
-        this.document.body.classList?.add?.(KEYBOARD_CLASS);
+        form.classList?.remove?.(KEYBOARD_CLOSING_CLASS);
+        form.style?.setProperty?.(KEYBOARD_SHIFT_PROPERTY, `${-lift}px`);
+        form.classList?.add?.(KEYBOARD_CLASS);
     }
 
-    finishCloseWhenStable(textarea) {
-        if (this.closeStableTimer !== null) return;
-        this.closeStableTimer = this.setTimer(() => {
-            this.closeStableTimer = null;
+    scheduleClosingRelease(textarea) {
+        if (this.closeReleaseTimer !== null || this.releasing) return;
+        this.closeReleaseTimer = this.setTimer(() => {
+            this.closeReleaseTimer = null;
             if (!this.started || !this.closing) return;
-            if (this.document.activeElement === textarea) {
-                this.engaged = true;
-                this.closing = false;
-                return;
-            }
-            this.clearTimer(this.closeFallbackTimer);
-            this.closeFallbackTimer = null;
-            this.engaged = false;
+            this.beginClosingRelease(this.document.querySelector?.('#form_sheld'), textarea);
+        }, CLOSE_RELEASE_DELAY_MS);
+    }
+
+    beginClosingRelease(form, textarea) {
+        if (!form || this.releasing) return;
+        this.clearTimer(this.closeReleaseTimer);
+        this.closeReleaseTimer = null;
+        this.releasing = true;
+        this.appliedLift = 0;
+        form.classList?.add?.(KEYBOARD_CLASS, KEYBOARD_CLOSING_CLASS);
+        form.style?.setProperty?.(KEYBOARD_SHIFT_PROPERTY, '0px');
+        this.releaseCleanupTimer = this.setTimer(() => {
+            this.releaseCleanupTimer = null;
+            if (!this.started || !this.releasing) return;
+            this.releasing = false;
             this.closing = false;
+            this.engaged = this.document.activeElement === textarea;
             this.clearShift();
-        }, CLOSE_STABLE_MS);
+        }, CLOSE_RELEASE_DURATION_MS);
+    }
+
+    cancelClosingRelease() {
+        this.clearTimer(this.closeReleaseTimer);
+        this.closeReleaseTimer = null;
+        this.clearTimer(this.releaseCleanupTimer);
+        this.releaseCleanupTimer = null;
+        this.releasing = false;
     }
 
     clearShift() {
         this.appliedLift = 0;
-        this.document?.body?.classList?.remove?.(KEYBOARD_CLASS);
-        this.document?.body?.style?.removeProperty?.(KEYBOARD_SHIFT_PROPERTY);
+        const form = this.document?.querySelector?.('#form_sheld');
+        form?.classList?.remove?.(KEYBOARD_CLASS, KEYBOARD_CLOSING_CLASS);
+        form?.style?.removeProperty?.(KEYBOARD_SHIFT_PROPERTY);
     }
 
     stop() {
@@ -192,6 +224,7 @@ export class KeyboardOverlayGuard {
         this.started = false;
         this.engaged = false;
         this.closing = false;
+        this.releasing = false;
         this.document.removeEventListener('focusin', this.onFocusChange, true);
         this.document.removeEventListener('focusout', this.onFocusChange, true);
         this.window.visualViewport?.removeEventListener?.('resize', this.onViewportChange);
@@ -199,10 +232,7 @@ export class KeyboardOverlayGuard {
         this.window.removeEventListener?.('orientationchange', this.onViewportChange);
         if (this.frame !== null) this.cancelFrame(this.frame);
         this.frame = null;
-        this.clearTimer(this.closeStableTimer);
-        this.closeStableTimer = null;
-        this.clearTimer(this.closeFallbackTimer);
-        this.closeFallbackTimer = null;
+        this.cancelClosingRelease();
         this.clearShift();
     }
 }

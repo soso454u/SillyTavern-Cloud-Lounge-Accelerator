@@ -26,10 +26,10 @@ test('builds an app signature from core SillyTavern files without exposing crede
         const runtime = await readRuntimeInfo({
             configPath: join(directory, 'config.yaml'),
             rootPath: directory,
-            version: '2.1.13',
+            version: '2.1.14',
         });
         assert.equal(runtime.basicAuthMode, true);
-        assert.match(runtime.appSignature, /^2\.1\.13:public\/script\.js:/);
+        assert.match(runtime.appSignature, /^2\.1\.14:public\/script\.js:/);
         assert.doesNotMatch(JSON.stringify(runtime), /secret-value/);
     } finally {
         await rm(directory, { recursive: true, force: true });

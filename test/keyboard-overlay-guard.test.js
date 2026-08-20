@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
     calculateKeyboardLift,
+    getCloseSnapThreshold,
     getVisualViewportBottom,
     KeyboardOverlayGuard,
 } from '../modules/keyboard-overlay-guard.js';
@@ -15,6 +16,12 @@ test('measures only the part of the form that is actually below the visual viewp
 
 test('does not compound a transform already applied to the input form', () => {
     assert.equal(calculateKeyboardLift({ formBottom: 620, viewportBottom: 620, appliedLift: 380 }), 380);
+});
+
+test('uses a bounded closing snap threshold for short and tall input panels', () => {
+    assert.equal(getCloseSnapThreshold(80), 48);
+    assert.equal(getCloseSnapThreshold(320), 80);
+    assert.equal(getCloseSnapThreshold(900), 96);
 });
 
 test('uses visual viewport layout coordinates and clamps them to the page', () => {
@@ -31,23 +38,29 @@ test('uses visual viewport layout coordinates and clamps them to the page', () =
 test('lifts only the form on an overlay keyboard and cleans up without scrolling', () => {
     const classes = new Set();
     const properties = new Map();
+    const timers = new Map();
+    let nextTimer = 1;
     const textarea = {};
     let formBottom = 1000;
-    const form = { getBoundingClientRect: () => ({ bottom: formBottom }) };
+    const form = {
+        getBoundingClientRect: () => ({ bottom: formBottom, height: 320 }),
+        classList: {
+            add: (...names) => names.forEach(name => classes.add(name)),
+            remove: (...names) => names.forEach(name => classes.delete(name)),
+            contains: name => classes.has(name),
+        },
+        style: {
+            setProperty: (name, value) => properties.set(name, value),
+            removeProperty: name => properties.delete(name),
+        },
+    };
     const listeners = new Map();
     const viewportListeners = new Map();
     const documentRef = {
         activeElement: textarea,
         body: {
-            classList: {
-                add: name => classes.add(name),
-                remove: name => classes.delete(name),
-                contains: name => classes.has(name),
-            },
-            style: {
-                setProperty: (name, value) => properties.set(name, value),
-                removeProperty: name => properties.delete(name),
-            },
+            classList: {},
+            style: {},
         },
         querySelector(selector) {
             if (selector === '#send_textarea') return textarea;
@@ -75,6 +88,12 @@ test('lifts only the form on an overlay keyboard and cleans up without scrolling
         navigatorRef: { maxTouchPoints: 5 },
         requestFrame: callback => callback(),
         cancelFrame() {},
+        setTimer(callback, delay) {
+            const id = nextTimer++;
+            timers.set(id, { callback, delay });
+            return id;
+        },
+        clearTimer: id => timers.delete(id),
     });
 
     assert.equal(guard.start(), true);
@@ -85,9 +104,16 @@ test('lifts only the form on an overlay keyboard and cleans up without scrolling
     guard.sync();
     assert.equal(properties.get('--cla-keyboard-shift'), '-400px', 'the existing transform must not be applied twice');
 
-    windowRef.visualViewport.height = 1000;
-    guard.sync();
-    assert.equal(classes.has('cla-keyboard-overlay'), false, 'the form must return immediately as the viewport expands');
+    documentRef.activeElement = null;
+    guard.onFocusChange({ type: 'focusout', target: textarea });
+    const release = [...timers.values()].find(timer => timer.delay === 160);
+    release.callback();
+    assert.equal(properties.get('--cla-keyboard-shift'), '0px', 'a missed viewport close event must still start the form return');
+    assert.equal(classes.has('cla-keyboard-closing'), true);
+
+    const cleanup = [...timers.values()].find(timer => timer.delay === 80);
+    cleanup.callback();
+    assert.equal(classes.has('cla-keyboard-overlay'), false);
     assert.equal(properties.has('--cla-keyboard-shift'), false);
 
     guard.stop();

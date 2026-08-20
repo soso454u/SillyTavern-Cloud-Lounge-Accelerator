@@ -25,7 +25,7 @@ test('keeps every published version source in sync', async () => {
         import('../manifest.json', { with: { type: 'json' } }),
         import('../package.json', { with: { type: 'json' } }),
     ]);
-    assert.equal(CLIENT_VERSION, '2.1.13');
+    assert.equal(CLIENT_VERSION, '2.1.14');
     assert.equal(manifest.version, CLIENT_VERSION);
     assert.equal(packageJson.version, CLIENT_VERSION);
     assert.equal(ACCELERATOR_VERSION, CLIENT_VERSION);
@@ -150,6 +150,7 @@ test('pauses chat scanning during generation and leaves native sortable ownershi
     assert.doesNotMatch(interactionSource, /MobileViewportGuard|visualViewport/);
     assert.match(keyboardSource, /#form_sheld/);
     assert.doesNotMatch(keyboardSource, /#sheld['"`]|scrollTo|scrollTop/);
+    assert.doesNotMatch(keyboardSource, /body\.style|body\.classList/);
     assert.match(promptToggleSource, /saveServiceSettings/);
     assert.match(promptToggleSource, /renderDebounced/);
     assert.doesNotMatch(promptToggleSource, /PromptManager\.prototype|\.render\s*=/);
@@ -157,7 +158,8 @@ test('pauses chat scanning during generation and leaves native sortable ownershi
     assert.match(regexRefreshSource, /recordsOnlyAffectChat/);
     assert.match(regexUiSource, /recordsOnlyAffectChat/);
     assert.doesNotMatch(styles, /content-visibility|contain-intrinsic-size|cla-drag-ghost/);
-    assert.match(styles, /cla-keyboard-overlay #form_sheld/);
+    assert.match(styles, /#form_sheld\.cla-keyboard-overlay/);
+    assert.match(styles, /cla-keyboard-closing[\s\S]*transition:\s*translate 80ms/);
     assert.doesNotMatch(styles, /cla-keyboard-overlay #sheld|--cla-keyboard-inset/);
     assert.match(styles, /@media \(pointer: coarse\)/);
 });
