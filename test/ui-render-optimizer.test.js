@@ -45,8 +45,8 @@ test('marks only the active top drawer and cleans temporary render hints', () =>
     const drawer = { querySelector: () => content };
     const toggle = { closest: selector => selector === '.drawer' ? drawer : toggle };
     const target = { closest: () => toggle };
-    let frameCallback = null;
     let timerCallback = null;
+    let timerDelay = null;
     const documentRef = {
         body: { classList: bodyClasses },
         styleSheets: [{ cssRules: [styleRule()] }],
@@ -58,13 +58,9 @@ test('marks only the active top drawer and cleans temporary render hints', () =>
         documentRef,
         navigatorRef: { userAgent: 'iPhone', maxTouchPoints: 5 },
         matchMedia: () => ({ matches: true }),
-        requestFrame(callback) {
-            frameCallback = callback;
-            return 1;
-        },
-        cancelFrame() {},
-        setTimer(callback) {
+        setTimer(callback, delay) {
             timerCallback = callback;
+            timerDelay = delay;
             return 2;
         },
         clearTimer() {},
@@ -76,7 +72,7 @@ test('marks only the active top drawer and cleans temporary render hints', () =>
     assert.equal(bodyClasses.contains('cla-fast-ui'), true);
     assert.equal(bodyClasses.contains('cla-ui-webkit'), true);
     assert.equal(documentRef.styleSheets[0].cssRules[0].selectorText, LEGACY_SELECTOR);
-    assert.equal(frameCallback, null);
+    assert.equal(timerDelay, 124);
     timerCallback();
     assert.equal(contentClasses.contains('cla-ui-closing'), false);
     optimizer.stop();

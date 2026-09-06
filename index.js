@@ -34,14 +34,7 @@ let appReady = false;
 let panel = null;
 let panelTimer = null;
 let panelRetries = 0;
-let cacheController = null;
-let startupOptimizer = null;
-let chatOptimizer = null;
-let regexRefresh = null;
-let regexUiAdapter = null;
-let interactionOptimizer = null;
-let performanceConfig = null;
-let scheduler = null;
+let runtime = null;
 const runtimeStatus = { chat: '自动', interaction: '自动' };
 
 function loadSettings() {
@@ -63,16 +56,15 @@ function updateRuntimeStatus(key, value) {
     void panel?.refresh();
 }
 
-function ensureModules() {
-    if (scheduler) return;
-    scheduler = new FrameScheduler({
+function createRuntime() {
+    const scheduler = new FrameScheduler({
         budgetMs: 9,
         onError: error => {
             if (error?.name !== 'AbortError') console.debug(LOG_PREFIX, '分帧任务失败', error);
         },
     });
-    cacheController = new CacheController({ onStatus: updateRuntimeStatus });
-    chatOptimizer = new ChatOptimizer({
+    const cacheController = new CacheController({ onStatus: updateRuntimeStatus });
+    const chatOptimizer = new ChatOptimizer({
         eventSource,
         eventTypes: event_types,
         chat,
@@ -84,14 +76,14 @@ function ensureModules() {
         refreshSwipeButtons,
         onStatus: updateRuntimeStatus,
     });
-    startupOptimizer = new StartupOptimizer({
+    const startupOptimizer = new StartupOptimizer({
         eventSource,
         eventTypes: event_types,
         getCurrentChatId,
         onChatPayload: messages => chatOptimizer.inspectPayload(messages),
         onStatus: value => updateRuntimeStatus('startup', value),
     });
-    regexRefresh = new RegexRefreshController({
+    const regexRefresh = new RegexRefreshController({
         chat,
         eventSource,
         eventTypes: event_types,
@@ -99,19 +91,41 @@ function ensureModules() {
         scheduler,
         onStatus: updateRuntimeStatus,
     });
-    regexUiAdapter = new RegexUiAdapter({ onSaved: () => regexRefresh.noteChange() });
-    interactionOptimizer = new InteractionOptimizer({
+    const regexUiAdapter = new RegexUiAdapter({ onSaved: () => regexRefresh.noteChange() });
+    const interactionOptimizer = new InteractionOptimizer({
         isGenerating,
         eventSource,
         eventTypes: event_types,
         onStatus: updateRuntimeStatus,
     });
-    performanceConfig = new PerformanceConfigController({ getRequestHeaders });
+    const performanceConfig = new PerformanceConfigController({ getRequestHeaders });
+    return {
+        cacheController,
+        chatOptimizer,
+        interactionOptimizer,
+        performanceConfig,
+        regexRefresh,
+        regexUiAdapter,
+        scheduler,
+        startupOptimizer,
+    };
+}
+
+function getRuntime() {
+    runtime ??= createRuntime();
+    return runtime;
 }
 
 async function startEnabledModules({ skipCache = false, forceCache = false } = {}) {
     if (!activated) return;
-    ensureModules();
+    const {
+        cacheController,
+        chatOptimizer,
+        interactionOptimizer,
+        regexRefresh,
+        regexUiAdapter,
+        startupOptimizer,
+    } = getRuntime();
     let chatStart = null;
     if (settings.chatOptimization) {
         chatStart = chatOptimizer.start({ legacyTruncation });
@@ -141,13 +155,14 @@ async function startEnabledModules({ skipCache = false, forceCache = false } = {
 }
 
 async function stopOptimizationModules({ stopCache = false } = {}) {
-    startupOptimizer?.stop();
-    regexUiAdapter?.stop();
-    regexRefresh?.stop();
-    await chatOptimizer?.stop();
-    interactionOptimizer?.stop();
-    scheduler?.cancelAll('优化模块正在重启');
-    if (stopCache) await cacheController?.stop({ clear: true });
+    if (!runtime) return;
+    runtime.startupOptimizer.stop();
+    runtime.regexUiAdapter.stop();
+    runtime.regexRefresh.stop();
+    await runtime.chatOptimizer.stop();
+    runtime.interactionOptimizer.stop();
+    runtime.scheduler.cancelAll('优化模块正在重启');
+    if (stopCache) await runtime.cacheController.stop({ clear: true });
 }
 
 async function restartModules({ stopOnly = false, skipCache = false } = {}) {
@@ -155,42 +170,55 @@ async function restartModules({ stopOnly = false, skipCache = false } = {}) {
     if (!stopOnly) await startEnabledModules({ skipCache });
 }
 
+async function changePageAcceleration(enabled, current) {
+    if (enabled) {
+        current.startupOptimizer.start({ startupFeatures: true });
+        if (appReady) await current.cacheController.startAfterLogin();
+        return;
+    }
+    if (settings.chatOptimization) current.startupOptimizer.start({ startupFeatures: false });
+    else current.startupOptimizer.stop();
+    await current.cacheController.stop({ clear: true });
+}
+
+async function changeChatOptimization(enabled, current) {
+    if (!enabled) {
+        current.regexUiAdapter.stop();
+        current.regexRefresh.stop();
+        await current.chatOptimizer.stop();
+        if (!settings.pageAcceleration) current.startupOptimizer.stop();
+        return;
+    }
+    const chatStart = current.chatOptimizer.start({ legacyTruncation });
+    current.startupOptimizer.start({ startupFeatures: settings.pageAcceleration });
+    await chatStart;
+    legacyTruncation = null;
+    if (!appReady) return;
+    const refreshReady = await current.regexRefresh.start();
+    if (refreshReady) await current.regexUiAdapter.start();
+}
+
+async function changeInteractionOptimization(enabled, current) {
+    if (enabled) await current.interactionOptimizer.start();
+    else current.interactionOptimizer.stop();
+}
+
+const settingHandlers = Object.freeze({
+    pageAcceleration: changePageAcceleration,
+    chatOptimization: changeChatOptimization,
+    interactionOptimization: changeInteractionOptimization,
+});
+
 async function changeSetting(key, enabled) {
+    const handler = settingHandlers[key];
     settings[key] = enabled;
     persistSettings();
-    if (key === 'pageAcceleration') {
-        if (enabled) {
-            startupOptimizer.start({ startupFeatures: true });
-            if (appReady) await cacheController.startAfterLogin();
-        } else {
-            if (settings.chatOptimization) startupOptimizer.start({ startupFeatures: false });
-            else startupOptimizer.stop();
-            await cacheController.stop({ clear: true });
-        }
-    } else if (key === 'chatOptimization') {
-        if (enabled) {
-            const chatStart = chatOptimizer.start({ legacyTruncation });
-            startupOptimizer.start({ startupFeatures: settings.pageAcceleration });
-            await chatStart;
-            legacyTruncation = null;
-            if (appReady) {
-                const refreshReady = await regexRefresh.start();
-                if (refreshReady) await regexUiAdapter.start();
-            }
-        } else {
-            regexUiAdapter.stop();
-            regexRefresh.stop();
-            await chatOptimizer.stop();
-            if (!settings.pageAcceleration) startupOptimizer.stop();
-        }
-    } else if (key === 'interactionOptimization') {
-        if (enabled) await interactionOptimizer.start();
-        else interactionOptimizer.stop();
-    }
+    if (handler) await handler(enabled, getRuntime());
     await panel?.refresh();
 }
 
 async function getPanelStatus() {
+    const { cacheController, performanceConfig } = getRuntime();
     const [, performance] = await Promise.all([
         cacheController?.state === 'available' ? cacheController.refreshStats() : null,
         performanceConfig?.refresh(),
@@ -204,6 +232,7 @@ async function getPanelStatus() {
 }
 
 async function changePerformanceSetting(key, enabled) {
+    const { performanceConfig } = getRuntime();
     const result = await performanceConfig.set(key, enabled);
     await panel?.refresh();
     return result;
@@ -211,13 +240,14 @@ async function changePerformanceSetting(key, enabled) {
 
 function mountPanel() {
     if (!settings) loadSettings();
+    getRuntime();
     panel ??= new SettingsPanel({
         settings,
         onSettingChange: changeSetting,
         onPerformanceChange: changePerformanceSetting,
-        onRerender: () => regexRefresh.reapply({ automatic: false }),
+        onRerender: () => getRuntime().regexRefresh.reapply({ automatic: false }),
         onRepair: () => settings.pageAcceleration
-            ? repairAccelerator({ cacheController, restartModules })
+            ? repairAccelerator({ cacheController: getRuntime().cacheController, restartModules })
             : restartModules().then(() => ({ warmed: 0 })),
         getStatus: getPanelStatus,
     });
@@ -245,7 +275,7 @@ eventSource.once(event_types.APP_READY, () => {
 export function onActivate() {
     activated = true;
     loadSettings();
-    ensureModules();
+    getRuntime();
     ensurePanel();
     void startEnabledModules();
 }
@@ -263,15 +293,8 @@ async function cleanup() {
     panel?.remove();
     panel = null;
     await stopOptimizationModules({ stopCache: true });
-    scheduler?.destroy();
-    scheduler = null;
-    cacheController = null;
-    startupOptimizer = null;
-    chatOptimizer = null;
-    regexRefresh = null;
-    regexUiAdapter = null;
-    interactionOptimizer = null;
-    performanceConfig = null;
+    runtime?.scheduler.destroy();
+    runtime = null;
 }
 
 export async function onDisable() {

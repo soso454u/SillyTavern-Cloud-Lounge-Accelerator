@@ -20,6 +20,10 @@ test('enables the mobile guard only for touch or coarse-pointer devices', () => 
         navigatorRef: { maxTouchPoints: 0 },
         matchMedia: () => ({ matches: false }),
     }), false);
+    assert.equal(isTouchEnvironment({
+        navigatorRef: { maxTouchPoints: 0 },
+        matchMedia: () => { throw new Error('media query unavailable'); },
+    }), false);
 });
 
 test('reveals a minimized quick reply runner only after its modal backdrop is tapped', () => {

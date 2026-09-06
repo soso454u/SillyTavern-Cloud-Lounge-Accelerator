@@ -1,12 +1,9 @@
+import { isTouchEnvironment as detectTouchEnvironment } from '../utils/device-profile.js';
+
 const LOG_PREFIX = '[Cloud Lounge Accelerator]';
 
 export function isTouchEnvironment({ navigatorRef = globalThis.navigator, matchMedia = globalThis.matchMedia } = {}) {
-    if (Number(navigatorRef?.maxTouchPoints || 0) > 0) return true;
-    try {
-        return Boolean(matchMedia?.('(pointer: coarse)')?.matches);
-    } catch {
-        return false;
-    }
+    return detectTouchEnvironment({ navigatorRef, matchMediaRef: matchMedia });
 }
 
 export function getQuickReplyRecoveryReason({

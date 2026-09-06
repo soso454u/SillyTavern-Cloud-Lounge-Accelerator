@@ -4,6 +4,12 @@ import { InputRevealGuard, restoreNativeInputLayout } from './native-input.js';
 import { MobileInteractionGuard } from './mobile-interaction-guard.js';
 import { UiRenderOptimizer } from './ui-render-optimizer.js';
 
+const RENDER_PROFILE_LABELS = Object.freeze({
+    desktop: '桌面流畅',
+    balanced: '触屏流畅',
+    webkit: 'WebKit 流畅',
+});
+
 export class InteractionOptimizer {
     constructor({ isGenerating, eventSource, eventTypes, onStatus = null } = {}) {
         this.onStatus = onStatus;
@@ -34,11 +40,7 @@ export class InteractionOptimizer {
             this.uiRender.start(),
         ]);
         if (!this.started) {
-            this.promptToggle.stop();
-            this.recoveryGuard.stop();
-            this.mobileGuard.stop();
-            this.inputReveal.stop();
-            this.uiRender.stop();
+            this.stopFeatures();
             return;
         }
         this.features = { promptToggleActive, recoveryGuardActive, mobileGuardActive, inputRevealActive, renderProfile };
@@ -65,9 +67,7 @@ export class InteractionOptimizer {
         } = this.features || {};
         const status = [
             promptToggleActive ? '预设即时切换' : null,
-            renderProfile === 'webkit'
-                ? 'WebKit 流畅'
-                : (renderProfile === 'balanced' ? '触屏流畅' : (renderProfile === 'desktop' ? '桌面流畅' : null)),
+            RENDER_PROFILE_LABELS[renderProfile],
             recoveryGuardActive ? '全平台自愈' : null,
             mobileGuardActive ? '触控保护' : null,
             '原生输入布局',
@@ -79,15 +79,19 @@ export class InteractionOptimizer {
         this.onStatus?.('interaction', status || '原生');
     }
 
-    stop() {
-        if (!this.started) return;
-        this.started = false;
+    stopFeatures() {
         this.promptToggle.stop();
         this.recoveryGuard.stop();
         this.mobileGuard.stop();
         this.inputReveal.stop();
         restoreNativeInputLayout();
         this.uiRender.stop();
+    }
+
+    stop() {
+        if (!this.started) return;
+        this.started = false;
+        this.stopFeatures();
         this.features = null;
         this.lastRecovery = null;
         this.recoveryCount = 0;

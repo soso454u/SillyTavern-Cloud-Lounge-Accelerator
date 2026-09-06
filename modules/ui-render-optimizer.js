@@ -1,18 +1,13 @@
+import { detectRenderProfile, matchesMedia } from '../utils/device-profile.js';
+
+export { detectRenderProfile };
+
 const TRANSITION_CLASSES = ['cla-ui-opening', 'cla-ui-closing'];
-export function detectRenderProfile({
-    userAgent = globalThis.navigator?.userAgent || '',
-    platform = globalThis.navigator?.platform || '',
-    maxTouchPoints = globalThis.navigator?.maxTouchPoints || 0,
-    coarsePointer = false,
-} = {}) {
-    const touch = Number(maxTouchPoints) > 0 || coarsePointer === true;
-    if (!touch) return 'desktop';
-    const webkitMobile = !/Android/i.test(userAgent) && (
-        /iPad|iPhone|iPod/i.test(userAgent)
-        || (platform === 'MacIntel' && Number(maxTouchPoints) > 1)
-    );
-    return webkitMobile ? 'webkit' : 'balanced';
-}
+const TRANSITION_DURATIONS_MS = Object.freeze({
+    desktop: Object.freeze({ opening: 160, closing: 130 }),
+    balanced: Object.freeze({ opening: 90, closing: 70 }),
+    webkit: Object.freeze({ opening: 80, closing: 60 }),
+});
 
 export class UiRenderOptimizer {
     constructor({
@@ -22,8 +17,6 @@ export class UiRenderOptimizer {
         matchMedia = globalThis.matchMedia,
         setTimer = globalThis.setTimeout,
         clearTimer = globalThis.clearTimeout,
-        requestFrame = callback => globalThis.requestAnimationFrame?.(callback) ?? setTimer(callback, 16),
-        cancelFrame = handle => globalThis.cancelAnimationFrame?.(handle) ?? clearTimer(handle),
     } = {}) {
         this.document = documentRef;
         this.window = windowRef;
@@ -31,8 +24,6 @@ export class UiRenderOptimizer {
         this.matchMedia = matchMedia;
         this.setTimer = setTimer;
         this.clearTimer = clearTimer;
-        this.requestFrame = requestFrame;
-        this.cancelFrame = cancelFrame;
         this.profile = null;
         this.pending = new Map();
         this.started = false;
@@ -42,17 +33,11 @@ export class UiRenderOptimizer {
 
     start() {
         if (this.started) return this.profile;
-        let coarsePointer = false;
-        try {
-            coarsePointer = Boolean(this.matchMedia?.('(pointer: coarse)')?.matches);
-        } catch {
-            coarsePointer = false;
-        }
         this.profile = detectRenderProfile({
             userAgent: this.navigator?.userAgent,
             platform: this.navigator?.platform,
             maxTouchPoints: this.navigator?.maxTouchPoints,
-            coarsePointer,
+            coarsePointer: matchesMedia('(pointer: coarse)', this.matchMedia),
         });
         if (!this.profile || !this.document?.body) return null;
 
@@ -90,23 +75,17 @@ export class UiRenderOptimizer {
         content.classList.remove(...TRANSITION_CLASSES);
         content.classList.add(`cla-ui-${phase}`);
 
-        const durations = {
-            desktop: { opening: 160, closing: 130 },
-            balanced: { opening: 90, closing: 70 },
-            webkit: { opening: 80, closing: 60 },
-        };
-        const duration = durations[this.profile]?.[phase] ?? durations.desktop[phase];
+        const duration = TRANSITION_DURATIONS_MS[this.profile]?.[phase]
+            ?? TRANSITION_DURATIONS_MS.desktop[phase];
         // Cleanup must not wait for an animation frame that Safari can suspend
         // during keyboard/selection UI or when returning from the background.
-        const state = { frame: null, timer: null };
-        state.timer = this.setTimer(() => this.clearTransition(content), duration + 64);
-        this.pending.set(content, state);
+        const timer = this.setTimer(() => this.clearTransition(content), duration + 64);
+        this.pending.set(content, timer);
     }
 
     clearTransition(content) {
-        const state = this.pending.get(content);
-        if (state?.frame !== null && state?.frame !== undefined) this.cancelFrame(state.frame);
-        if (state?.timer !== null && state?.timer !== undefined) this.clearTimer(state.timer);
+        const timer = this.pending.get(content);
+        if (timer !== undefined) this.clearTimer(timer);
         this.pending.delete(content);
         content?.classList?.remove(...TRANSITION_CLASSES);
     }

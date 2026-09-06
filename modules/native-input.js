@@ -1,3 +1,7 @@
+import { isIosWebKitTouch } from '../utils/device-profile.js';
+
+export { isIosWebKitTouch };
+
 // Remove only our retired keyboard overlay state. The browser and SillyTavern
 // own layout, scrolling, focus, selection, and the soft keyboard lifecycle.
 export function restoreNativeInputLayout(documentRef = globalThis.document) {
@@ -9,26 +13,7 @@ export function restoreNativeInputLayout(documentRef = globalThis.document) {
 }
 
 const REVEAL_DELAYS_MS = Object.freeze([80, 220, 420, 700]);
-
-export function isIosWebKitTouch({
-    navigatorRef = globalThis.navigator,
-    matchMediaRef = globalThis.matchMedia,
-} = {}) {
-    const userAgent = String(navigatorRef?.userAgent || '');
-    const platform = String(navigatorRef?.platform || '');
-    const touchPoints = Number(navigatorRef?.maxTouchPoints || 0);
-    let coarsePointer = false;
-    try {
-        coarsePointer = Boolean(matchMediaRef?.('(pointer: coarse)')?.matches);
-    } catch {
-        coarsePointer = false;
-    }
-    const touch = touchPoints > 0 || coarsePointer;
-    return touch && !/Android/i.test(userAgent) && (
-        /iPad|iPhone|iPod/i.test(userAgent)
-        || (platform === 'MacIntel' && touchPoints > 1)
-    );
-}
+const FINAL_REVEAL_DELAY_MS = REVEAL_DELAYS_MS.at(-1);
 
 export function isBelowVisualViewport(element, windowRef = globalThis.window, tolerance = 4) {
     const viewport = windowRef?.visualViewport;
@@ -97,7 +82,7 @@ export class InputRevealGuard {
                 if (generation !== this.focusGeneration) return;
                 // The final check also nudges Safari when third-party keyboards
                 // have not reported their reduced visual viewport yet.
-                this.revealIfNeeded(delay === REVEAL_DELAYS_MS.at(-1));
+                this.revealIfNeeded(delay === FINAL_REVEAL_DELAY_MS);
             }, delay);
             this.timers.add(timer);
         }

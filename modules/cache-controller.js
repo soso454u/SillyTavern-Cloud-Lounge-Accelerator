@@ -1,4 +1,5 @@
 import { CLIENT_VERSION, connectionAllowsWarmup } from '../client-core.js';
+import { isIosFamily } from '../utils/device-profile.js';
 import { cancelIdle, requestIdle } from '../utils/feature-detection.js';
 
 const PLUGIN_ID = 'cloud-lounge-accelerator';
@@ -25,9 +26,8 @@ export function isIOSStandaloneEnvironment({
     standalone = false,
     displayModeStandalone = false,
 } = {}) {
-    const isIOS = /iPad|iPhone|iPod/i.test(userAgent)
-        || (platform === 'MacIntel' && Number(maxTouchPoints) > 1);
-    return isIOS && (standalone === true || displayModeStandalone === true);
+    return isIosFamily({ userAgent, platform, maxTouchPoints })
+        && (standalone === true || displayModeStandalone === true);
 }
 
 export function isIOSStandalone() {
