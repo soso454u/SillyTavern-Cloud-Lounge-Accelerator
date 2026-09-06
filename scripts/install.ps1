@@ -115,6 +115,7 @@ Write-Host ''
 Write-Host '============================================================' -ForegroundColor Green
 Write-Host '云酒馆加速器已安装/更新完成。' -ForegroundColor Green
 Write-Host "`n已安装：`n  1. 服务端插件：$ServerPluginDirectory`n  2. 全局 UI 扩展：$UiExtensionDirectory"
+Write-Host "`n多用户提示：全局 UI 扩展需使用酒馆管理员账号更新；普通账号只能更新自己的个人扩展。"
 Write-Host "`n请继续完成："
 Write-Host '  1. 重启 SillyTavern。'
 Write-Host '  2. 用 HTTPS 域名，或在同机上用 localhost/127.0.0.1 访问。'

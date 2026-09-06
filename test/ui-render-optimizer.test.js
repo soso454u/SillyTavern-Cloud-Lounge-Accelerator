@@ -4,8 +4,6 @@ import { readFile } from 'node:fs/promises';
 
 import {
     detectRenderProfile,
-    patchLegacyMobileDrawerHasRules,
-    restoreLegacyMobileDrawerHasRules,
     UiRenderOptimizer,
 } from '../modules/ui-render-optimizer.js';
 
@@ -20,22 +18,6 @@ function styleRule(cssText = `${LEGACY_SELECTOR} { z-index: 4005; }`) {
         cssText,
         selectorText: LEGACY_SELECTOR,
         style: { zIndex: '4005' },
-    };
-}
-
-function stylesheet(initialRules) {
-    return {
-        cssRules: [...initialRules],
-        insertRule(cssText, index) {
-            const rule = cssText.startsWith('@media')
-                ? { cssText, conditionText: '(min-width: 1001px)', cssRules: [styleRule()] }
-                : styleRule(cssText);
-            this.cssRules.splice(index, 0, rule);
-            return index;
-        },
-        deleteRule(index) {
-            this.cssRules.splice(index, 1);
-        },
     };
 }
 
@@ -67,7 +49,7 @@ test('marks only the active top drawer and cleans temporary render hints', () =>
     let timerCallback = null;
     const documentRef = {
         body: { classList: bodyClasses },
-        styleSheets: [stylesheet([styleRule()])],
+        styleSheets: [{ cssRules: [styleRule()] }],
         addEventListener() {},
         removeEventListener() {},
         querySelectorAll: () => [content],
@@ -93,7 +75,7 @@ test('marks only the active top drawer and cleans temporary render hints', () =>
     assert.equal(contentClasses.contains('cla-ui-closing'), true);
     assert.equal(bodyClasses.contains('cla-fast-ui'), true);
     assert.equal(bodyClasses.contains('cla-ui-webkit'), true);
-    assert.equal(documentRef.styleSheets[0].cssRules[0].conditionText, '(min-width: 1001px)');
+    assert.equal(documentRef.styleSheets[0].cssRules[0].selectorText, LEGACY_SELECTOR);
     assert.equal(frameCallback, null);
     timerCallback();
     assert.equal(contentClasses.contains('cla-ui-closing'), false);
@@ -103,31 +85,38 @@ test('marks only the active top drawer and cleans temporary render hints', () =>
     assert.equal(documentRef.styleSheets[0].cssRules[0].selectorText, LEGACY_SELECTOR);
 });
 
-test('wraps the known SillyTavern mobile :has() rule in its desktop breakpoint and restores it', () => {
-    const legacyRule = styleRule();
-    const sheet = stylesheet([legacyRule]);
-    const patches = patchLegacyMobileDrawerHasRules({ styleSheets: [sheet] });
-
-    assert.equal(patches.length, 1);
-    assert.equal(sheet.cssRules.length, 1);
-    assert.equal(sheet.cssRules[0].conditionText, '(min-width: 1001px)');
-    assert.equal(sheet.cssRules[0].cssRules[0].selectorText, LEGACY_SELECTOR);
-
-    restoreLegacyMobileDrawerHasRules(patches);
-    assert.equal(sheet.cssRules.length, 1);
-    assert.equal(sheet.cssRules[0].selectorText, LEGACY_SELECTOR);
-});
-
-test('leaves an upstream rule alone after SillyTavern wraps it in a media query', () => {
-    const fixedRule = {
-        conditionText: '(min-width: 1001px)',
-        cssRules: [styleRule()],
-    };
-    const sheet = stylesheet([fixedRule]);
-
-    assert.deepEqual(patchLegacyMobileDrawerHasRules({ styleSheets: [sheet] }), []);
-    assert.equal(sheet.cssRules[0], fixedRule);
-});
+for (const environment of [
+    { userAgent: 'iPhone', maxTouchPoints: 5 },
+    { userAgent: 'Android', maxTouchPoints: 5 },
+    { userAgent: 'Macintosh', maxTouchPoints: 0 },
+]) {
+    test(`preserves native drawer stacking across start/stop on ${environment.userAgent}`, () => {
+        const rule = styleRule();
+        const sheet = {
+            cssRules: [rule],
+            insertRule() { assert.fail('must not rewrite native stacking rules'); },
+            deleteRule() { assert.fail('must not remove native stacking rules'); },
+        };
+        const optimizer = new UiRenderOptimizer({
+            documentRef: {
+                body: { classList: classList() },
+                styleSheets: [sheet],
+                addEventListener() {},
+                removeEventListener() {},
+            },
+            navigatorRef: environment,
+            matchMedia: () => ({ matches: environment.maxTouchPoints > 0 }),
+        });
+        optimizer.start();
+        assert.equal(sheet.cssRules[0], rule);
+        assert.equal(rule.style.zIndex, '4005');
+        optimizer.stop();
+        optimizer.start();
+        optimizer.stop();
+        assert.equal(sheet.cssRules.length, 1);
+        assert.equal(sheet.cssRules[0], rule);
+    });
+}
 
 test('styles desktop, popup lifecycle, and native sortable helpers without global layers', async () => {
     const styles = await readFile(new URL('../style.css', import.meta.url), 'utf8');

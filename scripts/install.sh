@@ -175,6 +175,7 @@ update_config "$SILLYTAVERN_DIRECTORY/config.yaml"
 printf '\n============================================================\n'
 printf '云酒馆加速器已安装/更新完成。\n'
 printf '\n已安装：\n  1. 服务端插件：%s\n  2. 全局 UI 扩展：%s\n' "$SERVER_PLUGIN_DIRECTORY" "$UI_EXTENSION_DIRECTORY"
+printf '\n多用户提示：全局 UI 扩展需使用酒馆管理员账号更新；普通账号只能更新自己的个人扩展。\n'
 printf '\n请继续完成：\n'
 printf '  1. 在 1Panel / Docker / 系统中重启 SillyTavern。\n'
 printf '  2. 用 HTTPS 域名，或在同机上用 localhost/127.0.0.1 访问。\n'
