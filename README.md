@@ -1,4 +1,4 @@
-# 云酒馆加速器 2.1.19
+# 云酒馆加速器 2.1.20
 
 让云端 SillyTavern 打开更快、长聊天更流畅，同时避免重复接管预设、正则和世界书的原生交互。安装后大部分功能都会自动工作，不需要手动调整复杂参数。
 
@@ -50,7 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/soso454u/SillyTavern-Cloud-Lounge-A
 
 更多安装、更新、卸载、1Panel 和 HTTPS 步骤见 [完整使用教程](docs/完整使用教程.md)。
 
-普通安装不会改动 SillyTavern 的性能开关。需要在安装时直接开启时，可单独使用 `--keep-alive`、`--lazy-characters`，或用 `--fast-start` 同时开启两项：
+普通安装/更新现在会开启聊天保存上传压缩；Keep-Alive 和角色卡懒加载仍保持原值。需要在安装时直接开启后两项时，可单独使用 `--keep-alive`、`--lazy-characters`，或用 `--fast-start` 同时开启：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/soso454u/SillyTavern-Cloud-Lounge-Accelerator/main/scripts/install.sh | bash -s -- --fast-start
@@ -78,6 +78,8 @@ Keep-Alive 在部分网络环境可能引发 `ECONNRESET` 或连接中断；角�
 
 ### 聊天与重美化优化
 
+- 一键安装/更新会开启 SillyTavern 官方请求 gzip：超过 256KB 的聊天保存先在浏览器压缩再上传，并取消官方默认 8MB 压缩上限，15MB 等大聊天也会生效；压缩超时会回退原始保存。
+- 保存语义仍是官方的完整聊天覆盖，服务端完整性检查和聊天备份保持不变。插件不使用自定义增量协议，避免编辑旧楼、删除消息、切换 Swipe、元数据变化或多端并发时损坏 JSONL。
 - 打开任何角色聊天时都只先显示最后 5 条，直接进入最近的聊天内容。
 - 切换聊天后的首秒布局变化会通过 SillyTavern 官方滚动接口继续贴住最后一条；一旦用户触碰或加载历史消息便立即停止校准。
 - 点击“显示更多”时由 SillyTavern 原生流程每页补载 5 条旧消息并保持阅读位置；插件会先登记当前会话，不会把这次补载误判成首次进入而跳到底部。
@@ -119,7 +121,8 @@ Keep-Alive 在部分网络环境可能引发 `ECONNRESET` 或连接中断；角�
 聊天与重美化优化                [开]
 界面操作优化                    [开]
 
-启动性能优化
+云端性能优化
+聊天保存上传压缩              [开]
 HTTP Keep-Alive                 [关]
 角色卡懒加载                    [关]
 
@@ -133,7 +136,7 @@ HTTP Keep-Alive                 [关]
 
 展开“高级信息”可以查看插件版本、页面缓存、服务端插件、缓存资源数和各项优化的运行状态。
 
-“启动性能优化”直接读取并修改 SillyTavern 根目录的 `config.yaml`。两项互不绑定，开启前会显示副作用确认；只有内容实际变化时才写入，失败会自动回滚。备份统一放在 `.cloud-lounge-accelerator/backups/`：永久保留 1 份插件修改前基线，滚动保留最近 3 份不同内容的快照。仅安装 UI 扩展时，这两个开关会保持不可用。
+“云端性能优化”直接读取并修改 SillyTavern 根目录的 `config.yaml`。三个选项互不绑定，开启前会显示影响确认；只有内容实际变化时才写入，失败会自动回滚。备份统一放在 `.cloud-lounge-accelerator/backups/`：永久保留 1 份插件修改前基线，滚动保留最近 3 份不同内容的快照。仅安装 UI 扩展时，这些开关会保持不可用。
 
 ## 支持模式
 
@@ -181,6 +184,8 @@ Initializing plugin from .../cloud-lounge-accelerator/server/index.js
 
 ## 更新与修复
 
+2.1.20 新增“聊天保存上传压缩”：一键安装/更新默认安全写入 `performance.requestCompression`，256KB 以上请求使用官方 gzip、取消 8MB 上限并把压缩超时放宽到 15 秒；设置面板可独立开关。保存仍走原生完整覆盖、完整性检查和备份，不改写聊天数据。另明确说明：本插件的 5 条限制只影响 DOM 显示；聊天补全预设若关闭或缺少 `chatHistory` marker，SillyTavern 会跳过过往消息注入。
+
 2.1.19 整理内部代码结构：设备与触控环境统一由一个工具模块识别，入口运行模块集中管理，三个设置开关各自维护启停流程；同时移除界面动画中已经停用的帧句柄代码。此版本不改变功能和设置，保留 2.1.18 的 iOS 输入框即时显现修复。
 
 2.1.18 修复 iOS Safari 点按聊天输入框后键盘已出现、输入区却要等输入第一个字才显现的问题。插件只在 iPhone/iPad 的聊天输入框仍保持焦点时，跟随 `visualViewport` 变化并用浏览器原生 `scrollIntoView()` 让它进入可见区域；不恢复旧版的输入区平移，不修改聊天高度、聊天滚动、文字或光标。键盘收回后仍由 SillyTavern 原生布局自然归位。
@@ -202,7 +207,7 @@ Initializing plugin from .../cloud-lounge-accelerator/server/index.js
 
 ## 安全与边界
 
-- 服务端插件只提供健康检查、Service Worker 脚本和两项明确授权的性能配置接口；配置写入只处理安装器控制项、`enableKeepAlive` 或 `performance.lazyLoadCharacters`，不读写聊天、角色卡或密钥。
+- 服务端插件只提供健康检查、Service Worker 脚本和明确授权的性能配置接口；配置写入只处理安装器控制项、`enableKeepAlive`、`performance.lazyLoadCharacters` 或 `performance.requestCompression`，不读写聊天、角色卡或密钥。
 - 页面缓存只改善第二次及以后访问的静态资源往返，不会缩短 AI 生成时间。
 - 第一次访问速度主要依赖服务器、线路、TLS、反向代理和 SillyTavern 本身。
 - 如果根作用域已有其他 Service Worker，本插件拒绝覆盖。

@@ -63,7 +63,7 @@ export async function init(router) {
     router.post('/performance', (request, response) => {
         noStore(response);
         const { setting, enabled } = request.body || {};
-        if (!['keepAlive', 'lazyCharacters'].includes(setting) || typeof enabled !== 'boolean') {
+        if (!['keepAlive', 'lazyCharacters', 'chatCompression'].includes(setting) || typeof enabled !== 'boolean') {
             response.status(400).json({ ok: false, error: '性能设置参数无效' });
             return;
         }

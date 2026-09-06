@@ -1,5 +1,11 @@
 const OPTIONS = Object.freeze([
     {
+        key: 'chatCompression',
+        title: '聊天保存上传压缩',
+        description: '用 SillyTavern 官方 gzip 通道压缩大聊天保存；保持完整覆盖、完整性检查和备份，不再按原始 15MB 过网。',
+        warning: '开启后会压缩超过 256KB 的聊天保存请求，并取消官方默认 8MB 压缩上限。会增加少量浏览器 CPU 使用；压缩超时会自动回退原始保存。仍要开启吗？',
+    },
+    {
         key: 'keepAlive',
         title: 'HTTP Keep-Alive',
         description: '减少后端 HTTP/HTTPS 重复建连；若出现 ECONNRESET、连接中断等网络异常，请关闭。',
@@ -59,7 +65,7 @@ export function createPerformancePanel(onChange) {
     const heading = document.createElement('div');
     heading.className = 'cla-performance-heading';
     const title = document.createElement('strong');
-    title.textContent = '启动性能优化';
+    title.textContent = '云端性能优化';
     const state = document.createElement('small');
     state.dataset.claPerformanceState = '';
     state.textContent = '正在读取 config.yaml…';

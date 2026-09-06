@@ -16,7 +16,7 @@ export class PerformanceConfigController {
         } catch (error) {
             this.status = {
                 available: false,
-                settings: { keepAlive: null, lazyCharacters: null },
+                settings: { keepAlive: null, lazyCharacters: null, chatCompression: null },
                 error: error instanceof Error ? error.message : String(error),
             };
         }

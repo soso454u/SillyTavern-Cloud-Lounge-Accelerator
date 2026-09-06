@@ -1,5 +1,6 @@
 import { pathToFileURL } from 'node:url';
 import { writeConfigWithBackup } from '../server/config-backup.js';
+import { readPerformanceSettings, updatePerformanceSetting } from '../server/performance-config.js';
 
 function replaceTopLevelBoolean(content, key, enabled, lineEnding) {
     const value = enabled ? 'true' : 'false';
@@ -13,7 +14,7 @@ function replaceTopLevelBoolean(content, key, enabled, lineEnding) {
         + `# Enabled by Cloud Lounge Accelerator installer${lineEnding}${key}: ${value}${lineEnding}`;
 }
 
-export function buildInstallerConfig(content, { keepAlive = false, lazyCharacters = false } = {}) {
+export function buildInstallerConfig(content, { keepAlive = false, lazyCharacters = false, chatCompression = true } = {}) {
     const lineEnding = content.includes('\r\n') ? '\r\n' : '\n';
     let updated = replaceTopLevelBoolean(content, 'enableServerPlugins', true, lineEnding);
     if (keepAlive) updated = replaceTopLevelBoolean(updated, 'enableKeepAlive', true, lineEnding);
@@ -51,23 +52,27 @@ export function buildInstallerConfig(content, { keepAlive = false, lazyCharacter
         updated = `${lines.join(lineEnding)}${hadFinalNewline ? lineEnding : ''}`;
     }
 
+    updated = updatePerformanceSetting(updated, 'chatCompression', chatCompression);
+
     return updated;
 }
 
-export function validateInstallerConfig(content, { keepAlive = false, lazyCharacters = false } = {}) {
+export function validateInstallerConfig(content, { keepAlive = false, lazyCharacters = false, chatCompression = true } = {}) {
     if (!/^enableServerPlugins\s*:\s*true(?:\s|$)/m.test(content)) return false;
     if (keepAlive && !/^enableKeepAlive\s*:\s*true(?:\s|$)/m.test(content)) return false;
     if (lazyCharacters && !/^\s+lazyLoadCharacters\s*:\s*true(?:\s|$)/m.test(content)) return false;
+    if (readPerformanceSettings(content).chatCompression !== chatCompression) return false;
     return true;
 }
 
 function parseArguments(argv) {
-    const options = { configPath: '', keepAlive: false, lazyCharacters: false };
+    const options = { configPath: '', keepAlive: false, lazyCharacters: false, chatCompression: true };
     for (let index = 0; index < argv.length; index += 1) {
         const argument = argv[index];
         if (argument === '--config') options.configPath = argv[++index] || '';
         else if (argument === '--keep-alive') options.keepAlive = true;
         else if (argument === '--lazy-characters') options.lazyCharacters = true;
+        else if (argument === '--no-chat-compression') options.chatCompression = false;
         else throw new Error(`未知配置参数：${argument}`);
     }
     if (!options.configPath) throw new Error('--config 后缺少 config.yaml 路径');
@@ -98,6 +103,7 @@ async function main() {
         console.log('[云酒馆加速器] 已开启 HTTP/HTTPS Keep-Alive；若出现 ECONNRESET 或连接中断，请在设置面板关闭');
     }
     if (options.lazyCharacters) console.log('[云酒馆加速器] 已开启 performance.lazyLoadCharacters');
+    if (options.chatCompression) console.log('[云酒馆加速器] 已开启大聊天保存请求压缩（256KB 起、无 8MB 上限）');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

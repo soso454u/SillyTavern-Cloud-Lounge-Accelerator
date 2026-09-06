@@ -9,6 +9,7 @@ ROOT_ARGUMENT=""
 ENABLE_LAZY_CHARACTERS=0
 ENABLE_KEEP_ALIVE=0
 ENABLE_FAST_START=0
+ENABLE_CHAT_COMPRESSION=1
 
 usage() {
     cat <<'EOF'
@@ -23,6 +24,7 @@ usage() {
   --keep-alive         开启 HTTP/HTTPS Keep-Alive；网络异常时请关闭
   --lazy-characters    开启角色卡懒加载；旧扩展和模糊搜索可能受影响
   --fast-start         同时开启上面两项（普通安装默认不开启）
+  --no-chat-compression 关闭聊天保存上传压缩（普通安装默认开启）
   -h, --help           显示帮助
 
 如未指定路径，安装器会先检查 SILLYTAVERN_ROOT，
@@ -56,6 +58,10 @@ while (($# > 0)); do
             ;;
         --fast-start)
             ENABLE_FAST_START=1
+            shift
+            ;;
+        --no-chat-compression)
+            ENABLE_CHAT_COMPRESSION=0
             shift
             ;;
         -h|--help)
@@ -150,6 +156,7 @@ update_config() {
     local arguments=(--config "$config_path")
     ((ENABLE_KEEP_ALIVE == 1)) && arguments+=(--keep-alive)
     ((ENABLE_LAZY_CHARACTERS == 1)) && arguments+=(--lazy-characters)
+    ((ENABLE_CHAT_COMPRESSION == 0)) && arguments+=(--no-chat-compression)
     node "$SERVER_PLUGIN_DIRECTORY/scripts/configure.mjs" "${arguments[@]}"
 }
 

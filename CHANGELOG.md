@@ -1,5 +1,14 @@
 # 更新记录
 
+## 2.1.20 — 大聊天保存上传压缩
+
+- 接入 SillyTavern 官方 `performance.requestCompression`：超过 256KB 的聊天保存请求先 gzip 再上传，`maxPayloadSize` 设为 `0` 以覆盖 15MB 及更大的聊天，压缩超时放宽至 15 秒；失败或超时仍由官方逻辑回退原始请求。
+- 一键安装/更新默认开启聊天上传压缩，并提供 `--no-chat-compression` / `-DisableChatCompression` 显式关闭；Keep-Alive 与角色卡懒加载继续保持 opt-in。
+- 设置面板的“云端性能优化”新增独立“聊天保存上传压缩”开关；配置修改继续共用永久基线 + 最近三份快照、原子写入和失败回滚机制，重启 SillyTavern 后生效。
+- 保持官方完整聊天覆盖、完整性检查和备份，不引入自定义增量协议，避免旧消息编辑/删除、Swipe、元数据及多端并发造成 JSONL 损坏。
+- 文档明确区分页面显示截断与模型上下文：`chat_truncation = 5` 只影响 DOM 初次显示；Chat Completion 预设禁用或遗漏 `chatHistory` marker 才会导致官方跳过历史消息注入。
+- 版本统一升级到 2.1.20，Worker 使用新版本缓存名。
+
 ## 2.1.19 — 内部结构整理
 
 - 新增统一的设备环境工具，集中处理触控、iOS/iPadOS、粗指针与界面渲染档位判断，移除缓存、输入保护、触控保护和界面动画模块中的重复识别代码。

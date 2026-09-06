@@ -7,7 +7,9 @@ param(
 
     [switch]$KeepAlive,
 
-    [switch]$FastStart
+    [switch]$FastStart,
+
+    [switch]$DisableChatCompression
 )
 
 $ErrorActionPreference = 'Stop'
@@ -81,6 +83,7 @@ function Set-Configuration([string]$ConfigPath) {
     $Arguments = @((Join-Path $ServerPluginDirectory 'scripts\configure.mjs'), '--config', $ConfigPath)
     if ($KeepAlive) { $Arguments += '--keep-alive' }
     if ($LazyCharacters) { $Arguments += '--lazy-characters' }
+    if ($DisableChatCompression) { $Arguments += '--no-chat-compression' }
     & node @Arguments
     if ($LASTEXITCODE -ne 0) { throw 'config.yaml 安全更新失败' }
 }
