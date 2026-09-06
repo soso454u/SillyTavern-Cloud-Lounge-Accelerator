@@ -11,16 +11,6 @@ const LEGACY_OVERLAY_CONTENT = new Map([
     ['shadow_select_chat_popup', '#select_chat_popup'],
 ]);
 
-function isPointInside(rect, x, y) {
-    return Boolean(rect)
-        && Number.isFinite(x)
-        && Number.isFinite(y)
-        && x >= rect.left
-        && x <= rect.right
-        && y >= rect.top
-        && y <= rect.bottom;
-}
-
 export function describeInteractionBlocker(element) {
     const dialog = element?.closest?.('dialog.popup[open]');
     if (!dialog) return null;
@@ -85,7 +75,6 @@ export function isDialogVisuallyHidden(dialog, { windowRef = globalThis.window }
         if (style && (
             style.display === 'none'
             || style.visibility === 'hidden'
-            || style.pointerEvents === 'none'
             || Number.parseFloat(style.opacity) <= 0.01
         )) return true;
     } catch {
@@ -93,6 +82,15 @@ export function isDialogVisuallyHidden(dialog, { windowRef = globalThis.window }
     }
     const rect = dialog.getBoundingClientRect?.();
     return Boolean(rect && (rect.width <= 1 || rect.height <= 1));
+}
+
+function isManagedQuickReply(dialog) {
+    // Quick Reply deliberately hides/minimizes its runner while execution
+    // continues. MobileInteractionGuard can reveal it on an explicit tap.
+    const editor = dialog?.querySelector?.('#qr--modalEditor');
+    return Boolean(dialog?.classList?.contains?.('qr--hide')
+        || editor?.classList?.contains?.('qr--isExecuting')
+        || editor?.classList?.contains?.('qr--minimized'));
 }
 
 export function getStaleLegacyOverlay(element, {
@@ -123,11 +121,13 @@ export class InteractionRecoveryGuard {
         navigatorRef = globalThis.navigator,
         mutationObserver = globalThis.MutationObserver,
         importActionLoader = () => import('../../../../action-loader.js'),
+        importPopup = () => import('../../../../popup.js'),
         onRecovered = null,
         now = () => Date.now(),
         setTimer = globalThis.setTimeout,
         clearTimer = globalThis.clearTimeout,
-        scheduleMicrotask = callback => globalThis.queueMicrotask?.(callback) ?? Promise.resolve().then(callback),
+        scheduleMicrotask = callback => typeof globalThis.queueMicrotask === 'function'
+            ? globalThis.queueMicrotask(callback) : Promise.resolve().then(callback),
         requestFrame = callback => globalThis.requestAnimationFrame?.(callback) ?? setTimer(callback, 16),
         cancelFrame = handle => globalThis.cancelAnimationFrame?.(handle) ?? clearTimer(handle),
     } = {}) {
@@ -136,6 +136,8 @@ export class InteractionRecoveryGuard {
         this.navigator = navigatorRef;
         this.MutationObserver = mutationObserver;
         this.importActionLoader = importActionLoader;
+        this.importPopup = importPopup;
+        this.recoveringDialogs = new WeakSet();
         this.onRecovered = onRecovered;
         this.now = now;
         this.setTimer = setTimer;
@@ -287,7 +289,7 @@ export class InteractionRecoveryGuard {
                 this.closingSince.delete(dialog);
                 this.hiddenSince.delete(dialog);
                 this.scheduleDialogRecovery(dialog, 'orphan-loader', ORPHAN_LOADER_GRACE_MS);
-            } else if (isDialogVisuallyHidden(dialog, { windowRef: this.window })) {
+            } else if (!isManagedQuickReply(dialog) && isDialogVisuallyHidden(dialog, { windowRef: this.window })) {
                 this.closingSince.delete(dialog);
                 if (!this.hiddenSince.has(dialog)) this.hiddenSince.set(dialog, this.now());
                 this.scheduleDialogRecovery(dialog, 'hidden-dialog', HIDDEN_DIALOG_GRACE_MS);
@@ -339,7 +341,9 @@ export class InteractionRecoveryGuard {
     async hasActiveBlockingLoader() {
         try {
             const module = await this.importActionLoader();
-            return Boolean(module.loader?.active?.().some(handle => handle?.isActive && handle?.isBlocking));
+            const handles = module.loader?.active?.();
+            if (!Array.isArray(handles)) return true;
+            return handles.some(handle => handle?.isActive && handle?.isBlocking);
         } catch (error) {
             console.debug(LOG_PREFIX, '无法核对加载遮罩状态', error);
             return true;
@@ -350,20 +354,52 @@ export class InteractionRecoveryGuard {
         if (!['closing', 'orphan-loader', 'hidden-dialog'].includes(reason)) return false;
         if (!this.started || !dialog?.isConnected || !dialog.hasAttribute?.('open')) return false;
         if (typeof dialog.close !== 'function') return false;
+        if (this.recoveringDialogs.has(dialog)) return false;
         if (reason === 'closing' && !dialog.hasAttribute?.('closing')) return false;
-        if (reason === 'hidden-dialog' && !isDialogVisuallyHidden(dialog, { windowRef: this.window })) return false;
-        if (reason === 'orphan-loader') {
-            if (!this.knownLoaderDialogs.has(dialog) || dialog.querySelector?.('#loader')) return false;
-            if (await this.hasActiveBlockingLoader()) return false;
-            if (!this.started || !dialog.isConnected || !dialog.hasAttribute?.('open')) return false;
-        }
-
-        const blockerLabel = reason === 'orphan-loader'
-            ? 'dialog.popup[loader-orphan]'
-            : (reason === 'hidden-dialog' ? 'dialog.popup[open][hidden]' : describeInteractionBlocker(dialog));
+        if (reason === 'hidden-dialog' && (isManagedQuickReply(dialog)
+            || !isDialogVisuallyHidden(dialog, { windowRef: this.window }))) return false;
+        this.recoveringDialogs.add(dialog);
         try {
-            dialog.close();
-            dialog.removeAttribute?.('closing');
+            let popupModule;
+            try {
+                popupModule = await this.importPopup();
+            } catch (error) {
+                // Unknown ownership: do not bypass a popup's save/cancel lifecycle.
+                if (reason !== 'closing') return false;
+            }
+            if (reason === 'orphan-loader') {
+                if (!this.knownLoaderDialogs.has(dialog) || dialog.querySelector?.('#loader')) return false;
+                if (await this.hasActiveBlockingLoader()) return false;
+                if (!this.started || !dialog.isConnected || !dialog.hasAttribute?.('open')) return false;
+            }
+            // An invisible loading dialog can still represent a valid blocking task.
+            if (reason === 'hidden-dialog' && dialog.querySelector?.('#loader')
+                && await this.hasActiveBlockingLoader()) return false;
+
+            if (!this.started || !dialog.isConnected || !dialog.hasAttribute?.('open')) return false;
+            if (reason === 'closing' && !dialog.hasAttribute?.('closing')) return false;
+            if (reason === 'hidden-dialog' && (isManagedQuickReply(dialog)
+                || !isDialogVisuallyHidden(dialog, { windowRef: this.window }))) return false;
+            if (reason === 'orphan-loader' && dialog.querySelector?.('#loader')) return false;
+            if (reason !== 'closing' && dialog.hasAttribute?.('closing')) return false;
+            const popup = popupModule?.Popup?.util?.popups?.find(item => item.dlg === dialog);
+
+            const blockerLabel = reason === 'orphan-loader'
+                ? 'dialog.popup[loader-orphan]'
+                : (reason === 'hidden-dialog' ? 'dialog.popup[open][hidden]' : describeInteractionBlocker(dialog));
+            if (popup && reason !== 'closing') {
+                // Closing only the HTML dialog leaves Popup.show() unresolved.
+                // Let the owner run its callbacks, remove references and resolve.
+                if (typeof popup.completeCancelled !== 'function') return false;
+                await popup.completeCancelled();
+                if (dialog.isConnected && dialog.hasAttribute?.('open')) return false;
+            } else {
+                // A closing popup has already chosen its result. Do not replace
+                // it with CANCELLED; release the native layer and let its existing
+                // runAfterAnimation callback finish the lifecycle.
+                dialog.close();
+                if (!popup) dialog.removeAttribute?.('closing');
+            }
             this.cancelDialogTimer(dialog);
             this.closingSince.delete(dialog);
             this.hiddenSince.delete(dialog);
@@ -375,6 +411,8 @@ export class InteractionRecoveryGuard {
         } catch (error) {
             console.debug(LOG_PREFIX, '交互阻塞层自愈失败', error);
             return false;
+        } finally {
+            this.recoveringDialogs.delete(dialog);
         }
     }
 
@@ -393,7 +431,7 @@ export class InteractionRecoveryGuard {
         if (this.knownLoaderDialogs.has(dialog) && !dialog.querySelector?.('#loader')) {
             return { dialog, reason: 'orphan-loader' };
         }
-        if (isDialogVisuallyHidden(dialog, { windowRef: this.window })) {
+        if (!isManagedQuickReply(dialog) && isDialogVisuallyHidden(dialog, { windowRef: this.window })) {
             const since = this.hiddenSince.get(dialog);
             if (Number.isFinite(since) && this.now() - since >= EXPLICIT_BLOCKER_GRACE_MS) {
                 return { dialog, reason: 'hidden-dialog' };
@@ -416,15 +454,17 @@ export class InteractionRecoveryGuard {
         if (!this.started || event.type !== 'pointerup' || event.button > 0) return;
         const textarea = this.document.querySelector?.('#send_textarea');
         const textareaActionable = isControlActionable(textarea, { windowRef: this.window });
-        const textareaRect = textarea?.getBoundingClientRect?.();
-        const textareaIntent = textareaActionable && isPointInside(textareaRect, event.clientX, event.clientY);
 
         const direct = event.target === textarea || event.target?.closest?.('#send_textarea') === textarea;
         if (direct) {
             if (!textareaActionable) return;
             this.scheduleMicrotask(() => {
                 if (!this.started || this.document.activeElement === textarea) return;
-                const legitimateModal = this.document.querySelector?.('dialog.popup[open]:not([closing])');
+                const active = this.document.activeElement;
+                if (active?.matches?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
+                const hit = this.document.elementFromPoint?.(event.clientX, event.clientY);
+                if (hit && hit !== textarea && !textarea.contains?.(hit)) return;
+                const legitimateModal = this.document.querySelector?.('dialog[open]:not([closing])');
                 if (legitimateModal || !isControlActionable(textarea, { windowRef: this.window })) return;
                 textarea.focus?.({ preventScroll: true });
                 if (this.document.activeElement === textarea) this.notifyRecovered('输入焦点', null);
@@ -434,15 +474,10 @@ export class InteractionRecoveryGuard {
 
         const blocker = this.getStaleBlocker(event);
         if (!blocker) return;
-        const recovered = blocker.overlay
-            ? this.recoverLegacyOverlay(blocker.overlay)
-            : await this.recoverDialog(blocker.dialog, blocker.reason);
-        if (!recovered || !this.started || !textareaIntent) return;
-        this.requestFrame(() => {
-            if (isControlActionable(textarea, { windowRef: this.window })) {
-                textarea.focus?.({ preventScroll: true });
-            }
-        });
+        // A tap intercepted by an overlay is not an input focus request. Let
+        // the next real tap choose a field, especially after paste/selection.
+        if (blocker.overlay) this.recoverLegacyOverlay(blocker.overlay);
+        else await this.recoverDialog(blocker.dialog, blocker.reason);
     }
 
     onPageVisible() {

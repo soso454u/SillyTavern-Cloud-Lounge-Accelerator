@@ -51,18 +51,10 @@ export class MobileInteractionGuard {
     }
 
     onPointerEnd(event) {
+        if (!this.started) return;
         const target = event.target;
-        if (
-            Number.isFinite(event.pointerId)
-            && target?.hasPointerCapture?.(event.pointerId)
-        ) {
-            try {
-                target.releasePointerCapture(event.pointerId);
-            } catch {
-                // Safari may already have released it even when it reports capture.
-            }
-        }
-
+        // The browser releases implicit pointer capture after pointerup/cancel.
+        // Releasing it during capture can interrupt native selection and drag.
         if (event.type !== 'pointerup' || event.pointerType === 'mouse') return;
         const dialog = target?.matches?.('dialog.popup[open]') ? target : null;
         if (!dialog) return;

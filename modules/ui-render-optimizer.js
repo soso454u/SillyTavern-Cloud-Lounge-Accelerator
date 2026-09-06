@@ -186,11 +186,10 @@ export class UiRenderOptimizer {
             webkit: { opening: 80, closing: 60 },
         };
         const duration = durations[this.profile]?.[phase] ?? durations.desktop[phase];
+        // Cleanup must not wait for an animation frame that Safari can suspend
+        // during keyboard/selection UI or when returning from the background.
         const state = { frame: null, timer: null };
-        state.frame = this.requestFrame(() => {
-            state.frame = null;
-            state.timer = this.setTimer(() => this.clearTransition(content), duration + 64);
-        });
+        state.timer = this.setTimer(() => this.clearTransition(content), duration + 64);
         this.pending.set(content, state);
     }
 

@@ -1,6 +1,6 @@
 import { PromptToggleAdapter } from '../adapters/prompt-toggle.js';
 import { InteractionRecoveryGuard } from './interaction-recovery-guard.js';
-import { KeyboardOverlayGuard } from './keyboard-overlay-guard.js';
+import { restoreNativeInputLayout } from './native-input.js';
 import { MobileInteractionGuard } from './mobile-interaction-guard.js';
 import { UiRenderOptimizer } from './ui-render-optimizer.js';
 
@@ -11,7 +11,6 @@ export class InteractionOptimizer {
         this.mobileGuard = new MobileInteractionGuard({
             onRecovered: diagnostic => this.reportRecovery(diagnostic),
         });
-        this.keyboardOverlay = new KeyboardOverlayGuard();
         this.recoveryGuard = new InteractionRecoveryGuard({
             onRecovered: diagnostic => this.reportRecovery(diagnostic),
         });
@@ -25,22 +24,21 @@ export class InteractionOptimizer {
     async start() {
         if (this.started) return;
         this.started = true;
-        const [promptToggleActive, recoveryGuardActive, mobileGuardActive, keyboardOverlayActive, renderProfile] = await Promise.all([
+        restoreNativeInputLayout();
+        const [promptToggleActive, recoveryGuardActive, mobileGuardActive, renderProfile] = await Promise.all([
             this.promptToggle.start(),
             this.recoveryGuard.start(),
             this.mobileGuard.start(),
-            this.keyboardOverlay.start(),
             this.uiRender.start(),
         ]);
         if (!this.started) {
             this.promptToggle.stop();
             this.recoveryGuard.stop();
             this.mobileGuard.stop();
-            this.keyboardOverlay.stop();
             this.uiRender.stop();
             return;
         }
-        this.features = { promptToggleActive, recoveryGuardActive, mobileGuardActive, keyboardOverlayActive, renderProfile };
+        this.features = { promptToggleActive, recoveryGuardActive, mobileGuardActive, renderProfile };
         this.emitStatus();
     }
 
@@ -59,7 +57,6 @@ export class InteractionOptimizer {
             promptToggleActive,
             recoveryGuardActive,
             mobileGuardActive,
-            keyboardOverlayActive,
             renderProfile,
         } = this.features || {};
         const status = [
@@ -69,7 +66,7 @@ export class InteractionOptimizer {
                 : (renderProfile === 'balanced' ? '触屏流畅' : (renderProfile === 'desktop' ? '桌面流畅' : null)),
             recoveryGuardActive ? '全平台自愈' : null,
             mobileGuardActive ? '触控保护' : null,
-            keyboardOverlayActive ? '键盘防遮挡' : null,
+            '原生输入布局',
             this.lastRecovery
                 ? `已恢复 ${this.lastRecovery.reason}${this.lastRecovery.blocker ? `（${this.lastRecovery.blocker}）` : ''} ×${this.recoveryCount}`
                 : null,
@@ -83,7 +80,7 @@ export class InteractionOptimizer {
         this.promptToggle.stop();
         this.recoveryGuard.stop();
         this.mobileGuard.stop();
-        this.keyboardOverlay.stop();
+        restoreNativeInputLayout();
         this.uiRender.stop();
         this.features = null;
         this.lastRecovery = null;

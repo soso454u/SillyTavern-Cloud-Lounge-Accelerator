@@ -241,11 +241,6 @@
         backdrop-filter: none !important;
     }
 
-    body.cla-fast-ui .drawer-content.cla-ui-closing,
-    body.cla-fast-ui dialog.popup[closing] {
-        pointer-events: none !important;
-    }
-
     body.cla-fast-ui.cla-ui-desktop .drawer-content.cla-ui-opening {
         transition-duration: 160ms !important;
     }
@@ -354,16 +349,6 @@ body.cla-fast-ui :is(.drawer-content, dialog.popup, .inline-drawer-content, #Wor
 }
 
 @media (pointer: coarse) {
-    body.cla-fast-ui #form_sheld.cla-keyboard-overlay {
-        translate: 0 var(--cla-keyboard-shift, 0px) !important;
-        transition: none !important;
-        will-change: translate;
-    }
-
-    body.cla-fast-ui #form_sheld.cla-keyboard-overlay.cla-keyboard-closing {
-        transition: translate 80ms cubic-bezier(0.2, 0.8, 0.2, 1) !important;
-    }
-
     .prompt-manager-toggle-action {
         display: inline-flex;
         align-items: center;

@@ -80,7 +80,9 @@ export class SettingsPanel {
         title.className = 'inline-drawer-toggle inline-drawer-header';
         title.innerHTML = '<b>云酒馆加速器</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>';
         const body = document.createElement('div');
-        body.className = 'inline-drawer-content cla-body';
+        body.className = 'inline-drawer-content';
+        const content = document.createElement('div');
+        content.className = 'cla-body';
 
         const status = document.createElement('div');
         status.className = 'cla-overall-status';
@@ -91,7 +93,7 @@ export class SettingsPanel {
         statusText.textContent = '运行正常';
         status.append(dot, statusText);
 
-        body.append(
+        content.append(
             status,
             createSwitch('pageAcceleration', '页面加载加速', '让酒馆第二次打开更快', this.settings.pageAcceleration, this.onSettingChange),
             createSwitch('chatOptimization', '聊天与重美化优化', '减少长聊天、人物面板和复杂正则造成的卡顿', this.settings.chatOptimization, this.onSettingChange),
@@ -114,7 +116,8 @@ export class SettingsPanel {
         }, 'cla-repair-button'));
         this.performance = createPerformancePanel(this.onPerformanceChange);
         this.advanced = createAdvancedPanel();
-        body.append(this.performance.element, actions, repairBox, this.advanced.element);
+        content.append(this.performance.element, actions, repairBox, this.advanced.element);
+        body.append(content);
         header.append(title, body);
         root.append(header);
         host.append(root);

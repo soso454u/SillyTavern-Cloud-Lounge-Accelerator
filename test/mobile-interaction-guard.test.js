@@ -43,7 +43,7 @@ test('reveals a minimized quick reply runner only after its modal backdrop is ta
     }), null);
 });
 
-test('releases touch pointer capture without taking over mouse input', () => {
+test('leaves native pointer capture untouched during selection and drag', () => {
     let released = null;
     const target = {
         hasPointerCapture: () => true,
@@ -53,7 +53,7 @@ test('releases touch pointer capture without taking over mouse input', () => {
     const guard = new MobileInteractionGuard({});
     guard.started = true;
     guard.onPointerEnd({ target, type: 'pointercancel', pointerType: 'touch', pointerId: 7 });
-    assert.equal(released, 7);
+    assert.equal(released, null);
 });
 
 test('expands a hidden running quick reply instead of stopping it', () => {

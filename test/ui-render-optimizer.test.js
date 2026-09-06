@@ -94,7 +94,7 @@ test('marks only the active top drawer and cleans temporary render hints', () =>
     assert.equal(bodyClasses.contains('cla-fast-ui'), true);
     assert.equal(bodyClasses.contains('cla-ui-webkit'), true);
     assert.equal(documentRef.styleSheets[0].cssRules[0].conditionText, '(min-width: 1001px)');
-    frameCallback();
+    assert.equal(frameCallback, null);
     timerCallback();
     assert.equal(contentClasses.contains('cla-ui-closing'), false);
     optimizer.stop();
@@ -138,11 +138,10 @@ test('styles desktop, popup lifecycle, and native sortable helpers without globa
     assert.match(styles, /:has\(\.ui-sortable-helper, \.sortable-drag, \.sortable-chosen\)/);
     assert.doesNotMatch(styles, /will-change:\s*height/);
     assert.match(styles, /@media \(max-width: 1000px\) and \(pointer: coarse\)/);
-    assert.match(styles, /#form_sheld\.cla-keyboard-overlay/);
-    assert.match(styles, /cla-keyboard-closing[\s\S]*transition:\s*translate 80ms/);
-    assert.doesNotMatch(styles, /cla-keyboard-overlay #sheld|--cla-keyboard-inset/);
+    assert.doesNotMatch(styles, /cla-keyboard-overlay|--cla-keyboard-shift/);
     assert.match(styles, /transition-property:\s*opacity, transform, display/);
     assert.match(styles, /height:\s*auto !important/);
+    assert.doesNotMatch(styles, /(?:cla-ui-closing|dialog\.popup\[closing\])[^{}]*\{[^}]*pointer-events:\s*none/);
     assert.match(styles, /@starting-style/);
     assert.match(styles, /drawer-content:is\(\.cla-ui-opening, \.cla-ui-closing\)[\s\S]*will-change:\s*transform, opacity/);
 });

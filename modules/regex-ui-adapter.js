@@ -88,6 +88,17 @@ export class RegexUiAdapter {
         return typeKey ? this.engine?.SCRIPT_TYPES?.[typeKey] : undefined;
     }
 
+    getToggleContext(element) {
+        const label = element.closest('.regex-script-label[id]');
+        const type = this.getType(getTypeKey(element));
+        const checkbox = label?.querySelector('.disable_regex');
+        if (!label || !checkbox || type === undefined) return null;
+        const scripts = this.engine?.getScriptsByType?.(type);
+        if (typeof this.engine?.saveScriptsByType !== 'function'
+            || !scripts?.some(script => String(script.id) === label.id)) return null;
+        return { label, type, checkbox };
+    }
+
     enqueue(task) {
         this.saveQueue = this.saveQueue.then(task, task).catch(error => {
             console.error('[Cloud Lounge Accelerator] 正则保存适配失败', error);
@@ -125,11 +136,14 @@ export class RegexUiAdapter {
 
         const toggleIcon = target.closest('.regex-toggle-on, .regex-toggle-off');
         if (toggleIcon) {
+            // Scope permission switches reuse these icons. Leave their native
+            // label/checkbox activation intact; only own known script rows.
+            const context = this.getToggleContext(toggleIcon);
+            if (!context) return;
             const disabled = toggleIcon.classList.contains('regex-toggle-on');
             event.preventDefault();
             event.stopImmediatePropagation();
-            const checkbox = toggleIcon.closest('.regex-script-label')?.querySelector('.disable_regex');
-            if (checkbox) checkbox.checked = disabled;
+            context.checkbox.checked = disabled;
             this.enqueue(() => this.saveToggle(toggleIcon, disabled));
             return;
         }
@@ -147,8 +161,10 @@ export class RegexUiAdapter {
     onInput(event) {
         if (!this.started || !(event.target instanceof HTMLInputElement)) return;
         if (!event.target.matches('.disable_regex')) return;
+        if (!this.getToggleContext(event.target)) return;
+        const disabled = event.target.checked;
         event.stopImmediatePropagation();
-        this.enqueue(() => this.saveToggle(event.target, event.target.checked));
+        this.enqueue(() => this.saveToggle(event.target, disabled));
     }
 
     async persistScripts(type, scripts) {

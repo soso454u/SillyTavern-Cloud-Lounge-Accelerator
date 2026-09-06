@@ -199,12 +199,13 @@ test('leaves an orphaned loader alone while an official blocking task remains ac
     assert.equal(dialog.closes, 0);
 });
 
-test('recovers an open modal only after it remains visually hidden', async () => {
+test('recovers an unowned open modal after the hidden-state grace period', async () => {
     const dialog = createDialog();
     dialog.getBoundingClientRect = () => ({ width: 0, height: 0 });
     const recovered = [];
     const guard = new InteractionRecoveryGuard({
         windowRef: visibleWindow,
+        importPopup: async () => ({ Popup: { util: { popups: [] } } }),
         onRecovered: value => recovered.push(value),
     });
     guard.started = true;
@@ -336,7 +337,7 @@ test('never pulls focus behind a legitimate open modal', async () => {
         activeElement: null,
         querySelector(selector) {
             if (selector === '#send_textarea') return textarea;
-            if (selector === 'dialog.popup[open]:not([closing])') return createDialog();
+            if (selector === 'dialog[open]:not([closing])') return createDialog();
             return null;
         },
     };
@@ -376,7 +377,7 @@ test('hit-tests a stale modal backdrop over the textarea and never replays a but
     });
 
     assert.equal(dialog.closes, 1);
-    assert.equal(documentRef.activeElement, textarea);
+    assert.equal(documentRef.activeElement, null);
 });
 
 test('removes a confirmed stale blocker over any button without replaying the click', async () => {
@@ -408,4 +409,139 @@ test('removes a confirmed stale blocker over any button without replaying the cl
 
     assert.equal(dialog.closes, 1);
     assert.equal(textareaFocuses, 0);
+});
+
+function ownedHiddenDialog({ complete = null } = {}) {
+    const dialog = createDialog();
+    dialog.getBoundingClientRect = () => ({ width: 0, height: 0 });
+    let completions = 0;
+    const popup = {
+        dlg: dialog,
+        async completeCancelled() {
+            completions += 1;
+            if (complete) return complete(dialog);
+            dialog.close();
+            popup.resolved = true;
+        },
+    };
+    const guard = new InteractionRecoveryGuard({
+        windowRef: visibleWindow,
+        importPopup: async () => ({ Popup: { util: { popups: [popup] } } }),
+    });
+    guard.started = true;
+    return { guard, dialog, popup, completions: () => completions };
+}
+
+test('hidden owned popup completes its lifecycle instead of leaving its show promise pending', async () => {
+    const f = ownedHiddenDialog();
+    assert.equal(await f.guard.recoverDialog(f.dialog, 'hidden-dialog'), true);
+    assert.equal(f.completions(), 1);
+    assert.equal(f.popup.resolved, true);
+    assert.equal(f.dialog.closes, 1);
+});
+
+test('respects a popup close veto without forcing the native dialog shut', async () => {
+    const f = ownedHiddenDialog({ complete: () => undefined });
+    assert.equal(await f.guard.recoverDialog(f.dialog, 'hidden-dialog'), false);
+    assert.equal(f.completions(), 1);
+    assert.equal(f.dialog.closes, 0);
+});
+
+test('does not cancel a deliberately hidden or minimized quick reply runner', async () => {
+    for (const hidden of [true, false]) {
+        const f = ownedHiddenDialog();
+        f.dialog.classList.contains = name => hidden && name === 'qr--hide';
+        f.dialog.querySelector = selector => selector === '#qr--modalEditor'
+            ? { classList: { contains: name => !hidden && name === 'qr--isExecuting' } } : null;
+        assert.equal(await f.guard.recoverDialog(f.dialog, 'hidden-dialog'), false);
+        assert.equal(f.completions(), 0);
+        assert.equal(f.dialog.closes, 0);
+    }
+});
+
+test('visible modal with pointer-events disabled is not treated as invisible', () => {
+    const dialog = createDialog();
+    dialog.getBoundingClientRect = () => ({ width: 320, height: 240 });
+    assert.equal(isDialogVisuallyHidden(dialog, {
+        windowRef: { getComputedStyle: () => ({ display: 'block', opacity: '1', pointerEvents: 'none' }) },
+    }), false);
+});
+
+test('rechecks visibility after loading the popup API', async () => {
+    const f = ownedHiddenDialog();
+    const load = f.guard.importPopup;
+    f.guard.importPopup = async () => {
+        f.dialog.getBoundingClientRect = () => ({ width: 320, height: 240 });
+        return load();
+    };
+    assert.equal(await f.guard.recoverDialog(f.dialog, 'hidden-dialog'), false);
+    assert.equal(f.completions(), 0);
+});
+
+test('coalesces timer and touch recovery while popup ownership is being resolved', async () => {
+    const f = ownedHiddenDialog();
+    let finish;
+    const load = f.guard.importPopup;
+    f.guard.importPopup = () => new Promise(resolve => { finish = () => resolve(load()); });
+    const pending = f.guard.recoverDialog(f.dialog, 'hidden-dialog');
+    assert.equal(await f.guard.recoverDialog(f.dialog, 'hidden-dialog'), false);
+    finish();
+    assert.equal(await pending, true);
+    assert.equal(f.completions(), 1);
+});
+
+test('does not cancel a closing popup that already has an affirmative result', async () => {
+    const dialog = createDialog({ closing: true });
+    const popup = { dlg: dialog, result: 1, completeCancelled: () => assert.fail('must preserve result') };
+    const guard = new InteractionRecoveryGuard({ importPopup: async () => ({ Popup: { util: { popups: [popup] } } }) });
+    guard.started = true;
+    assert.equal(await guard.recoverDialog(dialog, 'closing'), true);
+    assert.equal(popup.result, 1);
+    assert.equal(dialog.hasAttribute('closing'), true);
+});
+
+test('keeps an invisible loader while its blocking task is still active', async () => {
+    const f = ownedHiddenDialog();
+    f.dialog.querySelector = selector => selector === '#loader' ? {} : null;
+    f.guard.importActionLoader = async () => ({ loader: { active: () => [{ isActive: true, isBlocking: true }] } });
+    assert.equal(await f.guard.recoverDialog(f.dialog, 'hidden-dialog'), false);
+    assert.equal(f.completions(), 0);
+});
+
+test('schedules the focus check exactly once', async () => {
+    const guard = new InteractionRecoveryGuard();
+    let checks = 0;
+    guard.scheduleMicrotask(() => { checks += 1; });
+    await Promise.resolve();
+    assert.equal(checks, 1);
+});
+
+test('does not steal focus after a preset editor receives focus during a tap', async () => {
+    const textarea = createTextarea();
+    let callback;
+    const editor = { matches: () => true };
+    const doc = { activeElement: null, querySelector: selector => selector === '#send_textarea' ? textarea : null };
+    textarea.focus = () => assert.fail('must not steal editor focus');
+    const guard = new InteractionRecoveryGuard({
+        documentRef: doc, windowRef: visibleWindow,
+        scheduleMicrotask: next => { callback = next; },
+    });
+    guard.started = true;
+    await guard.onPointerEnd({ type: 'pointerup', button: 0, target: textarea });
+    doc.activeElement = editor;
+    callback();
+    assert.equal(doc.activeElement, editor);
+});
+
+test('does not focus the chat input if hit-testing finds a different surface after the tap', async () => {
+    const textarea = createTextarea();
+    textarea.focus = () => assert.fail('must not focus through another surface');
+    const doc = {
+        activeElement: null,
+        querySelector: selector => selector === '#send_textarea' ? textarea : null,
+        elementFromPoint: () => ({}),
+    };
+    const guard = new InteractionRecoveryGuard({ documentRef: doc, windowRef: visibleWindow });
+    guard.started = true;
+    await guard.onPointerEnd({ type: 'pointerup', button: 0, target: textarea, clientX: 100, clientY: 320 });
 });
