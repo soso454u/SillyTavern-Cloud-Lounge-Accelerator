@@ -2,13 +2,108 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { CLIENT_VERSION } from '../client-core.js';
-import { CacheController, isIOSStandaloneEnvironment, serverVersionMatchesClient } from '../modules/cache-controller.js';
+import {
+    CacheController,
+    hasReliableNativeHttpCache,
+    isIOSStandaloneEnvironment,
+    serverVersionMatchesClient,
+} from '../modules/cache-controller.js';
 
 test('requires the server plugin to match the UI version exactly', () => {
     assert.equal(serverVersionMatchesClient(CLIENT_VERSION), true);
     assert.equal(serverVersionMatchesClient('1.5.0'), false);
     assert.equal(serverVersionMatchesClient('2.0.5'), false);
     assert.equal(serverVersionMatchesClient(undefined), false);
+});
+
+test('recognizes only HTTP cache policies with useful browser freshness', () => {
+    assert.equal(hasReliableNativeHttpCache({ 'Cache-Control': 'private, max-age=3600' }), true);
+    assert.equal(hasReliableNativeHttpCache({ 'Cache-Control': 'public, max-age=600', Age: '250' }), true);
+    assert.equal(hasReliableNativeHttpCache({ 'Cache-Control': 'max-age=300', Age: '1' }), false);
+    assert.equal(hasReliableNativeHttpCache({ 'Cache-Control': 'no-cache, max-age=86400' }), false);
+    assert.equal(hasReliableNativeHttpCache({ 'Cache-Control': 'no-store' }), false);
+    assert.equal(hasReliableNativeHttpCache({ ETag: 'abc123' }), false);
+    assert.equal(hasReliableNativeHttpCache({
+        Date: 'Wed, 09 Sep 2026 00:00:00 GMT',
+        Expires: 'Wed, 09 Sep 2026 01:00:00 GMT',
+    }), true);
+});
+
+test('probes representative CSS and JavaScript without passing through a GET worker route', async () => {
+    const requests = [];
+    const controller = new CacheController({
+        fetchImpl: async (url, init) => {
+            requests.push({ url, init });
+            return {
+                ok: true,
+                headers: new Headers({ 'Cache-Control': 'private, max-age=3600' }),
+            };
+        },
+    });
+
+    assert.equal(await controller.probeNativeHttpCache(), true);
+    assert.deepEqual(requests.map(request => request.url), ['/style.css', '/script.js']);
+    assert.equal(requests.every(request => request.init.method === 'HEAD'), true);
+    assert.equal(requests.every(request => request.init.cache === 'no-store'), true);
+});
+
+test('keeps worker caching unless every representative asset has a fresh native policy', async () => {
+    const controller = new CacheController({
+        fetchImpl: async url => ({
+            ok: true,
+            headers: new Headers({ 'Cache-Control': url.endsWith('style.css') ? 'max-age=3600' : 'no-cache' }),
+        }),
+    });
+
+    assert.equal(await controller.probeNativeHttpCache(), false);
+});
+
+test('retires its worker when the reverse proxy already provides native browser caching', async () => {
+    let retired = 0;
+    let registered = 0;
+    let cacheStatus = '';
+
+    class NativeCacheController extends CacheController {
+        async probe() {
+            this.health = { ok: true, version: CLIENT_VERSION, appSignature: 'app-v1' };
+            this.state = 'available';
+            return this.health;
+        }
+
+        async probeNativeHttpCache() {
+            return true;
+        }
+
+        async retireIncompatibleWorker() {
+            retired += 1;
+            return 1;
+        }
+
+        async register() {
+            registered += 1;
+            return {};
+        }
+    }
+
+    const controller = new NativeCacheController({
+        detectIOSStandalone: () => false,
+        onStatus(key, value) {
+            if (key === 'cache') cacheStatus = value;
+        },
+    });
+
+    assert.equal(await controller.startAfterLogin(), null);
+    assert.equal(retired, 1);
+    assert.equal(registered, 0);
+    assert.equal(cacheStatus, '原生缓存');
+    assert.deepEqual(controller.getStatus(), {
+        state: 'native-http-cache',
+        cache: '原生缓存',
+        server: '正常',
+        entries: null,
+        warning: false,
+        overall: '浏览器原生缓存',
+    });
 });
 
 test('retires the worker instead of registering an outdated server worker', async () => {

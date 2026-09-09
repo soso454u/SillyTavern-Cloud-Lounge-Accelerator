@@ -80,7 +80,9 @@ test('worker clears caches after extension changes and version signatures', () =
     assert.match(source, /acceptVersionSignature/);
     assert.match(source, /await clearResourceCaches\(\)/);
     assert.match(source, /LEGACY_CACHE_PREFIX/);
-    assert.match(source, /Math\.min\(3, queue\.length\)/);
+    assert.match(source, /Math\.min\(2, queue\.length\)/);
+    assert.match(source, /function openRuntimeCache\(\)/);
+    assert.equal(source.match(/caches\.open\(CACHE_NAME\)/g)?.length, 1);
     assert.doesNotMatch(source, /allowThirdPartyAssets/);
     assert.doesNotMatch(source, /importScripts\s*\(/);
 });

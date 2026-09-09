@@ -1,4 +1,4 @@
-export const ACCELERATOR_VERSION = '2.1.20';
+export const ACCELERATOR_VERSION = '2.1.21';
 export const CACHE_PREFIX = 'cloud-lounge-static-v2-';
 export const LEGACY_CACHE_PREFIX = 'cloud-lounge-static-';
 
@@ -65,6 +65,7 @@ let runtimeHits = 0;
 let runtimeMisses = 0;
 let runtimeWrites = 0;
 let writesSinceTrim = 0;
+let runtimeCachePromise = null;
 
 ${isSafeStaticPath.toString()}
 
@@ -83,6 +84,16 @@ function isCacheableResponse(response) {
         && !response.headers.has('proxy-authenticate');
 }
 
+function openRuntimeCache() {
+    if (!runtimeCachePromise) {
+        runtimeCachePromise = caches.open(CACHE_NAME).catch(error => {
+            runtimeCachePromise = null;
+            throw error;
+        });
+    }
+    return runtimeCachePromise;
+}
+
 async function trimCache(cache) {
     const keys = await cache.keys();
     const overflow = keys.length - MAX_ENTRIES;
@@ -95,7 +106,7 @@ async function fetchAndCache(request, cacheMode = 'no-cache') {
     const contentLength = Number(response.headers.get('content-length') || 0);
     const withinSizeLimit = !Number.isFinite(contentLength) || contentLength <= 0 || contentLength <= MAX_RESOURCE_BYTES;
     if (isCacheableResponse(response) && withinSizeLimit) {
-        const cache = await caches.open(CACHE_NAME);
+        const cache = await openRuntimeCache();
         await cache.put(request, response.clone());
         runtimeWrites += 1;
         writesSinceTrim += 1;
@@ -108,7 +119,7 @@ async function fetchAndCache(request, cacheMode = 'no-cache') {
 }
 
 async function cacheFirst(request) {
-    const cache = await caches.open(CACHE_NAME);
+    const cache = await openRuntimeCache();
     const cached = await cache.match(request);
     if (cached) {
         runtimeHits += 1;
@@ -131,6 +142,7 @@ function isExtensionMutation(request) {
 }
 
 async function clearResourceCaches() {
+    runtimeCachePromise = null;
     const names = await caches.keys();
     const ownNames = names.filter(name => (
         name.startsWith(CACHE_PREFIX) || name.startsWith(LEGACY_CACHE_PREFIX)
@@ -157,12 +169,12 @@ async function warmUrls(urls) {
         }
     });
     let warmed = 0;
-    const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
+    const cache = await openRuntimeCache();
+    const workers = Array.from({ length: Math.min(2, queue.length) }, async () => {
         while (queue.length) {
             const rawUrl = queue.shift();
             try {
                 const request = new Request(new URL(rawUrl, self.location.origin), { credentials: 'same-origin' });
-                const cache = await caches.open(CACHE_NAME);
                 if (await cache.match(request)) continue;
                 await fetchAndCache(request, 'force-cache');
                 if (await cache.match(request)) warmed += 1;
@@ -172,7 +184,7 @@ async function warmUrls(urls) {
         }
     });
     await Promise.all(workers);
-    await trimCache(await caches.open(CACHE_NAME));
+    await trimCache(cache);
     return warmed;
 }
 
@@ -188,7 +200,7 @@ async function acceptVersionSignature(signature) {
 }
 
 async function getStats() {
-    const cache = await caches.open(CACHE_NAME);
+    const cache = await openRuntimeCache();
     return {
         version: VERSION,
         entries: (await cache.keys()).length,

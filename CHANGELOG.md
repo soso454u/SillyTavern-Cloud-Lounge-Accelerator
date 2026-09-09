@@ -1,5 +1,13 @@
 # 更新记录
 
+## 2.1.21 — 原生静态缓存自动直通
+
+- 页面加载加速会在登录后用不经过 Worker 的 HEAD 请求检查 `/style.css` 与 `/script.js` 的浏览器缓存策略；两者都具有至少 5 分钟剩余新鲜期时，自动注销本插件 Worker 并改用浏览器原生 HTTP/disk cache，避免反向代理已经配置强缓存时仍为每个静态资源支付 Worker 冷启动成本。
+- 原生缓存探测只接受有效的 `max-age` 或未来 `Expires`，会扣除 `Age`，并拒绝 `no-store`、`no-cache`、仅 ETag 等需要重新验证的策略；探测失败或缓存期不足时继续使用原有 Worker 缓存。
+- Worker 模式在一次运行期内复用同一个 CacheStorage 句柄，不再为每个静态请求重复 `caches.open()`；空闲预热并发由 3 降为 2，并复用同一缓存句柄，减少首次启动时的存储争用。
+- 高级状态新增“原生缓存 / 浏览器原生缓存”，用于明确区分反向代理直通与 Worker CacheStorage；聊天、正则和交互优化不受缓存模式切换影响。
+- 版本统一升级到 2.1.21，Worker 使用新版本缓存名。
+
 ## 2.1.20 — 大聊天保存上传压缩
 
 - 接入 SillyTavern 官方 `performance.requestCompression`：超过 256KB 的聊天保存请求先 gzip 再上传，`maxPayloadSize` 设为 `0` 以覆盖 15MB 及更大的聊天，压缩超时放宽至 15 秒；失败或超时仍由官方逻辑回退原始请求。

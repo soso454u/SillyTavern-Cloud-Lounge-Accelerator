@@ -14,9 +14,36 @@ const CORE_URLS = Object.freeze([
     '/scripts/templates/themeDelete.html',
     '/scripts/templates/themeImportWarning.html',
 ]);
+const HTTP_CACHE_PROBE_URLS = Object.freeze(['/style.css', '/script.js']);
+const MIN_NATIVE_CACHE_SECONDS = 300;
 
 export function serverVersionMatchesClient(version) {
     return typeof version === 'string' && version === CLIENT_VERSION;
+}
+
+function readHeader(headers, name) {
+    if (typeof headers?.get === 'function') return headers.get(name) || '';
+    if (!headers || typeof headers !== 'object') return '';
+    const entry = Object.entries(headers).find(([key]) => key.toLowerCase() === name.toLowerCase());
+    return entry ? String(entry[1]) : '';
+}
+
+export function hasReliableNativeHttpCache(headers, {
+    minimumFreshSeconds = MIN_NATIVE_CACHE_SECONDS,
+    now = Date.now(),
+} = {}) {
+    const cacheControl = readHeader(headers, 'cache-control');
+    if (/(?:^|,)\s*(?:no-store|no-cache)(?:\s*(?:,|$|=))/i.test(cacheControl)) return false;
+
+    const age = Math.max(0, Number.parseInt(readHeader(headers, 'age'), 10) || 0);
+    const maxAgeMatch = cacheControl.match(/(?:^|,)\s*max-age\s*=\s*"?(\d+)"?/i);
+    if (maxAgeMatch) return Number.parseInt(maxAgeMatch[1], 10) - age >= minimumFreshSeconds;
+
+    const expiresAt = Date.parse(readHeader(headers, 'expires'));
+    if (!Number.isFinite(expiresAt)) return false;
+    const serverDate = Date.parse(readHeader(headers, 'date'));
+    const baseline = Number.isFinite(serverDate) ? serverDate : now;
+    return (expiresAt - baseline) / 1000 - age >= minimumFreshSeconds;
 }
 
 export function isIOSStandaloneEnvironment({
@@ -41,9 +68,14 @@ export function isIOSStandalone() {
 }
 
 export class CacheController {
-    constructor({ onStatus = null, detectIOSStandalone = isIOSStandalone } = {}) {
+    constructor({
+        onStatus = null,
+        detectIOSStandalone = isIOSStandalone,
+        fetchImpl = (...args) => fetch(...args),
+    } = {}) {
         this.onStatus = onStatus;
         this.detectIOSStandalone = detectIOSStandalone;
+        this.fetchImpl = fetchImpl;
         this.registration = undefined;
         this.health = null;
         this.state = 'unknown';
@@ -63,7 +95,7 @@ export class CacheController {
         }
         if (!force && this.health) return this.health;
         try {
-            const response = await fetch(`${API_BASE}/health`, { credentials: 'same-origin', cache: 'no-store' });
+            const response = await this.fetchImpl(`${API_BASE}/health`, { credentials: 'same-origin', cache: 'no-store' });
             if (!response.ok) {
                 this.state = response.status === 404 ? 'missing' : 'error';
                 return null;
@@ -103,6 +135,19 @@ export class CacheController {
         });
         await this.registration.update();
         return this.registration;
+    }
+
+    async probeNativeHttpCache() {
+        try {
+            const responses = await Promise.all(HTTP_CACHE_PROBE_URLS.map(url => this.fetchImpl(url, {
+                method: 'HEAD',
+                credentials: 'same-origin',
+                cache: 'no-store',
+            })));
+            return responses.every(response => response.ok && hasReliableNativeHttpCache(response.headers));
+        } catch {
+            return false;
+        }
     }
 
     workerFor(registration) {
@@ -159,6 +204,12 @@ export class CacheController {
             await this.retireIncompatibleWorker();
             this.state = 'ios-basic-auth';
             this.onStatus?.('cache', '已停用（iOS 主屏幕 + Basic Auth）');
+            return null;
+        }
+        if (await this.probeNativeHttpCache()) {
+            await this.retireIncompatibleWorker();
+            this.state = 'native-http-cache';
+            this.onStatus?.('cache', '原生缓存');
             return null;
         }
         const registration = await this.register();
@@ -241,6 +292,16 @@ export class CacheController {
     }
 
     getStatus() {
+        if (this.state === 'native-http-cache') {
+            return {
+                state: this.state,
+                cache: '原生缓存',
+                server: '正常',
+                entries: null,
+                warning: false,
+                overall: '浏览器原生缓存',
+            };
+        }
         if (this.state === 'ios-basic-auth') {
             return {
                 state: this.state,
