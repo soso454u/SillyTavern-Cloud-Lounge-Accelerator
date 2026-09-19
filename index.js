@@ -80,7 +80,6 @@ function createRuntime() {
         eventSource,
         eventTypes: event_types,
         getCurrentChatId,
-        onChatPayload: messages => chatOptimizer.inspectPayload(messages),
         onStatus: value => updateRuntimeStatus('startup', value),
     });
     const regexRefresh = new RegexRefreshController({

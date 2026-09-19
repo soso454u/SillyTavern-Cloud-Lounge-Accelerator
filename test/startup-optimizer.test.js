@@ -70,3 +70,9 @@ test('keeps welcome recovery out of the chat layout and uses a short top notice'
     assert.match(noticeStyles, /top:/);
     assert.doesNotMatch(noticeStyles, /bottom:/);
 });
+
+test('never clones or reparses full chat payloads for side-channel metrics', async () => {
+    const source = await readFile(new URL('../modules/startup-optimizer.js', import.meta.url), 'utf8');
+    assert.doesNotMatch(source, /observe-chat|onChatPayload|inspectChatResponse/);
+    assert.doesNotMatch(source, /cloneResponse\(response\).*inspectChat/s);
+});

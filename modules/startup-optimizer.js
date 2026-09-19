@@ -55,11 +55,10 @@ function fingerprint(descriptor) {
 }
 
 export class StartupOptimizer {
-    constructor({ eventSource, eventTypes, getCurrentChatId = () => undefined, onChatPayload = null, onStatus = null }) {
+    constructor({ eventSource, eventTypes, getCurrentChatId = () => undefined, onStatus = null }) {
         this.eventSource = eventSource;
         this.eventTypes = eventTypes;
         this.getCurrentChatId = getCurrentChatId;
-        this.onChatPayload = onChatPayload;
         this.onStatus = onStatus;
         this.nativeFetch = null;
         this.fetchWrapper = null;
@@ -178,11 +177,6 @@ export class StartupOptimizer {
                 return nativeFetch(input, init);
             }
             const policy = classifyStartupRequest({ pathname: descriptor.url.pathname, method: descriptor.method });
-            if (policy === 'observe-chat') {
-                const response = await nativeFetch(input, init);
-                await this.inspectChatResponse(cloneResponse(response));
-                return response;
-            }
             if (policy === 'stale-recent' && this.startupFeatures && descriptor.reusable) {
                 return this.fetchRecentChats(nativeFetch, input, init, descriptor);
             }
@@ -259,17 +253,6 @@ export class StartupOptimizer {
             if (this.recentPending.get(key) === pending) this.recentPending.delete(key);
         });
         this.recentPending.set(key, pending);
-    }
-
-    async inspectChatResponse(response) {
-        if (!response?.ok || typeof this.onChatPayload !== 'function') return;
-        try {
-            const payload = await response.json();
-            const messages = Array.isArray(payload) ? payload : (Array.isArray(payload?.chat) ? payload.chat : []);
-            this.onChatPayload(messages);
-        } catch (error) {
-            console.debug(LOG_PREFIX, '聊天复杂度旁路分析失败', error);
-        }
     }
 
     stop() {

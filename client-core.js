@@ -1,7 +1,5 @@
-export const CLIENT_VERSION = '2.1.21';
+export const CLIENT_VERSION = '2.1.22';
 export const CHAT_PAGE_SIZE = 5;
-
-export const CHAT_REQUEST_PATHS = Object.freeze(['/api/chats/get', '/api/chats/group/get']);
 
 export function clampInteger(value, fallback, minimum, maximum) {
     const parsed = Number.parseInt(value, 10);
@@ -67,7 +65,6 @@ export function selectLiveMessageIndexes(visibility, { generating = false, fallb
 
 export function classifyStartupRequest({ pathname = '', method = 'GET' } = {}) {
     const verb = String(method).toUpperCase();
-    if (CHAT_REQUEST_PATHS.includes(pathname) && verb === 'POST') return 'observe-chat';
     if (pathname === '/api/chats/recent' && verb === 'POST') return 'stale-recent';
     if (verb === 'POST' && (
         /^\/api\/chats\/(?:save|delete|rename|import|group\/(?:save|delete|import))$/.test(pathname)
