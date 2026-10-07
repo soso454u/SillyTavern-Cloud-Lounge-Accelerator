@@ -28,7 +28,7 @@ test('keeps every published version source in sync', async () => {
         import('../manifest.json', { with: { type: 'json' } }),
         import('../package.json', { with: { type: 'json' } }),
     ]);
-    assert.equal(CLIENT_VERSION, '2.1.26');
+    assert.equal(CLIENT_VERSION, '2.1.27');
     assert.equal(manifest.version, CLIENT_VERSION);
     assert.equal(packageJson.version, CLIENT_VERSION);
     assert.equal(ACCELERATOR_VERSION, CLIENT_VERSION);
@@ -99,7 +99,9 @@ test('keeps visible messages, their neighbors, and only a generating tail live',
 });
 
 test('strictly scopes startup request observation and reuse', () => {
-    assert.equal(classifyStartupRequest({ pathname: '/api/characters/all', method: 'POST' }), 'reuse');
+    for (const pathname of ['/api/characters/all', '/api/avatars/get', '/api/backgrounds/all']) {
+        assert.equal(classifyStartupRequest({ pathname, method: 'POST' }), 'native');
+    }
     assert.equal(classifyStartupRequest({ pathname: '/scripts/extensions/regex/editor.html', method: 'GET' }), 'reuse');
     assert.equal(classifyStartupRequest({ pathname: '/api/chats/get', method: 'POST' }), 'native');
     assert.equal(classifyStartupRequest({ pathname: '/api/chats/group/get', method: 'POST' }), 'native');

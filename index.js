@@ -236,14 +236,14 @@ async function changeSetting(key, value) {
 async function getPanelStatus() {
     const { cacheController, performanceConfig } = getRuntime();
     const [, performance] = await Promise.all([
-        cacheController?.state === 'available' ? cacheController.refreshStats() : null,
-        performanceConfig?.refresh(),
+        appReady && cacheController?.state === 'available' ? cacheController.refreshStats() : null,
+        appReady ? performanceConfig.refresh() : (performanceConfig.status || { pending: true }),
     ]);
     return {
         ...cacheController?.getStatus(),
         chat: settings.chatOptimization ? runtimeStatus.chat : '关闭',
         interaction: settings.interactionOptimization ? runtimeStatus.interaction : '关闭',
-        performance,
+        performance: performanceConfig.status || performance,
     };
 }
 

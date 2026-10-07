@@ -77,7 +77,9 @@ export function createPerformancePanel(onChange) {
         update(status = {}) {
             const available = status.available === true;
             const writable = status.writable !== false;
-            if (!available) {
+            if (status.pending) {
+                state.textContent = '启动完成后读取云端设置…';
+            } else if (!available) {
                 state.textContent = status.error?.includes('config.yaml')
                     ? '服务端无法读取 config.yaml'
                     : '需要安装并连接服务端插件';

@@ -58,6 +58,34 @@ test('deduplicates simultaneous first recent-chat requests', async () => {
     assert.equal(calls, 1);
 });
 
+test('passes startup user-library responses through without cloning or retaining them', async t => {
+    const originals = { window: globalThis.window, location: globalThis.location, document: globalThis.document };
+    let clones = 0;
+    let calls = 0;
+    const response = { ok: true, clone() { clones += 1; return this; } };
+    globalThis.location = { href: 'https://example.test/' };
+    globalThis.document = { body: { classList: { remove() {} } } };
+    globalThis.window = {
+        fetch: async () => { calls += 1; return response; },
+        addEventListener() {}, removeEventListener() {},
+    };
+    t.after(() => {
+        for (const [name, value] of Object.entries(originals)) {
+            if (value === undefined) delete globalThis[name];
+            else globalThis[name] = value;
+        }
+    });
+    const optimizer = new StartupOptimizer({ eventSource: { on() {}, removeListener() {} }, eventTypes: {} });
+    optimizer.start();
+    for (const path of ['/api/characters/all', '/api/avatars/get', '/api/backgrounds/all']) {
+        assert.equal(await window.fetch(path, { method: 'POST', body: '{}' }), response);
+    }
+    assert.equal(calls, 3);
+    assert.equal(clones, 0);
+    assert.equal(optimizer.entries.size, 0);
+    optimizer.stop();
+});
+
 test('keeps the native startup blocker until APP_READY on iPhone and iPad', async () => {
     const iosNavigator = {
         userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1',

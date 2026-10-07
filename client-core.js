@@ -1,4 +1,4 @@
-export const CLIENT_VERSION = '2.1.26';
+export const CLIENT_VERSION = '2.1.27';
 export const CHAT_PAGE_SIZE = 5;
 export const CHAT_PAGE_SIZE_MIN = 1;
 export const CHAT_PAGE_SIZE_MAX = 50;
@@ -80,7 +80,9 @@ export function classifyStartupRequest({ pathname = '', method = 'GET' } = {}) {
         pathname === '/api/extensions/discover'
         || /^\/scripts\/extensions\/.+\.(?:html|css|json)$/.test(pathname)
     )) return 'reuse';
-    if (verb === 'POST' && ['/api/avatars/get', '/api/characters/all', '/api/backgrounds/all'].includes(pathname)) return 'reuse';
+    // User libraries can contain large payloads. Returning a clone while the
+    // original remains unread retains a second stream during initialization.
+    if (verb === 'POST' && ['/api/avatars/get', '/api/characters/all', '/api/backgrounds/all'].includes(pathname)) return 'native';
     if (/^\/api\/(?:characters|avatars|backgrounds)\/(?:create|edit|delete|rename|upload|import|duplicate)/.test(pathname)) return 'invalidate';
     return 'native';
 }

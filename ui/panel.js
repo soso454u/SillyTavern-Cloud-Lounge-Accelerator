@@ -146,9 +146,11 @@ export class SettingsPanel {
         this.root = null;
         this.advanced = null;
         this.performance = null;
+        this.refreshPromise = null;
     }
 
     mount() {
+        if (this.root?.isConnected) return true;
         const host = document.querySelector('#extensions_settings2');
         if (!host) return false;
         document.getElementById(ROOT_ID)?.remove();
@@ -215,9 +217,20 @@ export class SettingsPanel {
         return true;
     }
 
-    async refresh() {
+    refresh() {
         if (!this.root) return;
+        if (this.refreshPromise) return this.refreshPromise;
+        const root = this.root;
+        const promise = this.refreshStatus(root).finally(() => {
+            if (this.refreshPromise === promise) this.refreshPromise = null;
+        });
+        this.refreshPromise = promise;
+        return promise;
+    }
+
+    async refreshStatus(root) {
         const status = await this.getStatus();
+        if (this.root !== root || !root.isConnected) return;
         this.performance?.update(status.performance);
         this.advanced?.update(status);
         const label = this.root.querySelector('[data-cla-overall-status]');
