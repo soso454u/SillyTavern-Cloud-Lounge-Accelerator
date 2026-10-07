@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-import { StartupOptimizer } from '../modules/startup-optimizer.js';
+import { shouldRevealUiBeforeReady, StartupOptimizer } from '../modules/startup-optimizer.js';
 
 function descriptor() {
     return {
@@ -56,6 +56,32 @@ test('deduplicates simultaneous first recent-chat requests', async () => {
     assert.deepEqual(await firstResponse.json(), [{ version: 1 }]);
     assert.deepEqual(await secondResponse.json(), [{ version: 1 }]);
     assert.equal(calls, 1);
+});
+
+test('keeps the native startup blocker until APP_READY on iPhone and iPad', async () => {
+    const iosNavigator = {
+        userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1',
+        platform: 'iPhone',
+        maxTouchPoints: 5,
+    };
+    assert.equal(shouldRevealUiBeforeReady({ navigatorRef: iosNavigator, matchMediaRef: () => ({ matches: true }) }), false);
+    assert.equal(shouldRevealUiBeforeReady({
+        navigatorRef: { userAgent: 'Mozilla/5.0 Chrome/140', platform: 'Linux x86_64', maxTouchPoints: 0 },
+        matchMediaRef: () => ({ matches: false }),
+    }), true);
+
+    let loaderImports = 0;
+    const optimizer = new StartupOptimizer({
+        allowEarlyUi: () => false,
+        importActionLoader: async () => {
+            loaderImports += 1;
+            return { loader: { active: () => [] } };
+        },
+    });
+    optimizer.started = true;
+    optimizer.startupFeatures = true;
+    await optimizer.onSettingsLoaded();
+    assert.equal(loaderImports, 0, 'iOS must not expose controls before SillyTavern has bound them');
 });
 
 test('keeps welcome recovery out of the chat layout and uses a short top notice', async () => {

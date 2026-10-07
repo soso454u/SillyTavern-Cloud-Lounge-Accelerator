@@ -1,9 +1,17 @@
 import { classifyStartupRequest } from '../client-core.js';
+import { isIosWebKitTouch } from '../utils/device-profile.js';
 
 const FETCH_TTL_MS = 20000;
 const LOG_PREFIX = '[Cloud Lounge Accelerator]';
 const BACKGROUND_NOTICE_MS = 1800;
 const RECOVERY_NOTICE_MS = 3200;
+
+export function shouldRevealUiBeforeReady({
+    navigatorRef = globalThis.navigator,
+    matchMediaRef = globalThis.matchMedia,
+} = {}) {
+    return !isIosWebKitTouch({ navigatorRef, matchMediaRef });
+}
 
 function cloneResponse(response) {
     try {
@@ -55,11 +63,20 @@ function fingerprint(descriptor) {
 }
 
 export class StartupOptimizer {
-    constructor({ eventSource, eventTypes, getCurrentChatId = () => undefined, onStatus = null }) {
+    constructor({
+        eventSource,
+        eventTypes,
+        getCurrentChatId = () => undefined,
+        onStatus = null,
+        allowEarlyUi = shouldRevealUiBeforeReady,
+        importActionLoader = () => import('../../../../action-loader.js'),
+    }) {
         this.eventSource = eventSource;
         this.eventTypes = eventTypes;
         this.getCurrentChatId = getCurrentChatId;
         this.onStatus = onStatus;
+        this.allowEarlyUi = allowEarlyUi;
+        this.importActionLoader = importActionLoader;
         this.nativeFetch = null;
         this.fetchWrapper = null;
         this.entries = new Map();
@@ -94,9 +111,9 @@ export class StartupOptimizer {
     }
 
     async onSettingsLoaded() {
-        if (!this.started || !this.startupFeatures) return;
+        if (!this.started || !this.startupFeatures || !this.allowEarlyUi()) return;
         try {
-            const loaderModule = await import('../../../../action-loader.js');
+            const loaderModule = await this.importActionLoader();
             const handle = loaderModule.loader?.active?.().find(item => item.slug === 'app-init');
             if (!handle || !this.started) return;
             await loaderModule.loader.hide(handle);

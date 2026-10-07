@@ -1,8 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { RegexUiAdapter } from '../modules/regex-ui-adapter.js';
+import {
+    getRegexCollectionName,
+    matchesRegexOrganizerFilter,
+    RegexUiAdapter,
+} from '../modules/regex-ui-adapter.js';
 
 const LIST_SELECTOR = '#saved_regex_scripts, #saved_scoped_scripts, #saved_preset_scripts';
+
+test('groups bracket-prefixed regex names into organizer collections', () => {
+    assert.equal(getRegexCollectionName('[月下美化]思维链：蓝色'), '月下美化');
+    assert.equal(getRegexCollectionName('【剧情工具】状态栏'), '剧情工具');
+    assert.equal(getRegexCollectionName('普通正则'), '未分类');
+});
+
+test('filters regex collections by name, scope, and search text', () => {
+    const row = { name: '[月下美化]思维链：蓝色', collection: '月下美化', scope: 'PRESET' };
+    assert.equal(matchesRegexOrganizerFilter({ ...row, selectedCollection: '月下美化', selectedScope: 'PRESET', query: '蓝色' }), true);
+    assert.equal(matchesRegexOrganizerFilter({ ...row, selectedCollection: '月下美化', selectedScope: 'GLOBAL', query: '' }), false);
+    assert.equal(matchesRegexOrganizerFilter({ ...row, selectedCollection: 'all', selectedScope: 'all', query: '黑色' }), false);
+});
 
 function fixture(t, { typeKey = 'PRESET', scopeOnly = false, known = true, disabled = true } = {}) {
     class Element {

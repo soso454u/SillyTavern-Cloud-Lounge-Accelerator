@@ -4,6 +4,8 @@ import { readFile } from 'node:fs/promises';
 
 import {
     CHAT_PAGE_SIZE,
+    CHAT_PAGE_SIZE_MAX,
+    CHAT_PAGE_SIZE_MIN,
     CLIENT_VERSION,
     chooseAdaptiveChatLimit,
     classifyStartupRequest,
@@ -13,6 +15,7 @@ import {
     getAdaptiveBatchSize,
     looksLikeHeavyHtml,
     measureChatPayload,
+    normalizeChatPageSize,
     prioritizeMessageDescriptors,
     selectLiveMessageIndexes,
 } from '../client-core.js';
@@ -25,7 +28,7 @@ test('keeps every published version source in sync', async () => {
         import('../manifest.json', { with: { type: 'json' } }),
         import('../package.json', { with: { type: 'json' } }),
     ]);
-    assert.equal(CLIENT_VERSION, '2.1.22');
+    assert.equal(CLIENT_VERSION, '2.1.23');
     assert.equal(manifest.version, CLIENT_VERSION);
     assert.equal(packageJson.version, CLIENT_VERSION);
     assert.equal(ACCELERATOR_VERSION, CLIENT_VERSION);
@@ -43,21 +46,24 @@ test('migrates legacy expert settings into three user-facing switches', () => {
         pageAcceleration: false,
         chatOptimization: true,
         interactionOptimization: false,
+        chatPageSize: CHAT_PAGE_SIZE,
         settingsVersion: CLIENT_VERSION,
     });
     assert.equal(getLegacyChatTruncation({ adaptivePreviousChatTruncation: 80 }), 80);
     assert.equal(getLegacyChatTruncation({ previousChatTruncation: 50 }), 50);
 });
 
-test('always opens chats with only the latest five messages', () => {
+test('defaults to five rendered messages and accepts a bounded user page size', () => {
     assert.equal(CHAT_PAGE_SIZE, 5);
     assert.equal(chooseAdaptiveChatLimit({ averageTextLength: 400, richMarkerCount: 0, hardwareConcurrency: 8, deviceMemory: 8 }), 5);
-    assert.equal(chooseAdaptiveChatLimit({ averageTextLength: 5000, richMarkerCount: 12, hardwareConcurrency: 8, deviceMemory: 8 }), 5);
-    assert.equal(chooseAdaptiveChatLimit({ averageTextLength: 5000, richMarkerCount: 12, hardwareConcurrency: 4, deviceMemory: 4 }), 5);
+    assert.equal(chooseAdaptiveChatLimit({ pageSize: 12, averageTextLength: 5000, richMarkerCount: 12 }), 12);
+    assert.equal(normalizeChatPageSize(0), CHAT_PAGE_SIZE_MIN);
+    assert.equal(normalizeChatPageSize(500), CHAT_PAGE_SIZE_MAX);
+    assert.equal(normalizeChatPageSize('not-a-number'), CHAT_PAGE_SIZE);
     assert.ok(measureChatPayload([{ mes: '<details><table>heavy</table></details>' }]).richMarkerCount >= 2);
 });
 
-test('detects full HTML documents while keeping the fixed five-message page', () => {
+test('detects full HTML documents while keeping the chosen message page size', () => {
     const fullDocument = `<!DOCTYPE html><html><head><style>${'x'.repeat(3100)}</style></head><body></body></html>`;
     const fencedDocument = `\`\`\`html\n<html>${'x'.repeat(6000)}</html>\n\`\`\``;
     assert.equal(looksLikeHeavyHtml(fullDocument), true);
@@ -67,9 +73,9 @@ test('detects full HTML documents while keeping the fixed five-message page', ()
     const metrics = measureChatPayload([{ mes: 'plain' }, { mes: fullDocument }]);
     assert.equal(metrics.heavyHtmlCount, 1);
     assert.equal(metrics.maxHtmlLength, fullDocument.length);
-    assert.equal(chooseAdaptiveChatLimit({ ...metrics, hardwareConcurrency: 8, deviceMemory: 8 }), 5);
-    assert.equal(chooseAdaptiveChatLimit({ ...metrics, hardwareConcurrency: 4, deviceMemory: 4 }), 5);
-    assert.equal(chooseAdaptiveChatLimit({ maxHtmlLength: 10000, hardwareConcurrency: 8, deviceMemory: 8 }), 5);
+    assert.equal(chooseAdaptiveChatLimit({ ...metrics, pageSize: 8, hardwareConcurrency: 8, deviceMemory: 8 }), 8);
+    assert.equal(chooseAdaptiveChatLimit({ ...metrics, pageSize: 3, hardwareConcurrency: 4, deviceMemory: 4 }), 3);
+    assert.equal(chooseAdaptiveChatLimit({ maxHtmlLength: 10000, pageSize: 10, hardwareConcurrency: 8, deviceMemory: 8 }), 10);
     const longPlain = measureChatPayload([{ mes: 'x'.repeat(12000) }]);
     assert.equal(longPlain.heavyHtmlCount, 0);
     assert.equal(longPlain.maxHtmlLength, 0);

@@ -180,3 +180,14 @@ test('does not force the welcome screen to the bottom', () => {
     optimizer.settleInitialBottom();
     assert.deepEqual(chatElement.scrollCalls, []);
 });
+
+test('applies a changed chat page size to the active SillyTavern setting', () => {
+    const optimizer = new ChatOptimizer({});
+    optimizer.started = true;
+    optimizer.powerUser = { chat_truncation: 5 };
+
+    assert.equal(optimizer.setPageSize(12), 12);
+    assert.equal(optimizer.powerUser.chat_truncation, 12);
+    assert.equal(optimizer.setPageSize(999), 50);
+    assert.equal(optimizer.powerUser.chat_truncation, 50);
+});

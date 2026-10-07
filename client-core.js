@@ -1,5 +1,7 @@
-export const CLIENT_VERSION = '2.1.22';
+export const CLIENT_VERSION = '2.1.23';
 export const CHAT_PAGE_SIZE = 5;
+export const CHAT_PAGE_SIZE_MIN = 1;
+export const CHAT_PAGE_SIZE_MAX = 50;
 
 export function clampInteger(value, fallback, minimum, maximum) {
     const parsed = Number.parseInt(value, 10);
@@ -7,8 +9,12 @@ export function clampInteger(value, fallback, minimum, maximum) {
     return Math.min(maximum, Math.max(minimum, parsed));
 }
 
-export function chooseAdaptiveChatLimit() {
-    return CHAT_PAGE_SIZE;
+export function normalizeChatPageSize(value, fallback = CHAT_PAGE_SIZE) {
+    return clampInteger(value, fallback, CHAT_PAGE_SIZE_MIN, CHAT_PAGE_SIZE_MAX);
+}
+
+export function chooseAdaptiveChatLimit({ pageSize = CHAT_PAGE_SIZE } = {}) {
+    return normalizeChatPageSize(pageSize);
 }
 
 export function looksLikeHeavyHtml(text) {

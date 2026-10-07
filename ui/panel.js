@@ -1,5 +1,6 @@
 import { createAdvancedPanel } from './advanced-panel.js';
 import { createPerformancePanel } from './performance-panel.js';
+import { CHAT_PAGE_SIZE_MAX, CHAT_PAGE_SIZE_MIN, normalizeChatPageSize } from '../client-core.js';
 
 const ROOT_ID = 'cloud-lounge-accelerator-settings';
 
@@ -54,6 +55,86 @@ function createButton(label, icon, onClick, className = '') {
     return button;
 }
 
+function createTabs(pages) {
+    const tabs = document.createElement('div');
+    tabs.className = 'cla-tabs';
+    tabs.setAttribute('role', 'tablist');
+    const activate = key => {
+        for (const item of pages) {
+            const active = item.key === key;
+            item.button.classList.toggle('active', active);
+            item.button.setAttribute('aria-selected', String(active));
+            item.page.hidden = !active;
+        }
+    };
+    for (const item of pages) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'menu_button cla-tab';
+        button.setAttribute('role', 'tab');
+        button.textContent = item.label;
+        button.addEventListener('click', () => activate(item.key));
+        item.button = button;
+        tabs.append(button);
+    }
+    activate(pages[0].key);
+    return tabs;
+}
+
+function createChatDisplayPage(settings, onSettingChange) {
+    const page = document.createElement('section');
+    page.className = 'cla-page cla-chat-display-page';
+    page.dataset.claPage = 'chat-display';
+
+    const heading = document.createElement('div');
+    heading.className = 'cla-page-heading';
+    const title = document.createElement('strong');
+    title.textContent = '聊天显示';
+    const description = document.createElement('small');
+    description.textContent = '单独调整每次显示的消息数量';
+    heading.append(title, description);
+
+    const setting = document.createElement('label');
+    setting.className = 'cla-number-setting';
+    const text = document.createElement('span');
+    const name = document.createElement('strong');
+    name.textContent = '每页渲染消息';
+    const note = document.createElement('small');
+    note.textContent = `可选 ${CHAT_PAGE_SIZE_MIN}–${CHAT_PAGE_SIZE_MAX} 条；iPhone / iPad 推荐 3–5 条`;
+    text.append(name, note);
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.className = 'text_pole cla-page-size-input';
+    input.min = String(CHAT_PAGE_SIZE_MIN);
+    input.max = String(CHAT_PAGE_SIZE_MAX);
+    input.step = '1';
+    input.inputMode = 'numeric';
+    input.value = String(settings.chatPageSize);
+    input.addEventListener('change', async () => {
+        const previous = settings.chatPageSize;
+        const value = normalizeChatPageSize(input.value, previous);
+        input.value = String(value);
+        input.disabled = true;
+        try {
+            await onSettingChange('chatPageSize', value);
+            settings.chatPageSize = value;
+            globalThis.toastr?.success?.(`已改为每页渲染 ${value} 条消息`, '云酒馆加速器');
+        } catch (error) {
+            input.value = String(previous);
+            globalThis.toastr?.error?.(error instanceof Error ? error.message : String(error), '云酒馆加速器');
+        } finally {
+            input.disabled = false;
+        }
+    });
+    setting.append(text, input);
+
+    const boundary = document.createElement('p');
+    boundary.className = 'cla-setting-note';
+    boundary.textContent = '这只改变页面首次显示和“显示更多”的数量；不删除聊天，也不会减少发给模型的历史上下文。数量越大，复杂美化和正则越可能让手机卡顿。';
+    page.append(heading, setting, boundary);
+    return page;
+}
+
 export class SettingsPanel {
     constructor({ settings, onSettingChange, onPerformanceChange, onRerender, onRepair, getStatus }) {
         this.settings = settings;
@@ -93,8 +174,10 @@ export class SettingsPanel {
         statusText.textContent = '运行正常';
         status.append(dot, statusText);
 
-        content.append(
-            status,
+        const mainPage = document.createElement('section');
+        mainPage.className = 'cla-page';
+        mainPage.dataset.claPage = 'main';
+        mainPage.append(
             createSwitch('pageAcceleration', '页面加载加速', '让酒馆第二次打开更快', this.settings.pageAcceleration, this.onSettingChange),
             createSwitch('chatOptimization', '聊天与重美化优化', '减少长聊天、人物面板和复杂正则造成的卡顿', this.settings.chatOptimization, this.onSettingChange),
             createSwitch('interactionOptimization', '界面操作优化', '让抽屉、弹窗、输入与拖动保持流畅可用', this.settings.interactionOptimization, this.onSettingChange),
@@ -116,7 +199,13 @@ export class SettingsPanel {
         }, 'cla-repair-button'));
         this.performance = createPerformancePanel(this.onPerformanceChange);
         this.advanced = createAdvancedPanel();
-        content.append(this.performance.element, actions, repairBox, this.advanced.element);
+        mainPage.append(this.performance.element, actions, repairBox, this.advanced.element);
+        const chatDisplayPage = createChatDisplayPage(this.settings, this.onSettingChange);
+        const pages = [
+            { key: 'main', label: '常用', page: mainPage },
+            { key: 'chat-display', label: '聊天显示', page: chatDisplayPage },
+        ];
+        content.append(status, createTabs(pages), mainPage, chatDisplayPage);
         body.append(content);
         header.append(title, body);
         root.append(header);

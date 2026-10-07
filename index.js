@@ -22,6 +22,7 @@ import { StartupOptimizer } from './modules/startup-optimizer.js';
 import { getLegacyChatTruncation, normalizeSettings } from './settings.js';
 import { SettingsPanel } from './ui/panel.js';
 import { FrameScheduler } from './utils/scheduler.js';
+import { isIosWebKitTouch } from './utils/device-profile.js';
 
 const MODULE_ID = 'cloud_lounge_accelerator';
 const LOG_PREFIX = '[Cloud Lounge Accelerator]';
@@ -127,7 +128,7 @@ async function startEnabledModules({ skipCache = false, forceCache = false } = {
     } = getRuntime();
     let chatStart = null;
     if (settings.chatOptimization) {
-        chatStart = chatOptimizer.start({ legacyTruncation });
+        chatStart = chatOptimizer.start({ legacyTruncation, chatPageSize: settings.chatPageSize });
     }
     if (settings.pageAcceleration || settings.chatOptimization) {
         startupOptimizer.start({ startupFeatures: settings.pageAcceleration });
@@ -136,7 +137,9 @@ async function startEnabledModules({ skipCache = false, forceCache = false } = {
         await chatStart;
         legacyTruncation = null;
     }
-    if (settings.interactionOptimization) await interactionOptimizer.start();
+    if (settings.interactionOptimization && (appReady || !isIosWebKitTouch())) {
+        await interactionOptimizer.start();
+    }
     if (!appReady) return;
     if (settings.chatOptimization) {
         const refreshReady = await regexRefresh.start();
@@ -188,7 +191,7 @@ async function changeChatOptimization(enabled, current) {
         if (!settings.pageAcceleration) current.startupOptimizer.stop();
         return;
     }
-    const chatStart = current.chatOptimizer.start({ legacyTruncation });
+    const chatStart = current.chatOptimizer.start({ legacyTruncation, chatPageSize: settings.chatPageSize });
     current.startupOptimizer.start({ startupFeatures: settings.pageAcceleration });
     await chatStart;
     legacyTruncation = null;
@@ -198,21 +201,35 @@ async function changeChatOptimization(enabled, current) {
 }
 
 async function changeInteractionOptimization(enabled, current) {
-    if (enabled) await current.interactionOptimizer.start();
+    if (enabled && (appReady || !isIosWebKitTouch())) await current.interactionOptimizer.start();
     else current.interactionOptimizer.stop();
+}
+
+async function changeChatPageSize(value, current) {
+    const pageSize = current.chatOptimizer.setPageSize(value);
+    settings.chatPageSize = pageSize;
+    if (settings.chatOptimization && appReady && getCurrentChatId() != null) {
+        try {
+            await reloadCurrentChat();
+        } catch (error) {
+            console.debug(LOG_PREFIX, '渲染条数已保存，当前聊天重载失败', error);
+            globalThis.toastr?.warning?.('渲染条数已保存，切换聊天后生效', '云酒馆加速器');
+        }
+    }
 }
 
 const settingHandlers = Object.freeze({
     pageAcceleration: changePageAcceleration,
     chatOptimization: changeChatOptimization,
     interactionOptimization: changeInteractionOptimization,
+    chatPageSize: changeChatPageSize,
 });
 
-async function changeSetting(key, enabled) {
+async function changeSetting(key, value) {
     const handler = settingHandlers[key];
-    settings[key] = enabled;
+    settings[key] = value;
+    if (handler) await handler(value, getRuntime());
     persistSettings();
-    if (handler) await handler(enabled, getRuntime());
     await panel?.refresh();
 }
 

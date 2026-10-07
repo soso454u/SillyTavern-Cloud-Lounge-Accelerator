@@ -1,9 +1,10 @@
-import { CLIENT_VERSION } from './client-core.js';
+import { CHAT_PAGE_SIZE, CLIENT_VERSION, normalizeChatPageSize } from './client-core.js';
 
 export const DEFAULT_SETTINGS = Object.freeze({
     pageAcceleration: true,
     chatOptimization: true,
     interactionOptimization: true,
+    chatPageSize: CHAT_PAGE_SIZE,
     settingsVersion: CLIENT_VERSION,
 });
 
@@ -13,6 +14,7 @@ export function normalizeSettings(value) {
         pageAcceleration: source.pageAcceleration ?? source.enabled !== false,
         chatOptimization: source.chatOptimization ?? source.takeoverEnabled !== false,
         interactionOptimization: source.interactionOptimization !== false,
+        chatPageSize: normalizeChatPageSize(source.chatPageSize),
         settingsVersion: CLIENT_VERSION,
     };
 }

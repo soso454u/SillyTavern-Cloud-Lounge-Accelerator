@@ -92,6 +92,7 @@ export class RegexRefreshController {
 
     onInteraction(event) {
         const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest?.('.cla-regex-organizer, .cla-regex-organizer-toggle')) return;
         if (event.type === 'cla-regex-dirty') {
             this.queueSnapshotCheck(60, true);
         } else if (target?.closest(CONTROL_SELECTOR)) {

@@ -1,4 +1,5 @@
 import {
+    CHAT_PAGE_SIZE,
     chooseAdaptiveChatLimit,
     detectSwipeAxis,
     measureChatPayload,
@@ -63,6 +64,7 @@ export class ChatOptimizer {
         this.swipeSuppressUntil = 0;
         this.heavyHtmlMode = false;
         this.pendingMetrics = null;
+        this.chatPageSize = CHAT_PAGE_SIZE;
         this.generation = 0;
         this.bottomSettleTimers = new Set();
         this.bottomSettleCleanup = null;
@@ -72,7 +74,8 @@ export class ChatOptimizer {
         this.historyAnchorTimers = new Set();
     }
 
-    async start({ legacyTruncation = null } = {}) {
+    async start({ legacyTruncation = null, chatPageSize = this.chatPageSize } = {}) {
+        this.setPageSize(chatPageSize);
         if (this.started) return;
         this.started = true;
         const generation = ++this.generation;
@@ -134,10 +137,17 @@ export class ChatOptimizer {
         this.heavyHtmlMode = Number(metrics?.heavyHtmlCount) > 0 || Number(metrics?.maxHtmlLength) >= 10000;
         const limit = chooseAdaptiveChatLimit({
             ...metrics,
+            pageSize: this.chatPageSize,
             hardwareConcurrency: navigator.hardwareConcurrency,
             deviceMemory: navigator.deviceMemory,
         });
         this.powerUser.chat_truncation = limit;
+    }
+
+    setPageSize(value) {
+        this.chatPageSize = chooseAdaptiveChatLimit({ pageSize: value });
+        if (this.powerUser && this.started) this.powerUser.chat_truncation = this.chatPageSize;
+        return this.chatPageSize;
     }
 
     refreshChatBindings() {
