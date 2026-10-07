@@ -77,7 +77,8 @@ try {
             }
             const globalList = document.querySelector('#saved_regex_scripts');
             data.forEach(([id, name]) => globalList.append(row(id, name)));
-            document.querySelector('#saved_preset_scripts').append(row('preset-a', '[月下美化]预设'));
+            document.querySelector('#saved_preset_scripts').append(row('preset-a', '[月下美化]预设'), row('preset-plain', '预设普通正则'));
+            document.querySelector('#saved_scoped_scripts').append(row('scoped-a', '[月下美化]角色'), row('scoped-plain', '角色普通正则'));
             window.saved = [];
             window.scripts = { 0: data.map(([id, scriptName]) => ({ id, scriptName, disabled: false })) };
             window.adapter = new RegexUiAdapter();
@@ -99,6 +100,26 @@ try {
         assert.equal(await page.locator('#plain').isVisible(), true);
         assert.equal(await page.locator('#player').isVisible(), false);
 
+        const ungrouped = [
+            ['saved_regex_scripts', 'plain'],
+            ['saved_preset_scripts', 'preset-plain'],
+            ['saved_scoped_scripts', 'scoped-plain'],
+        ];
+        for (let index = 0; index < ungrouped.length; index += 1) {
+            const [listId] = ungrouped[index];
+            await page.locator(`#${listId} [data-cla-regex-fold="未分类"] .cla-regex-collection-toggle`).click();
+            for (let other = 0; other < ungrouped.length; other += 1) {
+                assert.equal(await page.locator(`#${ungrouped[other][1]}`).isVisible(), other > index,
+                    'collapsing unclassified in one scope must leave the other scopes unchanged');
+            }
+        }
+        await page.evaluate(() => adapter.refreshOrganizerRows());
+        for (const [listId, rowId] of ungrouped) {
+            assert.equal(await page.locator(`#${rowId}`).isVisible(), false, 'refresh must preserve each collapsed scope');
+            await page.locator(`#${listId} [data-cla-regex-fold="未分类"] .cla-regex-collection-toggle`).click();
+            assert.equal(await page.locator(`#${rowId}`).isVisible(), true);
+        }
+
         const header = page.locator('#saved_regex_scripts [data-cla-regex-fold="月下美化"]');
         await header.locator('.cla-regex-collection-select').click();
         assert.equal(await page.locator('#a1 .regex_bulk_checkbox').isChecked(), true);
@@ -108,13 +129,22 @@ try {
         await header.locator('.cla-regex-collection-toggle').click();
         assert.equal(await page.locator('#a1').isVisible(), true);
         assert.equal(await page.locator('#a2').isVisible(), true);
+        assert.equal(await page.locator('#preset-a').isVisible(), false, 'same named collection in preset stays collapsed');
+        assert.equal(await page.locator('#scoped-a').isVisible(), false, 'same named collection in character stays collapsed');
         const [headingBox, firstBox, secondBox, nextHeadingBox] = await Promise.all([
             header.boundingBox(), page.locator('#a1').boundingBox(), page.locator('#a2').boundingBox(),
             page.locator('#saved_regex_scripts [data-cla-regex-fold="MEET"]').boundingBox(),
         ]);
         assert.ok(headingBox.y < firstBox.y && firstBox.y < secondBox.y && secondBox.y < nextHeadingBox.y,
             'non-adjacent native rows must appear together immediately below their collection');
-        assert.deepEqual(await page.evaluate(() => adapter.getVisibleRows().map(row => row.id)), ['a1', 'a2', 'plain', 'preset-a']);
+        assert.deepEqual(await page.evaluate(() => adapter.getVisibleRows().map(row => row.id)), ['a1', 'a2', 'plain', 'preset-plain', 'scoped-plain']);
+        const presetToggle = page.locator('#saved_preset_scripts [data-cla-regex-fold="月下美化"] .cla-regex-collection-toggle');
+        await presetToggle.click();
+        assert.equal(await page.locator('#preset-a').isVisible(), true);
+        assert.equal(await page.locator('#a1').isVisible(), true);
+        assert.equal(await page.locator('#scoped-a').isVisible(), false);
+        await presetToggle.click();
+        assert.equal(await page.locator('#a1').isVisible(), true, 'collapsing preset collection must not collapse global');
         assert.deepEqual(await page.evaluate(() => nativeIds()), initialIds);
         assert.equal(await page.evaluate(() => originalRows.every(row => row.parentElement.id === 'saved_regex_scripts')), true);
         if (process.env.CLA_REGEX_SCREENSHOT_PREFIX) {
@@ -171,7 +201,7 @@ try {
         assert.equal(await page.locator('#a1').isVisible(), true);
         assert.equal(await page.evaluate(() => originalRows.every(row => !row.style.getPropertyValue('--cla-regex-order'))), true);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-        console.log(`PASS ${viewport.width}px: inline collapse, grouped layout, native rows/actions/order, search, selection, mutation refresh and cleanup`);
+        console.log(`PASS ${viewport.width}px: independent scope folds, inline layout, native rows/actions/order, search, selection, mutation refresh and cleanup`);
         await page.close();
     }
 } finally {

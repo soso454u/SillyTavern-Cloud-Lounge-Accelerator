@@ -16,6 +16,14 @@ export function getRegexCollectionName(scriptName) {
     return collection || UNGROUPED_COLLECTION;
 }
 
+export function getRegexCollectionKey(scope = '', collection = UNGROUPED_COLLECTION) {
+    return JSON.stringify([scope, collection]);
+}
+
+function createDefaultOpenCollections() {
+    return new Set(Object.values(TYPE_BY_LIST_ID).map(scope => getRegexCollectionKey(scope, UNGROUPED_COLLECTION)));
+}
+
 export function matchesRegexOrganizerFilter({
     name = '',
     collection = UNGROUPED_COLLECTION,
@@ -36,7 +44,7 @@ export function shouldShowRegexOrganizerRow(options = {}) {
     const openCollections = options.openCollections instanceof Set
         ? options.openCollections
         : new Set(options.openCollections || []);
-    return openCollections.has(options.collection);
+    return openCollections.has(getRegexCollectionKey(options.scope, options.collection));
 }
 
 function recordsOnlyAffectChat(records) {
@@ -106,7 +114,7 @@ export class RegexUiAdapter {
         this.organizerTimer = null;
         this.organizerOpen = false;
         this.autoCollapseCollections = true;
-        this.openCollections = new Set([UNGROUPED_COLLECTION]);
+        this.openCollections = createDefaultOpenCollections();
         this.collectionGroups = [];
         this.reorderMode = false;
         this.lastSelectedRow = null;
@@ -354,6 +362,7 @@ export class RegexUiAdapter {
             if (!collections.size) continue;
             list.classList.add('cla-regex-grouped-list');
             for (const [collection, rows] of collections) {
+                const key = getRegexCollectionKey(TYPE_BY_LIST_ID[list.id], collection);
                 const header = document.createElement('div');
                 header.className = 'cla-regex-collection-header';
                 header.dataset.claRegexFold = collection;
@@ -371,8 +380,8 @@ export class RegexUiAdapter {
                 const count = document.createElement('small');
                 toggle.append(arrow, name, count);
                 toggle.addEventListener('click', () => {
-                    if (this.openCollections.has(collection)) this.openCollections.delete(collection);
-                    else this.openCollections.add(collection);
+                    if (this.openCollections.has(key)) this.openCollections.delete(key);
+                    else this.openCollections.add(key);
                     this.applyOrganizerFilters();
                 });
                 const selectAll = document.createElement('button');
@@ -393,7 +402,7 @@ export class RegexUiAdapter {
                     row.classList.add('cla-regex-grouped-row');
                     row.style.setProperty('--cla-regex-order', String(order++));
                 });
-                this.collectionGroups.push({ header, toggle, count, collection, rows });
+                this.collectionGroups.push({ header, toggle, count, key, rows });
             }
         }
     }
@@ -429,16 +438,17 @@ export class RegexUiAdapter {
             const show = this.rowMatchesOrganizer(row)
                 && shouldShowRegexOrganizerRow({
                     collection: row.dataset.claRegexCollection,
+                    scope: row.dataset.claRegexScope,
                     autoCollapse: grouped,
                     openCollections: this.openCollections,
                 });
             row.hidden = !show;
             if (show) visible += 1;
         }
-        for (const { header, toggle, count, collection, rows: members } of this.collectionGroups) {
+        for (const { header, toggle, count, key, rows: members } of this.collectionGroups) {
             const matching = members.filter(row => this.rowMatchesOrganizer(row)).length;
             header.hidden = matching === 0;
-            toggle.setAttribute('aria-expanded', String(this.openCollections.has(collection)));
+            toggle.setAttribute('aria-expanded', String(this.openCollections.has(key)));
             count.textContent = `${matching} 条`;
         }
         this.updateOrganizerCount(visible);
@@ -748,7 +758,7 @@ export class RegexUiAdapter {
         this.organizerRoot = null;
         this.organizerOpen = false;
         this.autoCollapseCollections = true;
-        this.openCollections = new Set([UNGROUPED_COLLECTION]);
+        this.openCollections = createDefaultOpenCollections();
         this.reorderMode = false;
         this.lastSelectedRow = null;
         this.selectionGesture = null;

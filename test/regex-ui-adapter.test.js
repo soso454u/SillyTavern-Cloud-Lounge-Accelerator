@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     getRegexCollectionName,
+    getRegexCollectionKey,
     matchesRegexOrganizerFilter,
     RegexUiAdapter,
     shouldShowRegexOrganizerRow,
@@ -38,7 +39,7 @@ test('shows only expanded collections when automatic folding is enabled', () => 
         selectedCollection: 'all',
         selectedScope: 'all',
         autoCollapse: true,
-        openCollections: new Set(['月下美化']),
+        openCollections: new Set([getRegexCollectionKey('PRESET', '月下美化')]),
     }), true);
     assert.equal(shouldShowRegexOrganizerRow({
         ...row,
@@ -46,6 +47,24 @@ test('shows only expanded collections when automatic folding is enabled', () => 
         selectedScope: 'all',
         autoCollapse: false,
     }), true);
+});
+
+test('keeps same-name and unclassified collections independent across regex scopes', () => {
+    for (const collection of ['未分类', '月下美化']) {
+        const scopes = ['GLOBAL', 'PRESET', 'SCOPED'];
+        const adapter = new RegexUiAdapter();
+        if (collection === '未分类') {
+            for (const scope of scopes) {
+                assert.equal(shouldShowRegexOrganizerRow({ collection, scope, autoCollapse: true, openCollections: adapter.openCollections }), true);
+            }
+        }
+        for (const openScope of scopes) {
+            const openCollections = new Set([getRegexCollectionKey(openScope, collection)]);
+            for (const scope of scopes) {
+                assert.equal(shouldShowRegexOrganizerRow({ collection, scope, autoCollapse: true, openCollections }), scope === openScope);
+            }
+        }
+    }
 });
 
 function fixture(t, { typeKey = 'PRESET', scopeOnly = false, known = true, disabled = true } = {}) {
