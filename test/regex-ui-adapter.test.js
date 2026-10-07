@@ -4,6 +4,7 @@ import {
     getRegexCollectionName,
     matchesRegexOrganizerFilter,
     RegexUiAdapter,
+    shouldShowRegexOrganizerRow,
 } from '../modules/regex-ui-adapter.js';
 
 const LIST_SELECTOR = '#saved_regex_scripts, #saved_scoped_scripts, #saved_preset_scripts';
@@ -19,6 +20,30 @@ test('filters regex collections by name, scope, and search text', () => {
     assert.equal(matchesRegexOrganizerFilter({ ...row, selectedCollection: '月下美化', selectedScope: 'PRESET', query: '蓝色' }), true);
     assert.equal(matchesRegexOrganizerFilter({ ...row, selectedCollection: '月下美化', selectedScope: 'GLOBAL', query: '' }), false);
     assert.equal(matchesRegexOrganizerFilter({ ...row, selectedCollection: 'all', selectedScope: 'all', query: '黑色' }), false);
+});
+
+test('shows only expanded collections when automatic folding is enabled', () => {
+    const row = { name: '[月下美化]思维链', collection: '月下美化', scope: 'PRESET' };
+    assert.equal(shouldShowRegexOrganizerRow({
+        ...row,
+        selectedCollection: 'all',
+        selectedScope: 'all',
+        autoCollapse: true,
+        openCollections: new Set(),
+    }), false);
+    assert.equal(shouldShowRegexOrganizerRow({
+        ...row,
+        selectedCollection: 'all',
+        selectedScope: 'all',
+        autoCollapse: true,
+        openCollections: new Set(['月下美化']),
+    }), true);
+    assert.equal(shouldShowRegexOrganizerRow({
+        ...row,
+        selectedCollection: 'all',
+        selectedScope: 'all',
+        autoCollapse: false,
+    }), true);
 });
 
 function fixture(t, { typeKey = 'PRESET', scopeOnly = false, known = true, disabled = true } = {}) {

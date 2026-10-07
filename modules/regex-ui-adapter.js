@@ -7,6 +7,7 @@ const TYPE_BY_LIST_ID = Object.freeze({
 const REGEX_LIST_SELECTOR = '#saved_regex_scripts, #saved_scoped_scripts, #saved_preset_scripts';
 const REGEX_ROW_SELECTOR = `${REGEX_LIST_SELECTOR.split(', ').map(selector => `${selector} .regex-script-label`).join(', ')}`;
 const UNGROUPED_COLLECTION = '未分类';
+const AUTO_COLLAPSE_STORAGE_KEY = 'cloud-lounge-accelerator:regex-auto-collapse';
 
 export function getRegexCollectionName(scriptName) {
     const name = String(scriptName || '').trim();
@@ -27,6 +28,15 @@ export function matchesRegexOrganizerFilter({
     return (selectedCollection === 'all' || collection === selectedCollection)
         && (selectedScope === 'all' || scope === selectedScope)
         && (!normalizedQuery || String(name).toLocaleLowerCase().includes(normalizedQuery));
+}
+
+export function shouldShowRegexOrganizerRow(options = {}) {
+    if (!matchesRegexOrganizerFilter(options)) return false;
+    if (!options.autoCollapse) return true;
+    const openCollections = options.openCollections instanceof Set
+        ? options.openCollections
+        : new Set(options.openCollections || []);
+    return openCollections.has(options.collection);
 }
 
 function recordsOnlyAffectChat(records) {
@@ -91,6 +101,8 @@ export class RegexUiAdapter {
         this.organizerRoot = null;
         this.organizerTimer = null;
         this.organizerOpen = false;
+        this.autoCollapseCollections = true;
+        this.openCollections = new Set([UNGROUPED_COLLECTION]);
         this.lastSelectedRow = null;
         this.selectionGesture = null;
         this.suppressRowClickUntil = 0;
@@ -114,6 +126,7 @@ export class RegexUiAdapter {
             console.debug('[Cloud Lounge Accelerator] 正则界面最小刷新适配不可用', error);
             return false;
         }
+        this.autoCollapseCollections = this.readAutoCollapseSetting();
         this.started = true;
         document.addEventListener('click', this.onClick, true);
         document.addEventListener('input', this.onInput, true);
@@ -142,6 +155,22 @@ export class RegexUiAdapter {
             this.organizerTimer = null;
             this.enhanceRegexUi();
         }, 0);
+    }
+
+    readAutoCollapseSetting() {
+        try {
+            return globalThis.localStorage?.getItem?.(AUTO_COLLAPSE_STORAGE_KEY) !== 'false';
+        } catch {
+            return true;
+        }
+    }
+
+    saveAutoCollapseSetting() {
+        try {
+            globalThis.localStorage?.setItem?.(AUTO_COLLAPSE_STORAGE_KEY, String(this.autoCollapseCollections));
+        } catch {
+            // Private browsing or restricted storage should not disable the UI.
+        }
     }
 
     createOrganizerButton() {
@@ -179,18 +208,39 @@ export class RegexUiAdapter {
             <div class="cla-regex-organizer-actions">
                 <button type="button" class="menu_button" data-cla-regex-action="select-visible">选择当前结果</button>
                 <button type="button" class="menu_button" data-cla-regex-action="clear">清空选择</button>
+                <label class="checkbox_label cla-regex-collapse-option">
+                    <input type="checkbox" data-cla-regex-auto-collapse />
+                    <span>合集自动折叠</span>
+                </label>
                 <label class="checkbox_label cla-regex-drag-option">
                     <input type="checkbox" data-cla-regex-drag />
                     <span>按住名称划选多条</span>
                 </label>
             </div>
+            <div class="cla-regex-collection-folds" data-cla-regex-collections></div>
             <small class="cla-regex-organizer-hint">点名称即可勾选；Shift 点击可连选。带 [合集名] 或【合集名】前缀的正则会自动收纳到同一合集。</small>
         `;
+        root.querySelector('[data-cla-regex-auto-collapse]').checked = this.autoCollapseCollections;
         root.addEventListener('input', event => {
-            if (event.target?.matches?.('[data-cla-regex-search]')) this.applyOrganizerFilters();
+            if (event.target?.matches?.('[data-cla-regex-search]')) {
+                this.refreshCollectionFolds();
+                this.applyOrganizerFilters();
+            }
         });
         root.addEventListener('change', event => {
-            if (event.target?.matches?.('[data-cla-regex-collection], [data-cla-regex-scope]')) {
+            if (event.target?.matches?.('[data-cla-regex-scope]')) {
+                this.refreshCollectionFolds();
+                this.applyOrganizerFilters();
+            }
+            if (event.target?.matches?.('[data-cla-regex-collection]')) {
+                this.applyOrganizerFilters();
+            }
+            if (event.target?.matches?.('[data-cla-regex-auto-collapse]')) {
+                this.autoCollapseCollections = event.target.checked;
+                this.saveAutoCollapseSetting();
+                const collectionSelect = root.querySelector('[data-cla-regex-collection]');
+                if (this.autoCollapseCollections && collectionSelect) collectionSelect.value = 'all';
+                this.refreshCollectionFolds();
                 this.applyOrganizerFilters();
             }
             if (event.target?.matches?.('[data-cla-regex-drag]')) {
@@ -256,7 +306,70 @@ export class RegexUiAdapter {
             });
             select.value = [...select.options].some(option => option.value === previous) ? previous : 'all';
         }
+        this.refreshCollectionFolds();
         this.applyOrganizerFilters();
+    }
+
+    refreshCollectionFolds() {
+        const root = this.organizerRoot;
+        const host = root?.querySelector('[data-cla-regex-collections]');
+        if (!root || !host) return;
+        root.classList.toggle('cla-regex-auto-collapse', this.autoCollapseCollections);
+        host.hidden = !this.autoCollapseCollections;
+        host.replaceChildren();
+        if (!this.autoCollapseCollections) return;
+
+        const query = root.querySelector('[data-cla-regex-search]')?.value || '';
+        const selectedScope = root.querySelector('[data-cla-regex-scope]')?.value || 'all';
+        const collections = new Map();
+        for (const row of this.getRows()) {
+            const name = String(row.querySelector('.regex_script_name')?.textContent || '').trim();
+            const collection = row.dataset.claRegexCollection || getRegexCollectionName(name);
+            const scope = row.dataset.claRegexScope || getTypeKey(row) || '';
+            if (!matchesRegexOrganizerFilter({ name, collection, scope, query, selectedScope })) continue;
+            if (!collections.has(collection)) collections.set(collection, []);
+            collections.get(collection).push(row);
+        }
+
+        const ordered = [...collections.entries()].sort(([left], [right]) => {
+            if (left === UNGROUPED_COLLECTION) return 1;
+            if (right === UNGROUPED_COLLECTION) return -1;
+            return left.localeCompare(right, 'zh-CN');
+        });
+        for (const [collection, rows] of ordered) {
+            const details = document.createElement('details');
+            details.className = 'cla-regex-collection-fold';
+            details.dataset.claRegexFold = collection;
+            details.open = this.openCollections.has(collection);
+            const summary = document.createElement('summary');
+            const name = document.createElement('span');
+            name.textContent = collection;
+            const count = document.createElement('small');
+            count.textContent = `${rows.length} 条`;
+            summary.append(name, count);
+            const body = document.createElement('div');
+            body.className = 'cla-regex-collection-fold-body';
+            const hint = document.createElement('small');
+            hint.textContent = '已在下方原生列表显示该合集';
+            const selectAll = document.createElement('button');
+            selectAll.type = 'button';
+            selectAll.className = 'menu_button';
+            selectAll.textContent = '选择此合集';
+            selectAll.addEventListener('click', event => {
+                event.preventDefault();
+                this.enableBulkEdit();
+                rows.forEach(row => this.setRowSelected(row, true));
+                this.updateOrganizerCount();
+            });
+            body.append(hint, selectAll);
+            details.append(summary, body);
+            details.addEventListener('toggle', () => {
+                if (details.open) this.openCollections.add(collection);
+                else this.openCollections.delete(collection);
+                this.applyOrganizerFilters();
+            });
+            host.append(details);
+        }
     }
 
     applyOrganizerFilters() {
@@ -268,13 +381,15 @@ export class RegexUiAdapter {
         let visible = 0;
         for (const row of rows) {
             const name = String(row.querySelector('.regex_script_name')?.textContent || '').trim();
-            const show = !this.organizerOpen || matchesRegexOrganizerFilter({
+            const show = !this.organizerOpen || shouldShowRegexOrganizerRow({
                 name,
                 collection: row.dataset.claRegexCollection,
                 scope: row.dataset.claRegexScope,
                 query,
                 selectedCollection,
                 selectedScope,
+                autoCollapse: this.autoCollapseCollections,
+                openCollections: this.openCollections,
             });
             row.hidden = !show;
             if (show) visible += 1;
@@ -582,6 +697,8 @@ export class RegexUiAdapter {
         this.organizerButton = null;
         this.organizerRoot = null;
         this.organizerOpen = false;
+        this.autoCollapseCollections = true;
+        this.openCollections = new Set([UNGROUPED_COLLECTION]);
         this.lastSelectedRow = null;
         this.selectionGesture = null;
         this.editorContext = null;
