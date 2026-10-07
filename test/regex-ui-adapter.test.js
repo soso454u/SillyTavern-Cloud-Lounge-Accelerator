@@ -12,6 +12,8 @@ const LIST_SELECTOR = '#saved_regex_scripts, #saved_scoped_scripts, #saved_prese
 test('groups bracket-prefixed regex names into organizer collections', () => {
     assert.equal(getRegexCollectionName('[月下美化]思维链：蓝色'), '月下美化');
     assert.equal(getRegexCollectionName('【剧情工具】状态栏'), '剧情工具');
+    assert.equal(getRegexCollectionName('「播放器」隐藏播放器文字'), '播放器');
+    assert.equal(getRegexCollectionName('『播放器』不发送提示词'), '播放器');
     assert.equal(getRegexCollectionName('普通正则'), '未分类');
 });
 
