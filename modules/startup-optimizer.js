@@ -213,14 +213,28 @@ export class StartupOptimizer {
             const method = init.method || (typeof Request !== 'undefined' && input instanceof Request ? input.method : 'GET');
             try {
                 const response = await originalFetch(input, init);
+                const durationMs = performance.now() - startedAt;
+                let resourceTiming = null;
+                try {
+                    const pathname = new URL(
+                        typeof input === 'string' ? input : input?.url,
+                        location.href,
+                    ).pathname;
+                    if (durationMs >= 1500 || pathname === '/api/settings/get' || pathname === '/api/quick-replies/save') {
+                        resourceTiming = this.diagnostics.getResourceTiming?.(input) || null;
+                    }
+                } catch {
+                    resourceTiming = null;
+                }
                 this.diagnostics.noteRequest({
                     input,
                     method,
-                    durationMs: performance.now() - startedAt,
+                    durationMs,
                     status: response.status,
                     responseBytes: Number(response.headers?.get?.('content-length') || 0),
                     contentEncoding: response.headers?.get?.('content-encoding') || '',
                     initiator,
+                    resourceTiming,
                 });
                 return response;
             } catch (error) {

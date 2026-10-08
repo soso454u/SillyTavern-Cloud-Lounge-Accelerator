@@ -99,7 +99,68 @@ test('records official startup markers, slow requests, and the 30 second boundar
         maxDurationMs: 320,
         responseBytes: 6660000,
         sizedResponses: 1,
+        timedResponses: 0,
+        encodedBodyBytes: 0,
+        decodedBodyBytes: 0,
+        networkWaitMs: 0,
+        downloadMs: 0,
+        resourceDurationMs: 0,
         encodings: { br: 1 },
     });
     assert.equal(JSON.stringify(report).includes('secret'), false);
+});
+
+test('keeps the slowest requests and exposes timing coverage without reading bodies', () => {
+    const diagnostics = new StartupDiagnostics({
+        eventSource: emitter(),
+        eventTypes: {},
+        documentRef: { body: {}, querySelector: () => null },
+        locationRef: { origin: 'https://example.test' },
+        storage: memoryStorage(),
+        performanceRef: {
+            now: () => 1000,
+            getEntriesByType: () => [{
+                type: 'reload',
+                startTime: 0,
+                fetchStart: 1,
+                requestStart: 2,
+                responseStart: 30,
+                responseEnd: 80,
+                domContentLoadedEventEnd: 120,
+                loadEventEnd: 180,
+                transferSize: 200,
+                encodedBodySize: 100,
+                decodedBodySize: 300,
+            }],
+            getEntriesByName: () => [{
+                startTime: 10,
+                requestStart: 20,
+                responseStart: 70,
+                responseEnd: 170,
+                transferSize: 600,
+                encodedBodySize: 500,
+                decodedBodySize: 900,
+            }],
+        },
+        PerformanceObserverRef: null,
+        MutationObserverRef: null,
+        setTimer: () => 1,
+        clearTimer() {},
+        now: () => 1000,
+    });
+    diagnostics.start();
+    diagnostics.noteRequest({
+        input: '/api/settings/get',
+        durationMs: 1800,
+        status: 200,
+        resourceTiming: diagnostics.getResourceTiming('/api/settings/get'),
+    });
+    diagnostics.noteRequest({ input: '/api/settings/get', durationMs: 4200, status: 200 });
+    const report = diagnostics.getReport();
+    assert.equal(report.navigationTiming.decodedBodySize, 300);
+    assert.equal(report.coverage.resourceTiming, 'available');
+    assert.equal(report.coverage.jsonParse, 'not-observed');
+    assert.equal(report.slowRequests[0].durationMs, 4200);
+    assert.equal(report.requestStats['/api/settings/get'].decodedBodyBytes, 900);
+    assert.equal(report.longTaskSupport, 'unsupported');
 });

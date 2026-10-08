@@ -8,6 +8,7 @@
 - 启动诊断独立记录 `SETTINGS_LOADED`、`APP_INITIALIZED`、`APP_READY`、官方启动遮罩消失、1.5 秒以上请求和 Long Task；只观测和记录，不提前显示界面。
 - 启动诊断补充按端点的请求次数、耗时、响应 `Content-Length` / 压缩编码和受限 initiator 栈；不读取或克隆响应体，因此可确认 `/api/settings/get` 是否重复及传输大小。
 - 修正交互异常判定：按钮已完整到达 `click` 冒泡时，即使祖先短暂带有 `pointer-events: none` 也不再误报为“不可命中”，避免把成功点击误认为复制后失效。
+- 交互错误诊断区分资源加载错误与 JavaScript 异常，并在短时间内保留优先级更高的异常；启动诊断增加 Navigation/Resource Timing、慢请求排序、Long Task 支持状态及 APP_READY/原生遮罩顺序信息。
 - 对照 SillyTavern 最新 `release` 源码确认普通消息复制在 `pointerup` 中等待 Clipboard Promise，代码块复制的拒绝可能产生 `unhandledrejection`；当前插件已在 2.1.16 移除全局释放 pointer capture 的旧行为。本版不对缺少真机证据的复制路径做猜测性重绑或全局恢复。
 - 版本统一升级到 2.1.28；141 项自动测试通过。
 

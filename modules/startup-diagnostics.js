@@ -20,6 +20,63 @@ function rounded(value) {
     return Number.isFinite(number) ? Math.max(0, Math.round(number)) : 0;
 }
 
+function timingNumber(value) {
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? Math.round(number) : null;
+}
+
+function readNavigationTiming(performanceRef) {
+    try {
+        const entry = performanceRef?.getEntriesByType?.('navigation')?.[0];
+        if (!entry) return null;
+        return {
+            type: String(entry.type || '').slice(0, 24) || undefined,
+            startTime: timingNumber(entry.startTime),
+            fetchStart: timingNumber(entry.fetchStart),
+            requestStart: timingNumber(entry.requestStart),
+            responseStart: timingNumber(entry.responseStart),
+            responseEnd: timingNumber(entry.responseEnd),
+            domContentLoadedEventEnd: timingNumber(entry.domContentLoadedEventEnd),
+            loadEventEnd: timingNumber(entry.loadEventEnd),
+            transferSize: timingNumber(entry.transferSize),
+            encodedBodySize: timingNumber(entry.encodedBodySize),
+            decodedBodySize: timingNumber(entry.decodedBodySize),
+        };
+    } catch {
+        return null;
+    }
+}
+
+function readResourceTiming(performanceRef, input, locationRef) {
+    try {
+        const rawUrl = typeof input === 'string' ? input : input?.url;
+        const url = new URL(rawUrl, locationRef?.origin || 'https://localhost');
+        const entries = performanceRef?.getEntriesByName?.(url.href) || [];
+        const entry = entries.at?.(-1) || entries[entries.length - 1];
+        if (!entry) return null;
+        return {
+            startTime: timingNumber(entry.startTime),
+            fetchStart: timingNumber(entry.fetchStart),
+            requestStart: timingNumber(entry.requestStart),
+            responseStart: timingNumber(entry.responseStart),
+            responseEnd: timingNumber(entry.responseEnd),
+            transferSize: timingNumber(entry.transferSize),
+            encodedBodySize: timingNumber(entry.encodedBodySize),
+            decodedBodySize: timingNumber(entry.decodedBodySize),
+        };
+    } catch {
+        return null;
+    }
+}
+
+function timingDelta(timing, from, to) {
+    const start = Number(timing?.[from]);
+    const end = Number(timing?.[to]);
+    return Number.isFinite(start) && Number.isFinite(end) && end >= start
+        ? rounded(end - start)
+        : null;
+}
+
 function markerDelta(markers, from, to) {
     const start = Number(markers?.[from]);
     const end = Number(markers?.[to]);
@@ -99,11 +156,21 @@ export class StartupDiagnostics {
             schema: 1,
             recordedAt: new Date(this.now()).toISOString(),
             markers: {},
+            markerOrder: [],
+            navigationTiming: readNavigationTiming(this.performance),
+            coverage: {
+                pluginActivatedMs: this.elapsed(),
+                earlyUnobservedMs: this.elapsed(),
+                resourceTiming: typeof this.performance?.getEntriesByName === 'function' ? 'available' : 'unsupported',
+                jsonParse: 'not-observed',
+                initializationBeforePlugin: 'not-observed',
+            },
             slowRequests: [],
             requestStats: {},
             longTasks: [],
             longTaskCount: 0,
             longestLongTaskMs: 0,
+            longTaskSupport: 'unsupported',
             slow: false,
         };
         this.mark('PLUGIN_ACTIVATED');
@@ -123,6 +190,7 @@ export class StartupDiagnostics {
     mark(name) {
         if (!this.report || this.report.markers[name] !== undefined) return;
         this.report.markers[name] = this.elapsed();
+        this.report.markerOrder.push(name);
         this.schedulePersist();
     }
 
@@ -154,6 +222,7 @@ export class StartupDiagnostics {
 
     watchLongTasks() {
         if (typeof this.PerformanceObserver !== 'function') return;
+        this.report.longTaskSupport = 'observing';
         try {
             this.longTaskObserver = new this.PerformanceObserver(list => {
                 for (const entry of list.getEntries?.() || []) {
@@ -173,9 +242,15 @@ export class StartupDiagnostics {
             } catch {
                 this.longTaskObserver.observe({ entryTypes: ['longtask'] });
             }
+            this.report.longTaskSupport = 'observed';
         } catch {
             this.longTaskObserver = null;
+            this.report.longTaskSupport = 'failed';
         }
+    }
+
+    getResourceTiming(input) {
+        return readResourceTiming(this.performance, input, this.location);
     }
 
     noteRequest({
@@ -187,6 +262,7 @@ export class StartupDiagnostics {
         responseBytes = 0,
         contentEncoding = '',
         initiator = '',
+        resourceTiming = null,
     } = {}) {
         if (!this.started || this.completed || !this.report) return;
         const endpoint = safeStartupEndpoint(input, this.location);
@@ -199,6 +275,12 @@ export class StartupDiagnostics {
             maxDurationMs: 0,
             responseBytes: 0,
             sizedResponses: 0,
+            timedResponses: 0,
+            encodedBodyBytes: 0,
+            decodedBodyBytes: 0,
+            networkWaitMs: 0,
+            downloadMs: 0,
+            resourceDurationMs: 0,
             encodings: {},
         };
         stats.count += 1;
@@ -208,6 +290,14 @@ export class StartupDiagnostics {
         if (bytes > 0) {
             stats.responseBytes += bytes;
             stats.sizedResponses += 1;
+        }
+        if (resourceTiming) {
+            stats.timedResponses += 1;
+            stats.encodedBodyBytes += timingNumber(resourceTiming.encodedBodySize) || 0;
+            stats.decodedBodyBytes += timingNumber(resourceTiming.decodedBodySize) || 0;
+            stats.networkWaitMs += timingDelta(resourceTiming, 'requestStart', 'responseStart') || 0;
+            stats.downloadMs += timingDelta(resourceTiming, 'responseStart', 'responseEnd') || 0;
+            stats.resourceDurationMs += timingDelta(resourceTiming, 'startTime', 'responseEnd') || 0;
         }
         if (contentEncoding) {
             const encoding = String(contentEncoding).toLowerCase().slice(0, 24);
@@ -225,8 +315,19 @@ export class StartupDiagnostics {
             if (bytes > 0) request.responseBytes = bytes;
             if (contentEncoding) request.contentEncoding = String(contentEncoding).toLowerCase().slice(0, 24);
             if (initiator) request.initiator = String(initiator).slice(0, 240);
+            if (resourceTiming) {
+                request.timing = {
+                    networkWaitMs: timingDelta(resourceTiming, 'requestStart', 'responseStart'),
+                    downloadMs: timingDelta(resourceTiming, 'responseStart', 'responseEnd'),
+                    resourceDurationMs: timingDelta(resourceTiming, 'startTime', 'responseEnd'),
+                    transferSize: timingNumber(resourceTiming.transferSize),
+                    encodedBodySize: timingNumber(resourceTiming.encodedBodySize),
+                    decodedBodySize: timingNumber(resourceTiming.decodedBodySize),
+                };
+            }
             this.report.slowRequests.push(request);
-            if (this.report.slowRequests.length > REQUEST_LIMIT) this.report.slowRequests.shift();
+            this.report.slowRequests.sort((left, right) => right.durationMs - left.durationMs);
+            if (this.report.slowRequests.length > REQUEST_LIMIT) this.report.slowRequests.splice(REQUEST_LIMIT);
         }
         this.schedulePersist();
     }
@@ -259,6 +360,13 @@ export class StartupDiagnostics {
             initializedToReadyMs: markerDelta(this.report.markers, 'APP_INITIALIZED', 'APP_READY'),
             pluginToReadyMs: markerDelta(this.report.markers, 'PLUGIN_ACTIVATED', 'APP_READY'),
         };
+        const readyIndex = this.report.markerOrder.indexOf('APP_READY');
+        const overlayIndex = this.report.markerOrder.indexOf('STARTUP_OVERLAY_HIDDEN');
+        this.report.coverage = {
+            ...this.report.coverage,
+            overlayHiddenBeforeReady: overlayIndex >= 0 && readyIndex >= 0 && overlayIndex < readyIndex,
+            observedThroughMs: readyMs,
+        };
         this.report.slow = readyMs >= SLOW_STARTUP_MS;
         this.report.recordedAt = new Date(this.now()).toISOString();
         this.completed = true;
@@ -284,7 +392,10 @@ export class StartupDiagnostics {
         const settingsCount = report.requestStats?.['/api/settings/get']?.count || 0;
         const longest = report.longestLongTaskMs || 0;
         const settings = settingsCount ? ` · 设置请求 ${settingsCount}次` : '';
-        return `${ready} · 慢请求 ${requests}${settings} · 最长主线程任务 ${longest}ms`;
+        const longTasks = report.longTaskSupport === 'observed'
+            ? `最长主线程任务 ${longest}ms`
+            : `Long Task ${report.longTaskSupport || '不可用'}`;
+        return `${ready} · 慢请求 ${requests}${settings} · ${longTasks}`;
     }
 
     stop() {

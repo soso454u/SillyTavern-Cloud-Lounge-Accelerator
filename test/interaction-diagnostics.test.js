@@ -71,3 +71,15 @@ test('persists only a bounded diagnostic snapshot that survives a new instance',
     assert.equal(restored.events.length, 16);
     assert.equal(JSON.stringify(restored).includes('private message body'), false);
 });
+
+test('distinguishes resource load errors and preserves a more valuable recent anomaly', () => {
+    const storage = memoryStorage();
+    const diagnostics = new InteractionDiagnostics({ storage, now: () => 2000 });
+    diagnostics.onError({ type: 'error', target: { localName: 'img' }, filename: '/img/avatar.png' });
+    assert.equal(diagnostics.events[0].sourceType, 'resource');
+    assert.equal(diagnostics.events[0].resourceTag, 'img');
+
+    diagnostics.persistAnomaly('business-exception', null);
+    diagnostics.persistAnomaly('unconfirmed', null);
+    assert.equal(diagnostics.getReport().kind, 'business-exception');
+});

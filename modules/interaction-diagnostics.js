@@ -23,6 +23,18 @@ const BLOCKER_SELECTOR = [
     '#shadow_character_popup',
     '#shadow_select_chat_popup',
 ].join(',');
+const RESOURCE_ERROR_TAGS = new Set(['img', 'script', 'link', 'audio', 'video', 'source', 'iframe', 'object']);
+const ANOMALY_PRIORITY = Object.freeze({
+    'pointer-capture-residual': 6,
+    'hit-blocker': 6,
+    'propagation-stopped': 5,
+    'click-missing': 5,
+    'business-exception': 5,
+    'main-thread-busy': 4,
+    'control-disabled': 3,
+    'control-not-hittable': 2,
+    unconfirmed: 1,
+});
 
 function finite(value, fallback = 0) {
     const number = Number(value);
@@ -163,8 +175,14 @@ function errorDescriptor(event) {
     } catch {
         source = '';
     }
+    const resourceTag = safeToken(event?.target?.localName || event?.target?.tagName || '', 16).toLowerCase();
+    const sourceType = RESOURCE_ERROR_TAGS.has(resourceTag)
+        ? 'resource'
+        : (event?.filename || error || reason ? 'javascript' : 'unknown');
     return {
         type: event?.type === 'unhandledrejection' ? 'unhandledrejection' : 'error',
+        sourceType,
+        resourceTag: sourceType === 'resource' ? resourceTag : undefined,
         name,
         source: source || undefined,
         line: Number.isFinite(event?.lineno) ? event.lineno : undefined,
@@ -456,14 +474,17 @@ export class InteractionDiagnostics {
     }
 
     persistAnomaly(kind, state, extra = {}) {
+        const previous = storageRead(this.storage);
+        const previousAt = Date.parse(previous?.recordedAt || '');
         if (kind === 'unconfirmed') {
             if (this.lastClipboardActivityAt <= this.lastUnconfirmedActivityAt) return;
-            const previous = storageRead(this.storage);
-            const previousAt = Date.parse(previous?.recordedAt || '');
             if (previous?.kind && previous.kind !== 'unconfirmed'
                 && Number.isFinite(previousAt) && this.now() - previousAt < 30000) return;
             this.lastUnconfirmedActivityAt = this.lastClipboardActivityAt;
         }
+        if (previous?.kind && previous.kind !== kind
+            && Number.isFinite(previousAt) && this.now() - previousAt < 30000
+            && (ANOMALY_PRIORITY[previous.kind] || 0) > (ANOMALY_PRIORITY[kind] || 0)) return;
         const report = {
             schema: 1,
             recordedAt: new Date(this.now()).toISOString(),
