@@ -1,4 +1,5 @@
 import { PromptToggleAdapter } from '../adapters/prompt-toggle.js';
+import { InteractionDiagnostics } from './interaction-diagnostics.js';
 import { InteractionRecoveryGuard } from './interaction-recovery-guard.js';
 import { InputRevealGuard, restoreNativeInputLayout } from './native-input.js';
 import { MobileInteractionGuard } from './mobile-interaction-guard.js';
@@ -13,6 +14,7 @@ const RENDER_PROFILE_LABELS = Object.freeze({
 export class InteractionOptimizer {
     constructor({ isGenerating, eventSource, eventTypes, onStatus = null } = {}) {
         this.onStatus = onStatus;
+        this.diagnostics = new InteractionDiagnostics();
         this.promptToggle = new PromptToggleAdapter({ isGenerating, eventSource, eventTypes });
         this.mobileGuard = new MobileInteractionGuard({
             onRecovered: diagnostic => this.reportRecovery(diagnostic),
@@ -31,6 +33,7 @@ export class InteractionOptimizer {
     async start() {
         if (this.started) return;
         this.started = true;
+        this.diagnostics.start();
         restoreNativeInputLayout();
         const [promptToggleActive, recoveryGuardActive, mobileGuardActive, inputRevealActive, renderProfile] = await Promise.all([
             this.promptToggle.start(),
@@ -80,6 +83,7 @@ export class InteractionOptimizer {
     }
 
     stopFeatures() {
+        this.diagnostics.stop();
         this.promptToggle.stop();
         this.recoveryGuard.stop();
         this.mobileGuard.stop();
@@ -95,5 +99,13 @@ export class InteractionOptimizer {
         this.features = null;
         this.lastRecovery = null;
         this.recoveryCount = 0;
+    }
+
+    getDiagnosticSummary() {
+        return this.diagnostics.getSummary();
+    }
+
+    getDiagnosticReport() {
+        return this.diagnostics.getReport();
     }
 }

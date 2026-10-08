@@ -136,12 +136,13 @@ function createChatDisplayPage(settings, onSettingChange) {
 }
 
 export class SettingsPanel {
-    constructor({ settings, onSettingChange, onPerformanceChange, onRerender, onRepair, getStatus }) {
+    constructor({ settings, onSettingChange, onPerformanceChange, onRerender, onRepair, onCopyDiagnostics, getStatus }) {
         this.settings = settings;
         this.onSettingChange = onSettingChange;
         this.onPerformanceChange = onPerformanceChange;
         this.onRerender = onRerender;
         this.onRepair = onRepair;
+        this.onCopyDiagnostics = onCopyDiagnostics;
         this.getStatus = getStatus;
         this.root = null;
         this.advanced = null;
@@ -200,7 +201,7 @@ export class SettingsPanel {
             globalThis.toastr?.success?.(`修复完成，已预热 ${result?.warmed || 0} 个资源`, '云酒馆加速器');
         }, 'cla-repair-button'));
         this.performance = createPerformancePanel(this.onPerformanceChange);
-        this.advanced = createAdvancedPanel();
+        this.advanced = createAdvancedPanel({ onCopyDiagnostics: this.onCopyDiagnostics });
         mainPage.append(this.performance.element, actions, repairBox, this.advanced.element);
         const chatDisplayPage = createChatDisplayPage(this.settings, this.onSettingChange);
         const pages = [

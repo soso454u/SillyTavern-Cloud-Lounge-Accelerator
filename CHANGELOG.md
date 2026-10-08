@@ -1,5 +1,14 @@
 # 更新记录
 
+## 2.1.28 — 复制后交互与慢启动精准诊断
+
+- 新增事件驱动的交互诊断，限量记录 `copy` / `cut` / `paste` / `selectionchange` / `contextmenu` 的发生时间，以及 `pointerdown` / `pointerup` / `pointercancel` / `click` 是否到达 document 捕获和冒泡阶段；不监听 pointermove，也不持续扫描 DOM。
+- 异常快照只包含安全元素标识、`composedPath`、点击点命中栈、按钮与祖先的 `disabled` / `inert` / `pointer-events` / `visibility` / `z-index`、活动弹窗状态及相关 `error` / `unhandledrejection` 类型，不采集消息正文、剪贴板内容、Cookie、密钥或完整 URL。
+- 将最近一次异常按 12KB 上限保存在本机，分类为遮罩命中、传播中断、按钮禁用/不可命中、指针捕获残留、业务异常或主线程繁忙；“高级信息”新增启动/交互摘要与“复制诊断”，Web App 重启后仍可导出。
+- 启动诊断独立记录 `SETTINGS_LOADED`、`APP_INITIALIZED`、`APP_READY`、官方启动遮罩消失、1.5 秒以上请求和 Long Task；只观测和记录，不提前显示界面。
+- 对照 SillyTavern 最新 `release` 源码确认普通消息复制在 `pointerup` 中等待 Clipboard Promise，代码块复制的拒绝可能产生 `unhandledrejection`；当前插件已在 2.1.16 移除全局释放 pointer capture 的旧行为。本版不对缺少真机证据的复制路径做猜测性重绑或全局恢复。
+- 版本统一升级到 2.1.28；141 项自动测试通过。
+
 ## 2.1.27 — 减少手机启动阶段的内存与重复请求
 
 - `/api/characters/all`、`/api/avatars/get`、`/api/backgrounds/all` 恢复原生响应通路；插件不再为 20 秒内复用保留未消费的原始响应并返回克隆，避免大角色库在 iPhone 等设备上增加额外流缓冲。

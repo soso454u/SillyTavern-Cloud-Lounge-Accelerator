@@ -373,6 +373,10 @@
     text-align: right;
 }
 
+.cla-copy-diagnostics {
+    margin-top: 0.35rem;
+}
+
 .cla-background-init-banner {
     position: fixed;
     top: max(4rem, calc(env(safe-area-inset-top) + 3.25rem));

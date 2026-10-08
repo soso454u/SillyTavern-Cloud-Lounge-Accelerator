@@ -1,5 +1,6 @@
 import { classifyStartupRequest } from '../client-core.js';
 import { isIosWebKitTouch } from '../utils/device-profile.js';
+import { StartupDiagnostics } from './startup-diagnostics.js';
 
 const FETCH_TTL_MS = 20000;
 const LOG_PREFIX = '[Cloud Lounge Accelerator]';
@@ -70,6 +71,7 @@ export class StartupOptimizer {
         onStatus = null,
         allowEarlyUi = shouldRevealUiBeforeReady,
         importActionLoader = () => import('../../../../action-loader.js'),
+        diagnostics = null,
     }) {
         this.eventSource = eventSource;
         this.eventTypes = eventTypes;
@@ -77,6 +79,7 @@ export class StartupOptimizer {
         this.onStatus = onStatus;
         this.allowEarlyUi = allowEarlyUi;
         this.importActionLoader = importActionLoader;
+        this.diagnostics = diagnostics || new StartupDiagnostics({ eventSource, eventTypes });
         this.nativeFetch = null;
         this.fetchWrapper = null;
         this.entries = new Map();
@@ -97,6 +100,7 @@ export class StartupOptimizer {
         this.startupFeatures = Boolean(startupFeatures);
         if (this.started) return;
         this.started = true;
+        this.diagnostics.start();
         this.installFetchCoordinator();
         window.addEventListener('online', this.onOnline);
         this.bind(this.eventTypes.SETTINGS_LOADED, () => this.onSettingsLoaded());
@@ -184,8 +188,30 @@ export class StartupOptimizer {
 
     installFetchCoordinator() {
         if (this.fetchWrapper) return;
-        const nativeFetch = window.fetch.bind(window);
-        this.nativeFetch = nativeFetch;
+        const originalFetch = window.fetch.bind(window);
+        const nativeFetch = async (input, init = {}) => {
+            const startedAt = performance.now();
+            const method = init.method || (typeof Request !== 'undefined' && input instanceof Request ? input.method : 'GET');
+            try {
+                const response = await originalFetch(input, init);
+                this.diagnostics.noteRequest({
+                    input,
+                    method,
+                    durationMs: performance.now() - startedAt,
+                    status: response.status,
+                });
+                return response;
+            } catch (error) {
+                this.diagnostics.noteRequest({
+                    input,
+                    method,
+                    durationMs: performance.now() - startedAt,
+                    failed: true,
+                });
+                throw error;
+            }
+        };
+        this.nativeFetch = originalFetch;
         this.fetchWrapper = async (input, init = {}) => {
             let descriptor;
             try {
@@ -275,6 +301,7 @@ export class StartupOptimizer {
     stop() {
         if (!this.started) return;
         this.started = false;
+        this.diagnostics.stop();
         window.removeEventListener('online', this.onOnline);
         if (this.fetchWrapper && window.fetch === this.fetchWrapper) window.fetch = this.nativeFetch;
         for (const [name, handler] of this.handlers) this.eventSource.removeListener(name, handler);
@@ -291,5 +318,13 @@ export class StartupOptimizer {
         this.removeBackgroundNotice();
         this.recoveringWelcome = false;
         this.startupFeatures = true;
+    }
+
+    getDiagnosticSummary() {
+        return this.diagnostics.getSummary();
+    }
+
+    getDiagnosticReport() {
+        return this.diagnostics.getReport();
     }
 }

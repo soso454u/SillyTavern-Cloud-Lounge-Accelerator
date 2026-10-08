@@ -13,6 +13,7 @@ import {
 import { extension_settings } from '../../../extensions.js';
 import { CacheController } from './modules/cache-controller.js';
 import { ChatOptimizer } from './modules/chat-optimizer.js';
+import { copyDiagnosticText } from './modules/interaction-diagnostics.js';
 import { InteractionOptimizer } from './modules/interaction-optimizer.js';
 import { PerformanceConfigController } from './modules/performance-config.js';
 import { RegexRefreshController } from './modules/regex-refresh.js';
@@ -234,7 +235,7 @@ async function changeSetting(key, value) {
 }
 
 async function getPanelStatus() {
-    const { cacheController, performanceConfig } = getRuntime();
+    const { cacheController, interactionOptimizer, performanceConfig, startupOptimizer } = getRuntime();
     const [, performance] = await Promise.all([
         appReady && cacheController?.state === 'available' ? cacheController.refreshStats() : null,
         appReady ? performanceConfig.refresh() : (performanceConfig.status || { pending: true }),
@@ -243,8 +244,22 @@ async function getPanelStatus() {
         ...cacheController?.getStatus(),
         chat: settings.chatOptimization ? runtimeStatus.chat : '关闭',
         interaction: settings.interactionOptimization ? runtimeStatus.interaction : '关闭',
+        startupDiagnostic: startupOptimizer.getDiagnosticSummary(),
+        interactionDiagnostic: interactionOptimizer.getDiagnosticSummary(),
         performance: performanceConfig.status || performance,
     };
+}
+
+async function copyDiagnostics() {
+    const { interactionOptimizer, startupOptimizer } = getRuntime();
+    const report = {
+        schema: 1,
+        pluginVersion: settings?.settingsVersion || 'unknown',
+        exportedAt: new Date().toISOString(),
+        startup: startupOptimizer.getDiagnosticReport(),
+        interaction: interactionOptimizer.getDiagnosticReport(),
+    };
+    await copyDiagnosticText(JSON.stringify(report, null, 2));
 }
 
 async function changePerformanceSetting(key, enabled) {
@@ -265,6 +280,7 @@ function mountPanel() {
         onRepair: () => settings.pageAcceleration
             ? repairAccelerator({ cacheController: getRuntime().cacheController, restartModules })
             : restartModules().then(() => ({ warmed: 0 })),
+        onCopyDiagnostics: copyDiagnostics,
         getStatus: getPanelStatus,
     });
     return panel.mount();
