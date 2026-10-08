@@ -12,11 +12,20 @@ const KNOWN_ENDPOINTS = new Set([
     '/api/characters/all',
     '/api/backgrounds/all',
     '/api/chats/recent',
+    '/api/quick-replies/save',
 ]);
 
 function rounded(value) {
     const number = Number(value);
     return Number.isFinite(number) ? Math.max(0, Math.round(number)) : 0;
+}
+
+function markerDelta(markers, from, to) {
+    const start = Number(markers?.[from]);
+    const end = Number(markers?.[to]);
+    return Number.isFinite(start) && Number.isFinite(end) && end >= start
+        ? rounded(end - start)
+        : null;
 }
 
 export function safeStartupEndpoint(input, locationRef = globalThis.location) {
@@ -91,6 +100,7 @@ export class StartupDiagnostics {
             recordedAt: new Date(this.now()).toISOString(),
             markers: {},
             slowRequests: [],
+            requestStats: {},
             longTasks: [],
             longTaskCount: 0,
             longestLongTaskMs: 0,
@@ -168,16 +178,56 @@ export class StartupDiagnostics {
         }
     }
 
-    noteRequest({ input, method = 'GET', durationMs = 0, status = 0, failed = false } = {}) {
-        if (!this.started || this.completed || !this.report || durationMs < SLOW_REQUEST_MS) return;
-        this.report.slowRequests.push({
-            endpoint: safeStartupEndpoint(input, this.location),
-            method: String(method || 'GET').toUpperCase().slice(0, 8),
-            durationMs: rounded(durationMs),
-            status: rounded(status),
-            failed: Boolean(failed),
-        });
-        if (this.report.slowRequests.length > REQUEST_LIMIT) this.report.slowRequests.shift();
+    noteRequest({
+        input,
+        method = 'GET',
+        durationMs = 0,
+        status = 0,
+        failed = false,
+        responseBytes = 0,
+        contentEncoding = '',
+        initiator = '',
+    } = {}) {
+        if (!this.started || this.completed || !this.report) return;
+        const endpoint = safeStartupEndpoint(input, this.location);
+        const duration = rounded(durationMs);
+        const bytes = rounded(responseBytes);
+        const stats = this.report.requestStats[endpoint] || {
+            count: 0,
+            slowCount: 0,
+            totalDurationMs: 0,
+            maxDurationMs: 0,
+            responseBytes: 0,
+            sizedResponses: 0,
+            encodings: {},
+        };
+        stats.count += 1;
+        stats.totalDurationMs += duration;
+        stats.maxDurationMs = Math.max(stats.maxDurationMs, duration);
+        if (duration >= SLOW_REQUEST_MS) stats.slowCount += 1;
+        if (bytes > 0) {
+            stats.responseBytes += bytes;
+            stats.sizedResponses += 1;
+        }
+        if (contentEncoding) {
+            const encoding = String(contentEncoding).toLowerCase().slice(0, 24);
+            stats.encodings[encoding] = (stats.encodings[encoding] || 0) + 1;
+        }
+        this.report.requestStats[endpoint] = stats;
+        if (duration >= SLOW_REQUEST_MS) {
+            const request = {
+                endpoint,
+                method: String(method || 'GET').toUpperCase().slice(0, 8),
+                durationMs: duration,
+                status: rounded(status),
+                failed: Boolean(failed),
+            };
+            if (bytes > 0) request.responseBytes = bytes;
+            if (contentEncoding) request.contentEncoding = String(contentEncoding).toLowerCase().slice(0, 24);
+            if (initiator) request.initiator = String(initiator).slice(0, 240);
+            this.report.slowRequests.push(request);
+            if (this.report.slowRequests.length > REQUEST_LIMIT) this.report.slowRequests.shift();
+        }
         this.schedulePersist();
     }
 
@@ -203,6 +253,12 @@ export class StartupDiagnostics {
         this.mark('APP_READY');
         this.checkOverlay();
         const readyMs = this.report.markers.APP_READY || 0;
+        this.report.durations = {
+            pluginToSettingsMs: markerDelta(this.report.markers, 'PLUGIN_ACTIVATED', 'SETTINGS_LOADED'),
+            settingsToInitializedMs: markerDelta(this.report.markers, 'SETTINGS_LOADED', 'APP_INITIALIZED'),
+            initializedToReadyMs: markerDelta(this.report.markers, 'APP_INITIALIZED', 'APP_READY'),
+            pluginToReadyMs: markerDelta(this.report.markers, 'PLUGIN_ACTIVATED', 'APP_READY'),
+        };
         this.report.slow = readyMs >= SLOW_STARTUP_MS;
         this.report.recordedAt = new Date(this.now()).toISOString();
         this.completed = true;
@@ -225,8 +281,10 @@ export class StartupDiagnostics {
         const readyMs = report.markers?.APP_READY;
         const ready = Number.isFinite(readyMs) ? `APP_READY ${(readyMs / 1000).toFixed(1)}s` : '采集中';
         const requests = report.slowRequests?.length || 0;
+        const settingsCount = report.requestStats?.['/api/settings/get']?.count || 0;
         const longest = report.longestLongTaskMs || 0;
-        return `${ready} · 慢请求 ${requests} · 最长主线程任务 ${longest}ms`;
+        const settings = settingsCount ? ` · 设置请求 ${settingsCount}次` : '';
+        return `${ready} · 慢请求 ${requests}${settings} · 最长主线程任务 ${longest}ms`;
     }
 
     stop() {

@@ -33,6 +33,25 @@ function serializeHeaders(headers) {
     }
 }
 
+function captureSensitiveInitiator(pathname) {
+    if (!['/api/settings/get', '/api/quick-replies/save'].includes(pathname)) return '';
+    try {
+        return String(new Error().stack || '')
+            .split('\n')
+            .slice(2, 6)
+            .map(line => line
+                .replace(/https?:\/\/[^/]+/g, '')
+                .replace(/[?#][^\s)]*/g, '')
+                .replace(/\s+/g, ' ')
+                .trim())
+            .filter(Boolean)
+            .join(' <- ')
+            .slice(0, 240);
+    } catch {
+        return '';
+    }
+}
+
 function describeRequest(input, init = {}) {
     const isRequest = typeof Request !== 'undefined' && input instanceof Request;
     const url = new URL(isRequest ? input.url : String(input), location.href);
@@ -189,7 +208,7 @@ export class StartupOptimizer {
     installFetchCoordinator() {
         if (this.fetchWrapper) return;
         const originalFetch = window.fetch.bind(window);
-        const nativeFetch = async (input, init = {}) => {
+        const nativeFetch = async (input, init = {}, initiator = '') => {
             const startedAt = performance.now();
             const method = init.method || (typeof Request !== 'undefined' && input instanceof Request ? input.method : 'GET');
             try {
@@ -199,6 +218,9 @@ export class StartupOptimizer {
                     method,
                     durationMs: performance.now() - startedAt,
                     status: response.status,
+                    responseBytes: Number(response.headers?.get?.('content-length') || 0),
+                    contentEncoding: response.headers?.get?.('content-encoding') || '',
+                    initiator,
                 });
                 return response;
             } catch (error) {
@@ -207,6 +229,7 @@ export class StartupOptimizer {
                     method,
                     durationMs: performance.now() - startedAt,
                     failed: true,
+                    initiator,
                 });
                 throw error;
             }
@@ -219,13 +242,14 @@ export class StartupOptimizer {
             } catch {
                 return nativeFetch(input, init);
             }
+            const initiator = captureSensitiveInitiator(descriptor.url.pathname);
             const policy = classifyStartupRequest({ pathname: descriptor.url.pathname, method: descriptor.method });
             if (policy === 'stale-recent' && this.startupFeatures && descriptor.reusable) {
                 return this.fetchRecentChats(nativeFetch, input, init, descriptor);
             }
-            if (!this.startupFeatures) return nativeFetch(input, init);
+            if (!this.startupFeatures) return nativeFetch(input, init, initiator);
             if (policy === 'invalidate') {
-                const response = await nativeFetch(input, init);
+                const response = await nativeFetch(input, init, initiator);
                 if (response.ok) {
                     this.entries.clear();
                     this.recentGeneration += 1;
@@ -234,13 +258,13 @@ export class StartupOptimizer {
                 }
                 return response;
             }
-            if (policy !== 'reuse' || !descriptor.reusable) return nativeFetch(input, init);
+            if (policy !== 'reuse' || !descriptor.reusable) return nativeFetch(input, init, initiator);
 
             const key = fingerprint(descriptor);
             const now = performance.now();
             const existing = this.entries.get(key);
             if (existing?.expiresAt > now) return cloneResponse(await existing.promise);
-            const promise = nativeFetch(input, init);
+            const promise = nativeFetch(input, init, initiator);
             this.entries.set(key, { promise, expiresAt: now + FETCH_TTL_MS });
             const timer = setTimeout(() => {
                 if (this.entries.get(key)?.promise === promise) this.entries.delete(key);

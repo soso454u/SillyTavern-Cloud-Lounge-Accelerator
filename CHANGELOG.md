@@ -6,6 +6,8 @@
 - 异常快照只包含安全元素标识、`composedPath`、点击点命中栈、按钮与祖先的 `disabled` / `inert` / `pointer-events` / `visibility` / `z-index`、活动弹窗状态及相关 `error` / `unhandledrejection` 类型，不采集消息正文、剪贴板内容、Cookie、密钥或完整 URL。
 - 将最近一次异常按 12KB 上限保存在本机，分类为遮罩命中、传播中断、按钮禁用/不可命中、指针捕获残留、业务异常或主线程繁忙；“高级信息”新增启动/交互摘要与“复制诊断”，Web App 重启后仍可导出。
 - 启动诊断独立记录 `SETTINGS_LOADED`、`APP_INITIALIZED`、`APP_READY`、官方启动遮罩消失、1.5 秒以上请求和 Long Task；只观测和记录，不提前显示界面。
+- 启动诊断补充按端点的请求次数、耗时、响应 `Content-Length` / 压缩编码和受限 initiator 栈；不读取或克隆响应体，因此可确认 `/api/settings/get` 是否重复及传输大小。
+- 修正交互异常判定：按钮已完整到达 `click` 冒泡时，即使祖先短暂带有 `pointer-events: none` 也不再误报为“不可命中”，避免把成功点击误认为复制后失效。
 - 对照 SillyTavern 最新 `release` 源码确认普通消息复制在 `pointerup` 中等待 Clipboard Promise，代码块复制的拒绝可能产生 `unhandledrejection`；当前插件已在 2.1.16 移除全局释放 pointer capture 的旧行为。本版不对缺少真机证据的复制路径做猜测性重绑或全局恢复。
 - 版本统一升级到 2.1.28；141 项自动测试通过。
 

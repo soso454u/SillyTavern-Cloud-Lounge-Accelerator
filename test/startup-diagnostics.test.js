@@ -67,6 +67,15 @@ test('records official startup markers, slow requests, and the 30 second boundar
         durationMs: 2200,
         status: 200,
     });
+    diagnostics.noteRequest({
+        input: '/api/settings/get',
+        method: 'POST',
+        durationMs: 320,
+        status: 200,
+        responseBytes: 6660000,
+        contentEncoding: 'br',
+        initiator: 'at QuickReply.init (extensions/quick-reply/index.js:1:1)',
+    });
     elapsed = 31000;
     eventSource.emit('initialized');
     elapsed = 32100;
@@ -83,5 +92,14 @@ test('records official startup markers, slow requests, and the 30 second boundar
     assert.deepEqual(report.slowRequests, [{
         endpoint: '/api/…', method: 'POST', durationMs: 2200, status: 200, failed: false,
     }]);
+    assert.deepEqual(report.requestStats['/api/settings/get'], {
+        count: 1,
+        slowCount: 0,
+        totalDurationMs: 320,
+        maxDurationMs: 320,
+        responseBytes: 6660000,
+        sizedResponses: 1,
+        encodings: { br: 1 },
+    });
     assert.equal(JSON.stringify(report).includes('secret'), false);
 });

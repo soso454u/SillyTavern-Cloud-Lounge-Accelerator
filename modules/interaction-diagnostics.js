@@ -206,11 +206,17 @@ function storageWrite(storage, value) {
 export function classifyInteractionAnomaly(state = {}) {
     if (state.pointerCaptureStuck) return 'pointer-capture-residual';
     if (state.blocker) return 'hit-blocker';
+    // A pointer-events rule on an ancestor can remain in computed style while
+    // a captured pointer still completes its normal click path.  Treat that
+    // as evidence only when the click was actually lost; otherwise this would
+    // report successful taps (for example a prompt-manager minimize button)
+    // as broken controls after copy/selection activity.
+    const phases = state.phases || {};
+    if (state.actionable && phases.clickBubble) return null;
     if (state.issues?.includes('disabled') || state.issues?.includes('inert')) return 'control-disabled';
     if (state.issues?.some(issue => ['pointer-events-none', 'hidden', 'display-none'].includes(issue))) {
         return 'control-not-hittable';
     }
-    const phases = state.phases || {};
     if ((phases.downCapture && !phases.downBubble)
         || (phases.upCapture && !phases.upBubble)
         || (phases.clickCapture && !phases.clickBubble)) return 'propagation-stopped';

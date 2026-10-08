@@ -26,6 +26,16 @@ test('classifies distinct click failure paths without changing the event', () =>
         actionable: true,
         phases: { downCapture: true, downBubble: true, upCapture: true, upBubble: true, clickCapture: true, clickBubble: true },
     }), null);
+    assert.equal(classifyInteractionAnomaly({
+        actionable: true,
+        issues: ['pointer-events-none'],
+        phases: { downCapture: true, downBubble: true, upCapture: true, upBubble: true, clickCapture: true, clickBubble: true },
+    }), null);
+    assert.equal(classifyInteractionAnomaly({
+        actionable: true,
+        issues: ['pointer-events-none'],
+        phases: { downCapture: true, downBubble: true, upCapture: true, upBubble: true },
+    }), 'control-not-hittable');
 });
 
 test('safe element identifiers omit text, attributes, and unsafe dynamic ids', () => {
