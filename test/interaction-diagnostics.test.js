@@ -83,3 +83,22 @@ test('distinguishes resource load errors and preserves a more valuable recent an
     diagnostics.persistAnomaly('unconfirmed', null);
     assert.equal(diagnostics.getReport().kind, 'business-exception');
 });
+
+test('ordinary taps cannot erase failure evidence after 30 seconds or a restart', () => {
+    const storage = memoryStorage();
+    new InteractionDiagnostics({ storage, now: () => 1000 }).persistAnomaly('click-missing', null);
+    const diagnostics = new InteractionDiagnostics({ storage, now: () => 90000 });
+    diagnostics.lastClipboardActivityAt = 100;
+    diagnostics.persistAnomaly('unconfirmed', null);
+    assert.equal(diagnostics.getReport().kind, 'click-missing');
+});
+
+test('resource failures do not become business exceptions and errors use the newest pointer', () => {
+    const diagnostics = new InteractionDiagnostics({ storage: memoryStorage(), monotonicNow: () => 1000 });
+    diagnostics.lastUserState = { startedAt: 500, target: 'button#old' };
+    diagnostics.activePointer = { startedAt: 900, target: 'button#send_but' };
+    diagnostics.onError({ type: 'error', target: { localName: 'img' } });
+    assert.equal(diagnostics.getReport(), null);
+    diagnostics.onError({ type: 'error', error: new TypeError(), filename: '/script.js' });
+    assert.equal(diagnostics.getReport().pointer.target, 'button#send_but');
+});

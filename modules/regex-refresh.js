@@ -20,11 +20,18 @@ function recordsOnlyAffectChat(records) {
 }
 
 export class RegexRefreshController {
-    constructor({ chat, eventSource, eventTypes, reloadCurrentChat, scheduler, onStatus = null }) {
+    constructor({
+        chat, eventSource, eventTypes, getCurrentChatId = () => undefined,
+        isGenerating = () => false, scheduler, onStatus = null,
+        importChatApi = () => import('../../../../../script.js'),
+    }) {
         this.chat = chat;
         this.eventSource = eventSource;
         this.eventTypes = eventTypes;
-        this.reloadCurrentChat = reloadCurrentChat;
+        this.getCurrentChatId = getCurrentChatId;
+        this.isGenerating = isGenerating;
+        this.importChatApi = importChatApi;
+        this.generation = 0;
         this.scheduler = scheduler;
         this.onStatus = onStatus;
         this.started = false;
@@ -131,7 +138,7 @@ export class RegexRefreshController {
         this.dirty = true;
         clearTimeout(this.flushTimer);
         this.flushTimer = setTimeout(() => {
-            if (!this.started || document.querySelector('.regex_editor')) {
+            if (!this.started || this.isGenerating() || document.querySelector('.regex_editor')) {
                 this.markDirty();
                 return;
             }
@@ -178,6 +185,11 @@ export class RegexRefreshController {
 
     async reapply({ automatic = false, before = null, after = null } = {}) {
         if (this.refreshing) return { skipped: true };
+        if (this.isGenerating()) return { skipped: true };
+        const chatId = this.getCurrentChatId();
+        const generation = this.generation;
+        const isCurrent = () => generation === this.generation
+            && chatId === this.getCurrentChatId() && !this.isGenerating();
         this.refreshing = true;
         this.dirty = false;
         clearTimeout(this.flushTimer);
@@ -188,17 +200,17 @@ export class RegexRefreshController {
         try {
             let api = null;
             try {
-                api = await import('../../../../../script.js');
+                api = await this.importChatApi();
             } catch (error) {
                 console.debug(LOG_PREFIX, '局部消息接口加载失败', error);
             }
+            if (!isCurrent()) return { cancelled: true, completed, failed };
             if (typeof api?.updateMessageBlock !== 'function') {
-                await this.reloadCurrentChat();
-                this.onStatus?.('chat', '已回退完整刷新');
+                this.onStatus?.('chat', '局部刷新接口不可用');
                 return {
                     completed,
                     failed: failed + 1,
-                    fallback: true,
+                    unavailable: true,
                     elapsedMs: performance.now() - startedAt,
                     ...plan,
                 };
@@ -222,6 +234,7 @@ export class RegexRefreshController {
             let previousFrameMs = 0;
             for (let cursor = 0; cursor < descriptors.length;) {
                 await this.scheduler.yield(descriptors[cursor].visible ? 0 : (descriptors[cursor].recent ? 1 : 2));
+                if (!isCurrent()) return { cancelled: true, completed, failed };
                 const frameStart = performance.now();
                 const updateEvents = [];
                 batch = getAdaptiveBatchSize({
@@ -276,6 +289,7 @@ export class RegexRefreshController {
     }
 
     stop() {
+        this.generation += 1;
         if (!this.started) return;
         this.started = false;
         document.removeEventListener('input', this.onInteraction, false);

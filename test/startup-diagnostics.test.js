@@ -164,3 +164,42 @@ test('keeps the slowest requests and exposes timing coverage without reading bod
     assert.equal(report.requestStats['/api/settings/get'].decodedBodyBytes, 900);
     assert.equal(report.longTaskSupport, 'unsupported');
 });
+
+test('counts completed settings transfers before and after activation without confusing headers with body timing', () => {
+    const entries = [{ startTime: 10, responseEnd: 20000, decodedBodySize: 57000000 }];
+    const diagnostics = new StartupDiagnostics({
+        eventTypes: {}, storage: memoryStorage(),
+        documentRef: { querySelector: () => null },
+        locationRef: { origin: 'https://example.test' },
+        performanceRef: { now: () => 24000, getEntriesByName: () => entries },
+        PerformanceObserverRef: null, MutationObserverRef: null,
+        setTimer: () => 1, clearTimer() {},
+    });
+    diagnostics.start();
+    diagnostics.noteRequest({ input: '/api/settings/get', durationMs: 3000, status: 200 });
+    entries.push({ startTime: 25000, responseEnd: 50000, decodedBodySize: 57000000 });
+    entries.push({ startTime: 51000, responseEnd: 0 });
+    diagnostics.finish();
+    const report = diagnostics.getReport();
+    assert.equal(report.requestStats['/api/settings/get'].count, 1);
+    assert.equal(report.requestStats['/api/settings/get'].timedResponses, 0);
+    assert.equal(report.coverage.settingsResourceCount, 2);
+    assert.equal(report.coverage.settingsResourcesBeforePlugin, 1);
+    assert.equal(report.settingsResources[1].responseEnd, 50000);
+    assert.equal(report.slowRequests[0].timing, undefined);
+    assert.match(diagnostics.getSummary(), /设置请求 2次/);
+});
+
+test('does not claim Long Task support when WebKit lists only other entry types', () => {
+    class Observer {
+        static supportedEntryTypes = ['resource', 'navigation'];
+        constructor() { assert.fail('unsupported observer must not be constructed'); }
+    }
+    const diagnostics = new StartupDiagnostics({
+        eventTypes: {}, documentRef: { querySelector: () => null },
+        PerformanceObserverRef: Observer, MutationObserverRef: null,
+        setTimer: () => 1, clearTimer() {},
+    });
+    diagnostics.start();
+    assert.equal(diagnostics.getReport().longTaskSupport, 'unsupported');
+});

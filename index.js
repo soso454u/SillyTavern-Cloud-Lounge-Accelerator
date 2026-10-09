@@ -6,7 +6,6 @@ import {
     getRequestHeaders,
     isGenerating,
     refreshSwipeButtons,
-    reloadCurrentChat,
     saveSettingsDebounced,
     scrollChatToBottom,
 } from '../../../../script.js';
@@ -44,7 +43,7 @@ function loadSettings() {
     legacyTruncation ??= getLegacyChatTruncation(previous);
     settings = normalizeSettings(previous);
     extension_settings[MODULE_ID] = settings;
-    saveSettingsDebounced();
+    if (JSON.stringify(previous) !== JSON.stringify(settings)) saveSettingsDebounced();
     return settings;
 }
 
@@ -88,7 +87,8 @@ function createRuntime() {
         chat,
         eventSource,
         eventTypes: event_types,
-        reloadCurrentChat,
+        getCurrentChatId,
+        isGenerating,
         scheduler,
         onStatus: updateRuntimeStatus,
     });
@@ -209,14 +209,6 @@ async function changeInteractionOptimization(enabled, current) {
 async function changeChatPageSize(value, current) {
     const pageSize = current.chatOptimizer.setPageSize(value);
     settings.chatPageSize = pageSize;
-    if (settings.chatOptimization && appReady && getCurrentChatId() != null) {
-        try {
-            await reloadCurrentChat();
-        } catch (error) {
-            console.debug(LOG_PREFIX, '渲染条数已保存，当前聊天重载失败', error);
-            globalThis.toastr?.warning?.('渲染条数已保存，切换聊天后生效', '云酒馆加速器');
-        }
-    }
 }
 
 const settingHandlers = Object.freeze({
@@ -256,6 +248,15 @@ async function copyDiagnostics() {
         schema: 1,
         pluginVersion: settings?.settingsVersion || 'unknown',
         exportedAt: new Date().toISOString(),
+        sillyTavernVersion: document.querySelector('#version_display')?.textContent?.match(
+            /SillyTavern \d+\.\d+\.\d+(?: '[\w./-]{1,48}' \([a-f\d]{4,40}\))?/i,
+        )?.[0] || 'unknown',
+        chatState: {
+            active: getCurrentChatId() != null,
+            messages: chat.length,
+            renderedMessages: document.querySelectorAll('#chat .mes[mesid]').length,
+            generating: Boolean(isGenerating()),
+        },
         startup: startupOptimizer.getDiagnosticReport(),
         interaction: interactionOptimizer.getDiagnosticReport(),
     };

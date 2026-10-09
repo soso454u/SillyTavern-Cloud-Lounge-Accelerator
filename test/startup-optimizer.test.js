@@ -58,7 +58,7 @@ test('deduplicates simultaneous first recent-chat requests', async () => {
     assert.equal(calls, 1);
 });
 
-test('passes startup user-library responses through without cloning or retaining them', async t => {
+test('passes user libraries, settings and full chats through without cloning or retaining them', async t => {
     const originals = { window: globalThis.window, location: globalThis.location, document: globalThis.document };
     let clones = 0;
     let calls = 0;
@@ -77,10 +77,11 @@ test('passes startup user-library responses through without cloning or retaining
     });
     const optimizer = new StartupOptimizer({ eventSource: { on() {}, removeListener() {} }, eventTypes: {} });
     optimizer.start();
-    for (const path of ['/api/characters/all', '/api/avatars/get', '/api/backgrounds/all']) {
+    for (const path of ['/api/characters/all', '/api/avatars/get', '/api/backgrounds/all',
+        '/api/settings/get', '/api/chats/get', '/api/chats/group/get']) {
         assert.equal(await window.fetch(path, { method: 'POST', body: '{}' }), response);
     }
-    assert.equal(calls, 3);
+    assert.equal(calls, 6);
     assert.equal(clones, 0);
     assert.equal(optimizer.entries.size, 0);
     optimizer.stop();

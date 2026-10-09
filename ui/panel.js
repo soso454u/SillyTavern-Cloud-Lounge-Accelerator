@@ -118,7 +118,7 @@ function createChatDisplayPage(settings, onSettingChange) {
         try {
             await onSettingChange('chatPageSize', value);
             settings.chatPageSize = value;
-            globalThis.toastr?.success?.(`已改为每页渲染 ${value} 条消息`, '云酒馆加速器');
+            globalThis.toastr?.success?.(`已改为每页渲染 ${value} 条消息，下次打开聊天时生效`, '云酒馆加速器');
         } catch (error) {
             input.value = String(previous);
             globalThis.toastr?.error?.(error instanceof Error ? error.message : String(error), '云酒馆加速器');
@@ -130,7 +130,7 @@ function createChatDisplayPage(settings, onSettingChange) {
 
     const boundary = document.createElement('p');
     boundary.className = 'cla-setting-note';
-    boundary.textContent = '这只改变页面首次显示和“显示更多”的数量；不删除聊天，也不会减少发给模型的历史上下文。数量越大，复杂美化和正则越可能让手机卡顿。';
+    boundary.textContent = '这只改变页面首次显示和“显示更多”的数量；下次打开聊天时应用，不重新读取当前聊天。不删除聊天，也不会减少发给模型的历史上下文。数量越大，复杂美化和正则越可能让手机卡顿。';
     page.append(heading, setting, boundary);
     return page;
 }
@@ -190,6 +190,14 @@ export class SettingsPanel {
         actions.className = 'cla-actions';
         actions.append(createButton('重新渲染当前聊天', 'fa-solid fa-wand-magic-sparkles', async () => {
             const result = await this.onRerender();
+            if (result.unavailable) {
+                globalThis.toastr?.warning?.('当前酒馆不支持局部刷新，已保留聊天；下次打开聊天时应用', '云酒馆加速器');
+                return;
+            }
+            if (result.cancelled || result.skipped) {
+                globalThis.toastr?.info?.('聊天状态已变化或正在生成，已停止本次刷新', '云酒馆加速器');
+                return;
+            }
             globalThis.toastr?.success?.(`已刷新 ${result.completed || 0} 条消息`, '云酒馆加速器');
         }));
         const repairBox = document.createElement('div');

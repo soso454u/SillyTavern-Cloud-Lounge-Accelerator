@@ -468,7 +468,10 @@ export class InteractionDiagnostics {
     onError(event) {
         const error = errorDescriptor(event);
         this.record(error.type, error);
-        const state = this.lastUserState || this.activePointer;
+        if (error.sourceType === 'resource') return;
+        const state = this.activePointer && (!this.lastUserState
+            || this.activePointer.startedAt >= this.lastUserState.startedAt)
+            ? this.activePointer : this.lastUserState;
         if (!state || this.monotonicNow() - state.startedAt > ERROR_WINDOW_MS) return;
         this.persistAnomaly('business-exception', state, { error });
     }
@@ -478,8 +481,8 @@ export class InteractionDiagnostics {
         const previousAt = Date.parse(previous?.recordedAt || '');
         if (kind === 'unconfirmed') {
             if (this.lastClipboardActivityAt <= this.lastUnconfirmedActivityAt) return;
-            if (previous?.kind && previous.kind !== 'unconfirmed'
-                && Number.isFinite(previousAt) && this.now() - previousAt < 30000) return;
+            // Normal taps must not erase failure evidence, even after a restart.
+            if (previous?.kind && previous.kind !== 'unconfirmed') return;
             this.lastUnconfirmedActivityAt = this.lastClipboardActivityAt;
         }
         if (previous?.kind && previous.kind !== kind

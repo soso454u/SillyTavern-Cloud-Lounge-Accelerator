@@ -12,6 +12,10 @@ const KNOWN_ENDPOINTS = new Set([
     '/api/characters/all',
     '/api/backgrounds/all',
     '/api/chats/recent',
+    '/api/chats/get',
+    '/api/chats/group/get',
+    '/api/chats/save',
+    '/api/chats/group/save',
     '/api/quick-replies/save',
 ]);
 
@@ -47,14 +51,12 @@ function readNavigationTiming(performanceRef) {
     }
 }
 
-function readResourceTiming(performanceRef, input, locationRef) {
+function readResourceTimings(performanceRef, input, locationRef) {
     try {
         const rawUrl = typeof input === 'string' ? input : input?.url;
         const url = new URL(rawUrl, locationRef?.origin || 'https://localhost');
         const entries = performanceRef?.getEntriesByName?.(url.href) || [];
-        const entry = entries.at?.(-1) || entries[entries.length - 1];
-        if (!entry) return null;
-        return {
+        return [...entries].filter(entry => entry.entryType !== 'navigation' && entry.responseEnd > 0).map(entry => ({
             startTime: timingNumber(entry.startTime),
             fetchStart: timingNumber(entry.fetchStart),
             requestStart: timingNumber(entry.requestStart),
@@ -63,9 +65,9 @@ function readResourceTiming(performanceRef, input, locationRef) {
             transferSize: timingNumber(entry.transferSize),
             encodedBodySize: timingNumber(entry.encodedBodySize),
             decodedBodySize: timingNumber(entry.decodedBodySize),
-        };
+        }));
     } catch {
-        return null;
+        return [];
     }
 }
 
@@ -164,6 +166,7 @@ export class StartupDiagnostics {
                 resourceTiming: typeof this.performance?.getEntriesByName === 'function' ? 'available' : 'unsupported',
                 jsonParse: 'not-observed',
                 initializationBeforePlugin: 'not-observed',
+                requestDuration: 'response-headers-only',
             },
             slowRequests: [],
             requestStats: {},
@@ -222,6 +225,8 @@ export class StartupDiagnostics {
 
     watchLongTasks() {
         if (typeof this.PerformanceObserver !== 'function') return;
+        const supported = this.PerformanceObserver.supportedEntryTypes;
+        if (Array.isArray(supported) && !supported.includes('longtask')) return;
         this.report.longTaskSupport = 'observing';
         try {
             this.longTaskObserver = new this.PerformanceObserver(list => {
@@ -250,7 +255,7 @@ export class StartupDiagnostics {
     }
 
     getResourceTiming(input) {
-        return readResourceTiming(this.performance, input, this.location);
+        return readResourceTimings(this.performance, input, this.location).at(-1) || null;
     }
 
     noteRequest({
@@ -354,6 +359,10 @@ export class StartupDiagnostics {
         this.mark('APP_READY');
         this.checkOverlay();
         const readyMs = this.report.markers.APP_READY || 0;
+        // fetch() resolves at headers. Only now inspect completed transfers;
+        // the latest entry at headers may belong to an earlier settings read.
+        const settingsResources = readResourceTimings(this.performance, '/api/settings/get', this.location);
+        this.report.settingsResources = settingsResources.slice(-4);
         this.report.durations = {
             pluginToSettingsMs: markerDelta(this.report.markers, 'PLUGIN_ACTIVATED', 'SETTINGS_LOADED'),
             settingsToInitializedMs: markerDelta(this.report.markers, 'SETTINGS_LOADED', 'APP_INITIALIZED'),
@@ -366,6 +375,10 @@ export class StartupDiagnostics {
             ...this.report.coverage,
             overlayHiddenBeforeReady: overlayIndex >= 0 && readyIndex >= 0 && overlayIndex < readyIndex,
             observedThroughMs: readyMs,
+            settingsResourceCount: settingsResources.length,
+            settingsResourcesBeforePlugin: settingsResources.filter(entry => (
+                entry.startTime < this.report.markers.PLUGIN_ACTIVATED
+            )).length,
         };
         this.report.slow = readyMs >= SLOW_STARTUP_MS;
         this.report.recordedAt = new Date(this.now()).toISOString();
@@ -389,7 +402,8 @@ export class StartupDiagnostics {
         const readyMs = report.markers?.APP_READY;
         const ready = Number.isFinite(readyMs) ? `APP_READY ${(readyMs / 1000).toFixed(1)}s` : '采集中';
         const requests = report.slowRequests?.length || 0;
-        const settingsCount = report.requestStats?.['/api/settings/get']?.count || 0;
+        const settingsCount = Math.max(report.requestStats?.['/api/settings/get']?.count || 0,
+            report.coverage?.settingsResourceCount || 0);
         const longest = report.longestLongTaskMs || 0;
         const settings = settingsCount ? ` · 设置请求 ${settingsCount}次` : '';
         const longTasks = report.longTaskSupport === 'observed'
