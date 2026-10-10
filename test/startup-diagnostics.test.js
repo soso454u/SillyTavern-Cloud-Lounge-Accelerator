@@ -187,7 +187,30 @@ test('counts completed settings transfers before and after activation without co
     assert.equal(report.coverage.settingsResourcesBeforePlugin, 1);
     assert.equal(report.settingsResources[1].responseEnd, 50000);
     assert.equal(report.slowRequests[0].timing, undefined);
-    assert.match(diagnostics.getSummary(), /设置请求 2次/);
+    assert.equal(report.coverage.settingsRequestCountLowerBound, 2);
+    assert.match(diagnostics.getSummary(), /设置请求至少 2次/);
+});
+
+test('counts an early settings read plus a later fetch even when resource timing retains only the early read', () => {
+    const diagnostics = new StartupDiagnostics({
+        eventTypes: {}, storage: memoryStorage(),
+        documentRef: { querySelector: () => null },
+        locationRef: { origin: 'https://example.test' },
+        performanceRef: {
+            now: () => 38000,
+            getEntriesByName: () => [{ startTime: 18000, responseEnd: 32000 }],
+        },
+        PerformanceObserverRef: null, MutationObserverRef: null,
+        setTimer: () => 1, clearTimer() {},
+    });
+    diagnostics.start();
+    diagnostics.noteRequest({ input: '/api/settings/get', durationMs: 3000, status: 200 });
+    diagnostics.finish();
+    const report = diagnostics.getReport();
+    assert.equal(report.coverage.settingsResourceCount, 1);
+    assert.equal(report.requestStats['/api/settings/get'].count, 1);
+    assert.equal(report.coverage.settingsRequestCountLowerBound, 2);
+    assert.match(diagnostics.getSummary(), /设置请求至少 2次/);
 });
 
 test('does not claim Long Task support when WebKit lists only other entry types', () => {

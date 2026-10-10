@@ -48,6 +48,18 @@ test('safe element identifiers omit text, attributes, and unsafe dynamic ids', (
     assert.equal(describeSafeElement(element), 'button.menu_button.fa-copy');
 });
 
+test('a custom close icon with a completed click is not a propagation failure', () => {
+    assert.equal(classifyInteractionAnomaly({
+        actionable: false,
+        issues: [],
+        phases: { downCapture: true, clickCapture: true, clickBubble: true },
+    }), null);
+    assert.equal(classifyInteractionAnomaly({
+        actionable: false,
+        phases: { downCapture: true, clickCapture: true },
+    }), 'propagation-stopped');
+});
+
 test('persists only a bounded diagnostic snapshot that survives a new instance', () => {
     const storage = memoryStorage();
     const diagnostics = new InteractionDiagnostics({ storage, now: () => 1000 });

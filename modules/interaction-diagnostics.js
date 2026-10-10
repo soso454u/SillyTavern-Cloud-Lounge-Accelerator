@@ -230,7 +230,9 @@ export function classifyInteractionAnomaly(state = {}) {
     // report successful taps (for example a prompt-manager minimize button)
     // as broken controls after copy/selection activity.
     const phases = state.phases || {};
-    if (state.actionable && phases.clickBubble) return null;
+    // Custom clickable divs may intentionally stop pointerdown propagation.
+    // A completed click still rules out this diagnostic's missing-click path.
+    if (phases.clickBubble) return null;
     if (state.issues?.includes('disabled') || state.issues?.includes('inert')) return 'control-disabled';
     if (state.issues?.some(issue => ['pointer-events-none', 'hidden', 'display-none'].includes(issue))) {
         return 'control-not-hittable';

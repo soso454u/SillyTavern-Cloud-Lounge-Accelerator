@@ -87,6 +87,14 @@ function markerDelta(markers, from, to) {
         : null;
 }
 
+function settingsRequestLowerBound(report) {
+    // Early completed resources and requests seen by our fetch wrapper belong
+    // to disjoint periods. Later resources may overlap wrapper observations.
+    const early = rounded(report?.coverage?.settingsResourcesBeforePlugin);
+    const observed = rounded(report?.requestStats?.['/api/settings/get']?.count);
+    return Math.max(early + observed, rounded(report?.coverage?.settingsResourceCount));
+}
+
 export function safeStartupEndpoint(input, locationRef = globalThis.location) {
     try {
         const pathname = new URL(
@@ -380,6 +388,7 @@ export class StartupDiagnostics {
                 entry.startTime < this.report.markers.PLUGIN_ACTIVATED
             )).length,
         };
+        this.report.coverage.settingsRequestCountLowerBound = settingsRequestLowerBound(this.report);
         this.report.slow = readyMs >= SLOW_STARTUP_MS;
         this.report.recordedAt = new Date(this.now()).toISOString();
         this.completed = true;
@@ -402,10 +411,9 @@ export class StartupDiagnostics {
         const readyMs = report.markers?.APP_READY;
         const ready = Number.isFinite(readyMs) ? `APP_READY ${(readyMs / 1000).toFixed(1)}s` : '采集中';
         const requests = report.slowRequests?.length || 0;
-        const settingsCount = Math.max(report.requestStats?.['/api/settings/get']?.count || 0,
-            report.coverage?.settingsResourceCount || 0);
+        const settingsCount = settingsRequestLowerBound(report);
         const longest = report.longestLongTaskMs || 0;
-        const settings = settingsCount ? ` · 设置请求 ${settingsCount}次` : '';
+        const settings = settingsCount ? ` · 设置请求至少 ${settingsCount}次` : '';
         const longTasks = report.longTaskSupport === 'observed'
             ? `最长主线程任务 ${longest}ms`
             : `Long Task ${report.longTaskSupport || '不可用'}`;
