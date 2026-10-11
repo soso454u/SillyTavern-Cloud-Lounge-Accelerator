@@ -178,3 +178,26 @@ test('chat read failures stay failures and save requests retain their original p
     assert.equal(calls.length, 6, 'no recovery reads, automatic saves or retries');
     assert.equal(optimizer.entries.size, 0);
 });
+
+test('completed startup diagnostics do not inspect later native fetch responses', async t => {
+    const originals = { window: globalThis.window, location: globalThis.location };
+    const response = {
+        get status() { assert.fail('completed diagnostics must not inspect status'); },
+        get headers() { assert.fail('completed diagnostics must not inspect headers'); },
+    };
+    globalThis.location = { href: 'https://example.test/' };
+    globalThis.window = { fetch: async () => response };
+    t.after(() => {
+        for (const [name, value] of Object.entries(originals)) {
+            if (value === undefined) delete globalThis[name];
+            else globalThis[name] = value;
+        }
+    });
+    const optimizer = new StartupOptimizer({ diagnostics: {
+        started: true, completed: true,
+        noteRequest() { assert.fail('completed diagnostics must not record requests'); },
+    } });
+    optimizer.installFetchCoordinator();
+    assert.equal(await window.fetch('/api/settings/get', { method: 'POST', body: '{}' }), response);
+    window.fetch = optimizer.nativeFetch;
+});

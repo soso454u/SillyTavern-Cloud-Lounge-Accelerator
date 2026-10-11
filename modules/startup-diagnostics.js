@@ -128,10 +128,10 @@ export class StartupDiagnostics {
         performanceRef = globalThis.performance,
         PerformanceObserverRef = globalThis.PerformanceObserver,
         MutationObserverRef = globalThis.MutationObserver,
-        getComputedStyleRef = globalThis.getComputedStyle,
+        getComputedStyleRef = element => globalThis.getComputedStyle(element),
         now = () => Date.now(),
-        setTimer = globalThis.setTimeout,
-        clearTimer = globalThis.clearTimeout,
+        setTimer = (...args) => globalThis.setTimeout(...args),
+        clearTimer = (...args) => globalThis.clearTimeout(...args),
     } = {}) {
         this.eventSource = eventSource;
         this.eventTypes = eventTypes;

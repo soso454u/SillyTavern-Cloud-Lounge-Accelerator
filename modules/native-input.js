@@ -32,8 +32,8 @@ export class InputRevealGuard {
         windowRef = globalThis.window,
         navigatorRef = globalThis.navigator,
         matchMediaRef = globalThis.matchMedia,
-        setTimer = globalThis.setTimeout,
-        clearTimer = globalThis.clearTimeout,
+        setTimer = (...args) => globalThis.setTimeout(...args),
+        clearTimer = (...args) => globalThis.clearTimeout(...args),
     } = {}) {
         this.document = documentRef;
         this.window = windowRef;

@@ -300,8 +300,8 @@ export class InteractionDiagnostics {
         storage = globalThis.localStorage,
         now = () => Date.now(),
         monotonicNow = () => globalThis.performance?.now?.() ?? Date.now(),
-        setTimer = globalThis.setTimeout,
-        clearTimer = globalThis.clearTimeout,
+        setTimer = (...args) => globalThis.setTimeout(...args),
+        clearTimer = (...args) => globalThis.clearTimeout(...args),
     } = {}) {
         this.document = documentRef;
         this.window = windowRef;

@@ -124,8 +124,8 @@ export class InteractionRecoveryGuard {
         importPopup = () => import('../../../../popup.js'),
         onRecovered = null,
         now = () => Date.now(),
-        setTimer = globalThis.setTimeout,
-        clearTimer = globalThis.clearTimeout,
+        setTimer = (...args) => globalThis.setTimeout(...args),
+        clearTimer = (...args) => globalThis.clearTimeout(...args),
         scheduleMicrotask = callback => typeof globalThis.queueMicrotask === 'function'
             ? globalThis.queueMicrotask(callback) : Promise.resolve().then(callback),
         requestFrame = callback => globalThis.requestAnimationFrame?.(callback) ?? setTimer(callback, 16),

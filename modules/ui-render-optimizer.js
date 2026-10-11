@@ -15,8 +15,8 @@ export class UiRenderOptimizer {
         windowRef = globalThis.window,
         navigatorRef = globalThis.navigator,
         matchMedia = globalThis.matchMedia,
-        setTimer = globalThis.setTimeout,
-        clearTimer = globalThis.clearTimeout,
+        setTimer = (...args) => globalThis.setTimeout(...args),
+        clearTimer = (...args) => globalThis.clearTimeout(...args),
     } = {}) {
         this.document = documentRef;
         this.window = windowRef;

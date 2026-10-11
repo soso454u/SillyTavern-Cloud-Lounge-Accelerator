@@ -119,6 +119,7 @@ export class StartupOptimizer {
         if (this.fetchWrapper) return;
         const originalFetch = window.fetch.bind(window);
         const nativeFetch = async (input, init = {}, initiator = '') => {
+            if (!this.diagnostics.started || this.diagnostics.completed) return originalFetch(input, init);
             const startedAt = performance.now();
             const method = init.method || (typeof Request !== 'undefined' && input instanceof Request ? input.method : 'GET');
             try {
@@ -153,7 +154,8 @@ export class StartupOptimizer {
             } catch {
                 return nativeFetch(input, init);
             }
-            const initiator = captureSensitiveInitiator(descriptor.url.pathname);
+            const initiator = this.diagnostics.started && !this.diagnostics.completed
+                ? captureSensitiveInitiator(descriptor.url.pathname) : '';
             const policy = classifyStartupRequest({ pathname: descriptor.url.pathname, method: descriptor.method });
             if (policy === 'stale-recent' && this.startupFeatures && descriptor.reusable) {
                 return this.fetchRecentChats(nativeFetch, input, init, descriptor);

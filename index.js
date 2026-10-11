@@ -10,19 +10,10 @@ import {
     scrollChatToBottom,
 } from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
-import { CacheController } from './modules/cache-controller.js';
 import { ChatOptimizer } from './modules/chat-optimizer.js';
-import { copyDiagnosticText } from './modules/interaction-diagnostics.js';
-import { InteractionOptimizer } from './modules/interaction-optimizer.js';
-import { PerformanceConfigController } from './modules/performance-config.js';
-import { RegexRefreshController } from './modules/regex-refresh.js';
-import { RegexUiAdapter } from './modules/regex-ui-adapter.js';
-import { repairAccelerator } from './modules/repair.js';
 import { StartupOptimizer } from './modules/startup-optimizer.js';
 import { getLegacyChatTruncation, normalizeSettings } from './settings.js';
-import { SettingsPanel } from './ui/panel.js';
 import { FrameScheduler } from './utils/scheduler.js';
-import { isIosWebKitTouch } from './utils/device-profile.js';
 
 const MODULE_ID = 'cloud_lounge_accelerator';
 const LOG_PREFIX = '[Cloud Lounge Accelerator]';
@@ -33,6 +24,7 @@ let legacyTruncation = null;
 let activated = false;
 let appReady = false;
 let settingsLoaded = false;
+let settingsSavePending = false;
 let panel = null;
 let panelTimer = null;
 let panelRetries = 0;
@@ -49,8 +41,13 @@ function loadSettings() {
     const changed = !previous
         || Object.entries(settings).some(([key, value]) => key !== 'settingsVersion' && previous[key] !== value)
         || previousKeys.some(key => key !== 'settingsVersion' && !(key in settings));
-    if (changed) saveSettingsDebounced();
+    if (changed) requestSettingsSave();
     return settings;
+}
+
+function requestSettingsSave() {
+    if (appReady) saveSettingsDebounced();
+    else settingsSavePending = true;
 }
 
 function persistSettings() {
@@ -70,7 +67,6 @@ function createRuntime() {
             if (error?.name !== 'AbortError') console.debug(LOG_PREFIX, '分帧任务失败', error);
         },
     });
-    const cacheController = new CacheController({ onStatus: updateRuntimeStatus });
     const chatOptimizer = new ChatOptimizer({
         eventSource,
         eventTypes: event_types,
@@ -78,7 +74,7 @@ function createRuntime() {
         isGenerating,
         getCurrentChatId,
         scheduler,
-        saveSettings: saveSettingsDebounced,
+        saveSettings: requestSettingsSave,
         scrollToBottom: scrollChatToBottom,
         refreshSwipeButtons,
         onStatus: updateRuntimeStatus,
@@ -88,33 +84,29 @@ function createRuntime() {
         eventTypes: event_types,
         onStatus: value => updateRuntimeStatus('startup', value),
     });
-    const regexRefresh = new RegexRefreshController({
-        chat,
-        eventSource,
-        eventTypes: event_types,
-        getCurrentChatId,
-        isGenerating,
-        scheduler,
-        onStatus: updateRuntimeStatus,
-    });
-    const regexUiAdapter = new RegexUiAdapter({ onSaved: () => regexRefresh.noteChange() });
-    const interactionOptimizer = new InteractionOptimizer({
-        isGenerating,
-        eventSource,
-        eventTypes: event_types,
-        onStatus: updateRuntimeStatus,
-    });
-    const performanceConfig = new PerformanceConfigController({ getRequestHeaders });
     return {
-        cacheController,
-        chatOptimizer,
-        interactionOptimizer,
-        performanceConfig,
-        regexRefresh,
-        regexUiAdapter,
-        scheduler,
-        startupOptimizer,
+        scheduler, chatOptimizer, startupOptimizer,
+        generation: 0, deferredPromise: null, readyStart: null, chatStart: null,
     };
+}
+
+async function loadDeferredRuntime(current) {
+    current.deferredPromise ??= import('./modules/deferred-runtime.js').then(module => {
+        if (!activated || current !== runtime) return;
+        Object.assign(current, module.createDeferredRuntime({
+            chat, eventSource, eventTypes: event_types, getCurrentChatId,
+            getRequestHeaders, isGenerating, scheduler: current.scheduler,
+            onStatus: updateRuntimeStatus,
+        }), {
+            SettingsPanel: module.SettingsPanel,
+            copyDiagnosticText: module.copyDiagnosticText,
+            repairAccelerator: module.repairAccelerator,
+        });
+    }).catch(error => {
+        current.deferredPromise = null;
+        throw error;
+    });
+    await current.deferredPromise;
 }
 
 function getRuntime() {
@@ -124,53 +116,79 @@ function getRuntime() {
 
 async function startEnabledModules({ skipCache = false, forceCache = false } = {}) {
     if (!activated) return;
-    const {
-        cacheController,
-        chatOptimizer,
-        interactionOptimizer,
-        regexRefresh,
-        regexUiAdapter,
-        startupOptimizer,
-    } = getRuntime();
-    let chatStart = null;
-    if (settings.chatOptimization) {
-        chatStart = chatOptimizer.start({ legacyTruncation, chatPageSize: settings.chatPageSize });
-    }
+    const current = getRuntime();
+    const generation = current.generation;
+    const isCurrent = () => activated && current === runtime && generation === current.generation;
     if (settings.pageAcceleration || settings.chatOptimization) {
-        startupOptimizer.start({ startupFeatures: settings.pageAcceleration });
+        current.startupOptimizer.start({ startupFeatures: settings.pageAcceleration });
     }
-    if (chatStart) {
-        await chatStart;
+    // Keep the chat page limit before the first native chat load. All optional
+    // UI / regex / cache modules are downloaded only after native APP_READY.
+    if (settings.chatOptimization) {
+        current.chatStart ??= current.chatOptimizer.start({ legacyTruncation, chatPageSize: settings.chatPageSize });
+        await current.chatStart;
+        if (!isCurrent()) return;
         legacyTruncation = null;
     }
-    if (settings.interactionOptimization && (appReady || !isIosWebKitTouch())) {
-        await interactionOptimizer.start();
+    if (!appReady || !isCurrent()) return;
+    await loadDeferredRuntime(current);
+    if (!isCurrent()) return;
+    if (current.readyStart) {
+        await current.readyStart;
+        if (!forceCache || !isCurrent()) return;
     }
-    if (!appReady) return;
-    if (settings.chatOptimization) {
-        const refreshReady = await regexRefresh.start();
-        if (refreshReady) await regexUiAdapter.start();
-    }
-    if (settings.pageAcceleration && !skipCache) {
-        try {
-            await cacheController.startAfterLogin({ force: forceCache });
-        } catch (error) {
-            console.debug(LOG_PREFIX, '页面缓存增强未启用', error);
+    const pending = (async () => {
+        if (settings.interactionOptimization) await current.interactionOptimizer.start();
+        if (!isCurrent()) return;
+        if (settings.chatOptimization) {
+            const refreshReady = await current.regexRefresh.start();
+            if (!isCurrent()) {
+                current.regexRefresh.stop();
+                return;
+            }
+            if (refreshReady) {
+                await current.regexUiAdapter.start();
+                if (!isCurrent()) {
+                    current.regexUiAdapter.stop();
+                    return;
+                }
+            }
         }
+        if (!isCurrent()) return;
+        if (settings.pageAcceleration && !skipCache) {
+            try {
+                await current.cacheController.startAfterLogin({ force: forceCache });
+            } catch (error) {
+                console.debug(LOG_PREFIX, '页面缓存增强未启用', error);
+            }
+        }
+        if (!isCurrent()) return;
+        ensurePanel();
+        await panel?.refresh();
+    })();
+    current.readyStart = pending;
+    try {
+        await pending;
+    } finally {
+        if (current.readyStart === pending) current.readyStart = null;
     }
-    ensurePanel();
-    await panel?.refresh();
+}
+
+function scheduleEnabledModules(options) {
+    void startEnabledModules(options).catch(error => console.debug(LOG_PREFIX, '后台优化启动失败', error));
 }
 
 async function stopOptimizationModules({ stopCache = false } = {}) {
     if (!runtime) return;
+    runtime.generation += 1;
+    runtime.chatStart = null;
     runtime.startupOptimizer.stop();
-    runtime.regexUiAdapter.stop();
-    runtime.regexRefresh.stop();
+    runtime.regexUiAdapter?.stop();
+    runtime.regexRefresh?.stop();
     await runtime.chatOptimizer.stop();
-    runtime.interactionOptimizer.stop();
+    runtime.interactionOptimizer?.stop();
     runtime.scheduler.cancelAll('优化模块正在重启');
-    if (stopCache) await runtime.cacheController.stop({ clear: true });
+    if (stopCache) await runtime.cacheController?.stop({ clear: true });
 }
 
 async function restartModules({ stopOnly = false, skipCache = false } = {}) {
@@ -207,7 +225,7 @@ async function changeChatOptimization(enabled, current) {
 }
 
 async function changeInteractionOptimization(enabled, current) {
-    if (enabled && (appReady || !isIosWebKitTouch())) await current.interactionOptimizer.start();
+    if (enabled && appReady) await current.interactionOptimizer.start();
     else current.interactionOptimizer.stop();
 }
 
@@ -255,7 +273,7 @@ async function getPanelStatus() {
 }
 
 async function copyDiagnostics() {
-    const { interactionOptimizer, startupOptimizer } = getRuntime();
+    const { interactionOptimizer, startupOptimizer, copyDiagnosticText } = getRuntime();
     const report = {
         schema: 1,
         pluginVersion: settings?.settingsVersion || 'unknown',
@@ -284,7 +302,8 @@ async function changePerformanceSetting(key, enabled) {
 
 function mountPanel() {
     if (!settings) loadSettings();
-    getRuntime();
+    const { SettingsPanel, repairAccelerator } = getRuntime();
+    if (!SettingsPanel || !activated) return false;
     panel ??= new SettingsPanel({
         settings,
         onSettingChange: changeSetting,
@@ -315,21 +334,24 @@ function ensurePanel() {
 // Avoid doing chat DOM/highlighter work while SillyTavern is activating extensions.
 eventSource.once(event_types.SETTINGS_LOADED, () => {
     settingsLoaded = true;
-    if (activated) void startEnabledModules();
+    if (activated) scheduleEnabledModules();
 });
 
 eventSource.once(event_types.APP_READY, () => {
     appReady = true;
-    if (activated) void startEnabledModules();
+    if (settingsSavePending && activated) {
+        settingsSavePending = false;
+        saveSettingsDebounced();
+    }
+    if (activated) scheduleEnabledModules();
 });
 
 export function onActivate() {
     activated = true;
     loadSettings();
     const current = getRuntime();
-    ensurePanel();
     if (settingsLoaded || appReady) {
-        void startEnabledModules();
+        scheduleEnabledModules();
     } else if (settings.pageAcceleration || settings.chatOptimization) {
         current.startupOptimizer.start({ startupFeatures: settings.pageAcceleration });
     }
@@ -338,7 +360,7 @@ export function onActivate() {
 export function onUpdate() {
     if (!settings) loadSettings();
     if (!activated) return;
-    if (settingsLoaded || appReady) void startEnabledModules({ forceCache: true });
+    if (settingsLoaded || appReady) scheduleEnabledModules({ forceCache: true });
     else if (settings.pageAcceleration || settings.chatOptimization) {
         getRuntime().startupOptimizer.start({ startupFeatures: settings.pageAcceleration });
     }
@@ -346,6 +368,7 @@ export function onUpdate() {
 
 async function cleanup() {
     activated = false;
+    settingsSavePending = false;
     if (panelTimer !== null) clearTimeout(panelTimer);
     panelTimer = null;
     panelRetries = 0;
