@@ -78,6 +78,7 @@ export class CacheController {
         this.fetchImpl = fetchImpl;
         this.registration = undefined;
         this.health = null;
+        this.backendMissing = false;
         this.state = 'unknown';
         this.stats = null;
         this.idleHandle = null;
@@ -97,16 +98,19 @@ export class CacheController {
         try {
             const response = await this.fetchImpl(`${API_BASE}/health`, { credentials: 'same-origin', cache: 'no-store' });
             if (!response.ok) {
+                this.backendMissing = response.status === 404;
                 this.state = response.status === 404 ? 'missing' : 'error';
                 return null;
             }
             const payload = await response.json();
             if (!payload?.ok) throw new Error('服务端健康检查返回无效');
+            this.backendMissing = false;
             this.health = payload;
             this.state = serverVersionMatchesClient(payload.version) ? 'available' : 'version-mismatch';
             return payload;
         } catch {
-            this.state = 'missing';
+            this.backendMissing = false;
+            this.state = 'error';
             return null;
         }
     }
