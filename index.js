@@ -32,6 +32,7 @@ let settings = null;
 let legacyTruncation = null;
 let activated = false;
 let appReady = false;
+let settingsLoaded = false;
 let panel = null;
 let panelTimer = null;
 let panelRetries = 0;
@@ -43,7 +44,12 @@ function loadSettings() {
     legacyTruncation ??= getLegacyChatTruncation(previous);
     settings = normalizeSettings(previous);
     extension_settings[MODULE_ID] = settings;
-    if (JSON.stringify(previous) !== JSON.stringify(settings)) saveSettingsDebounced();
+    // A version-only upgrade must not upload the entire SillyTavern settings payload.
+    const previousKeys = previous && typeof previous === 'object' ? Object.keys(previous) : [];
+    const changed = !previous
+        || Object.entries(settings).some(([key, value]) => key !== 'settingsVersion' && previous[key] !== value)
+        || previousKeys.some(key => key !== 'settingsVersion' && !(key in settings));
+    if (changed) saveSettingsDebounced();
     return settings;
 }
 
@@ -227,9 +233,16 @@ async function changeSetting(key, value) {
 
 async function getPanelStatus() {
     const { cacheController, interactionOptimizer, performanceConfig, startupOptimizer } = getRuntime();
+    // A confirmed /health 404 means there is no backend /performance route either.
+    const backendMissing = cacheController.backendMissing === true;
+    const unavailablePerformance = {
+        available: false,
+        settings: { keepAlive: null, lazyCharacters: null, chatCompression: null },
+        error: '服务端插件未安装或接口不存在',
+    };
     const [, performance] = await Promise.all([
         appReady && cacheController?.state === 'available' ? cacheController.refreshStats() : null,
-        appReady ? performanceConfig.refresh() : (performanceConfig.status || { pending: true }),
+        backendMissing ? unavailablePerformance : (appReady ? performanceConfig.refresh() : (performanceConfig.status || { pending: true })),
     ]);
     return {
         ...cacheController?.getStatus(),
@@ -237,7 +250,7 @@ async function getPanelStatus() {
         interaction: settings.interactionOptimization ? runtimeStatus.interaction : '关闭',
         startupDiagnostic: startupOptimizer.getDiagnosticSummary(),
         interactionDiagnostic: interactionOptimizer.getDiagnosticSummary(),
-        performance: performanceConfig.status || performance,
+        performance: backendMissing ? performance : (performanceConfig.status || performance),
     };
 }
 
@@ -299,6 +312,12 @@ function ensurePanel() {
     }, 250);
 }
 
+// Avoid doing chat DOM/highlighter work while SillyTavern is activating extensions.
+eventSource.once(event_types.SETTINGS_LOADED, () => {
+    settingsLoaded = true;
+    if (activated) void startEnabledModules();
+});
+
 eventSource.once(event_types.APP_READY, () => {
     appReady = true;
     if (activated) void startEnabledModules();
@@ -307,14 +326,22 @@ eventSource.once(event_types.APP_READY, () => {
 export function onActivate() {
     activated = true;
     loadSettings();
-    getRuntime();
+    const current = getRuntime();
     ensurePanel();
-    void startEnabledModules();
+    if (settingsLoaded || appReady) {
+        void startEnabledModules();
+    } else if (settings.pageAcceleration || settings.chatOptimization) {
+        current.startupOptimizer.start({ startupFeatures: settings.pageAcceleration });
+    }
 }
 
 export function onUpdate() {
     if (!settings) loadSettings();
-    if (activated) void startEnabledModules({ forceCache: true });
+    if (!activated) return;
+    if (settingsLoaded || appReady) void startEnabledModules({ forceCache: true });
+    else if (settings.pageAcceleration || settings.chatOptimization) {
+        getRuntime().startupOptimizer.start({ startupFeatures: settings.pageAcceleration });
+    }
 }
 
 async function cleanup() {
