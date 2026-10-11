@@ -3,10 +3,10 @@
   "loading_order": -900,
   "requires": [],
   "optional": [],
-  "js": "index.js",
+  "js": "dist/index.js",
   "css": "style.css",
   "author": "soso454u",
-  "version": "2.1.32",
+  "version": "2.1.33",
   "auto_update": true,
   "hooks": {
     "activate": "onActivate",
