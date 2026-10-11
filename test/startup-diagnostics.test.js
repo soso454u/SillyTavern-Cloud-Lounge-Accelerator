@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { safeStartupEndpoint, StartupDiagnostics } from '../modules/startup-diagnostics.js';
 
-function emitter() {
+function emitter(asyncDispatch = false) {
     const listeners = new Map();
     return {
         on(name, handler) {
@@ -15,6 +15,9 @@ function emitter() {
             listeners.set(name, (listeners.get(name) || []).filter(item => item !== handler));
         },
         emit(name) {
+            if (asyncDispatch) return (async () => {
+                for (const handler of listeners.get(name) || []) await handler();
+            })();
             for (const handler of listeners.get(name) || []) handler();
         },
     };
@@ -37,6 +40,7 @@ test('startup endpoint labels never retain query strings or user-specific paths'
 
 test('records official startup markers, slow requests, and the 30 second boundary', () => {
     const eventSource = emitter();
+    const originalEmit = eventSource.emit;
     const eventTypes = {
         SETTINGS_LOADED: 'settings',
         APP_INITIALIZED: 'initialized',
@@ -80,9 +84,11 @@ test('records official startup markers, slow requests, and the 30 second boundar
     eventSource.emit('initialized');
     elapsed = 32100;
     eventSource.emit('ready');
+    assert.equal(eventSource.emit, originalEmit, 'restore the native emitter when startup completes');
 
     const report = diagnostics.getReport();
-    assert.deepEqual(report.markers, {
+    assert.deepEqual(Object.fromEntries(['PLUGIN_ACTIVATED', 'SETTINGS_LOADED', 'APP_INITIALIZED', 'APP_READY']
+        .map(name => [name, report.markers[name]])), {
         PLUGIN_ACTIVATED: 1200,
         SETTINGS_LOADED: 8000,
         APP_INITIALIZED: 31000,
@@ -225,4 +231,77 @@ test('does not claim Long Task support when WebKit lists only other entry types'
     });
     diagnostics.start();
     assert.equal(diagnostics.getReport().longTaskSupport, 'unsupported');
+});
+
+test('separates remaining activation, awaited settings subscribers, and native welcome work', async () => {
+    const eventSource = emitter(true);
+    const originalEmit = eventSource.emit;
+    let elapsed = 40000;
+    let releaseSettings;
+    const diagnostics = new StartupDiagnostics({
+        eventSource,
+        eventTypes: { EXTENSION_SETTINGS_LOADED: 'extensions', SETTINGS_LOADED: 'settings', APP_READY: 'ready' },
+        documentRef: { querySelector: () => null }, storage: memoryStorage(),
+        performanceRef: { now: () => elapsed },
+        PerformanceObserverRef: null, MutationObserverRef: null,
+        setTimer: () => 1, clearTimer() {},
+    });
+    diagnostics.start();
+    // This late subscriber would be missed by an ordinary end-marker listener.
+    eventSource.on('extensions', () => new Promise(resolve => { releaseSettings = resolve; }));
+    elapsed = 65000;
+    const pending = eventSource.emit('extensions', { secret: 'must not be recorded' });
+    assert.equal(diagnostics.getReport().markers.EXTENSION_SETTINGS_LOADED_DISPATCH_START, 65000);
+    assert.equal(diagnostics.getReport().markers.EXTENSION_SETTINGS_LOADED_DISPATCH_END, undefined);
+    elapsed = 125000;
+    releaseSettings();
+    await pending;
+    elapsed = 125850;
+    await eventSource.emit('settings');
+    elapsed = 128100;
+    // Includes awaited ready subscribers even when registered after diagnostics.
+    const wrappedEmit = eventSource.emit;
+    eventSource.emit = function (name, ...args) { return wrappedEmit.call(this, name, ...args); };
+    const laterWrapper = eventSource.emit;
+    eventSource.on('ready', async () => { elapsed = 136540; });
+    await eventSource.emit('ready');
+    const report = diagnostics.getReport();
+    assert.equal(report.durations.pluginToExtensionSettingsMs, 25000);
+    assert.equal(report.durations.extensionSettingsListenersMs, 60000);
+    assert.equal(report.durations.extensionSettingsToSettingsMs, 850);
+    assert.equal(report.durations.appReadyListenersMs, 8440);
+    assert.equal(diagnostics.completed, true);
+    assert.equal(eventSource.emit, laterWrapper, 'must not replace a later wrapper');
+    assert.equal(JSON.stringify(report).includes('must not be recorded'), false);
+    diagnostics.stop();
+    assert.equal(eventSource.emit, laterWrapper);
+    assert.notEqual(laterWrapper, originalEmit);
+});
+
+test('phase observation preserves return identity, arguments, receiver and rejection; restores on stop', async () => {
+    const eventSource = emitter();
+    const error = new Error('failed');
+    const rejection = Promise.reject(error);
+    const payload = {};
+    eventSource.emit = function (name, arg) {
+        assert.equal(this, eventSource);
+        assert.equal(name, 'extensions');
+        assert.equal(arg, payload);
+        return rejection;
+    };
+    const originalEmit = eventSource.emit;
+    const diagnostics = new StartupDiagnostics({
+        eventSource, eventTypes: { EXTENSION_SETTINGS_LOADED: 'extensions' },
+        documentRef: { querySelector: () => null }, storage: memoryStorage(),
+        PerformanceObserverRef: null, MutationObserverRef: null,
+        setTimer: () => 1, clearTimer() {},
+    });
+    diagnostics.start();
+    const result = eventSource.emit('extensions', payload);
+    assert.equal(result, rejection);
+    await assert.rejects(result, value => value === error);
+    assert.equal(typeof diagnostics.getReport().markers.EXTENSION_SETTINGS_LOADED_DISPATCH_FAILED, 'number');
+    assert.equal(diagnostics.getReport().markers.EXTENSION_SETTINGS_LOADED_DISPATCH_END, undefined);
+    diagnostics.stop();
+    assert.equal(eventSource.emit, originalEmit);
 });

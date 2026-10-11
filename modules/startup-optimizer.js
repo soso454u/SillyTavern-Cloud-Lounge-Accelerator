@@ -1,18 +1,8 @@
 import { classifyStartupRequest } from '../client-core.js';
-import { isIosWebKitTouch } from '../utils/device-profile.js';
 import { StartupDiagnostics } from './startup-diagnostics.js';
 
 const FETCH_TTL_MS = 20000;
 const LOG_PREFIX = '[Cloud Lounge Accelerator]';
-const BACKGROUND_NOTICE_MS = 1800;
-const RECOVERY_NOTICE_MS = 3200;
-
-export function shouldRevealUiBeforeReady({
-    navigatorRef = globalThis.navigator,
-    matchMediaRef = globalThis.matchMedia,
-} = {}) {
-    return !isIosWebKitTouch({ navigatorRef, matchMediaRef });
-}
 
 function cloneResponse(response) {
     try {
@@ -86,18 +76,12 @@ export class StartupOptimizer {
     constructor({
         eventSource,
         eventTypes,
-        getCurrentChatId = () => undefined,
         onStatus = null,
-        allowEarlyUi = shouldRevealUiBeforeReady,
-        importActionLoader = () => import('../../../../action-loader.js'),
         diagnostics = null,
     }) {
         this.eventSource = eventSource;
         this.eventTypes = eventTypes;
-        this.getCurrentChatId = getCurrentChatId;
         this.onStatus = onStatus;
-        this.allowEarlyUi = allowEarlyUi;
-        this.importActionLoader = importActionLoader;
         this.diagnostics = diagnostics || new StartupDiagnostics({ eventSource, eventTypes });
         this.nativeFetch = null;
         this.fetchWrapper = null;
@@ -107,10 +91,6 @@ export class StartupOptimizer {
         this.recentGeneration = 0;
         this.timers = new Set();
         this.handlers = [];
-        this.banner = null;
-        this.bannerTimer = null;
-        this.recoveringWelcome = false;
-        this.onOnline = () => void this.recoverWelcomeScreen();
         this.started = false;
         this.startupFeatures = true;
     }
@@ -121,8 +101,6 @@ export class StartupOptimizer {
         this.started = true;
         this.diagnostics.start();
         this.installFetchCoordinator();
-        window.addEventListener('online', this.onOnline);
-        this.bind(this.eventTypes.SETTINGS_LOADED, () => this.onSettingsLoaded());
         this.bind(this.eventTypes.APP_READY, () => this.onAppReady());
         if (this.startupFeatures) this.onStatus?.('页面启动优化已启用');
     }
@@ -133,76 +111,8 @@ export class StartupOptimizer {
         this.handlers.push([name, handler]);
     }
 
-    async onSettingsLoaded() {
-        if (!this.started || !this.startupFeatures || !this.allowEarlyUi()) return;
-        try {
-            const loaderModule = await this.importActionLoader();
-            const handle = loaderModule.loader?.active?.().find(item => item.slug === 'app-init');
-            if (!handle || !this.started) return;
-            await loaderModule.loader.hide(handle);
-            document.body?.classList.add('cla-early-ui');
-            this.showBackgroundNotice('正在后台加载最近聊天…');
-        } catch (error) {
-            console.debug(LOG_PREFIX, '提前显示界面不可用，保留酒馆原生启动流程', error);
-        }
-    }
-
     onAppReady() {
-        document.body?.classList.remove('cla-early-ui');
         this.entries.clear();
-        if (this.getCurrentChatId?.() != null || document.querySelector('#chat .welcomePanel')) {
-            this.removeBackgroundNotice();
-        } else {
-            void this.recoverWelcomeScreen();
-        }
-    }
-
-    showBackgroundNotice(message, duration = BACKGROUND_NOTICE_MS) {
-        if (!this.started) return;
-        if (!this.banner?.isConnected) {
-            this.banner = document.createElement('div');
-            this.banner.className = 'cla-background-init-banner';
-            this.banner.setAttribute('role', 'status');
-            this.banner.setAttribute('aria-live', 'polite');
-            const spinner = document.createElement('span');
-            spinner.className = 'cla-background-init-spinner';
-            spinner.setAttribute('aria-hidden', 'true');
-            const text = document.createElement('span');
-            text.dataset.claBackgroundNotice = '';
-            this.banner.append(spinner, text);
-            document.body?.append(this.banner);
-        }
-        const text = this.banner?.querySelector('[data-cla-background-notice]');
-        if (text) text.textContent = message;
-        clearTimeout(this.bannerTimer);
-        this.bannerTimer = setTimeout(() => this.removeBackgroundNotice(), duration);
-    }
-
-    removeBackgroundNotice() {
-        clearTimeout(this.bannerTimer);
-        this.bannerTimer = null;
-        this.banner?.remove();
-        this.banner = null;
-    }
-
-    async recoverWelcomeScreen() {
-        if (!this.started || this.getCurrentChatId?.() != null || this.recoveringWelcome) return;
-        if (document.querySelector('#chat .welcomePanel')) {
-            this.removeBackgroundNotice();
-            return;
-        }
-        this.showBackgroundNotice('正在后台读取最近聊天…');
-        this.recoveringWelcome = true;
-        try {
-            const module = await import('../../../../welcome-screen.js');
-            await module.openWelcomeScreen?.({ force: true });
-            if (document.querySelector('#chat .welcomePanel')) this.removeBackgroundNotice();
-        } catch (error) {
-            console.debug(LOG_PREFIX, '最近聊天读取失败，等待联网后重试', error);
-            this.showBackgroundNotice('最近聊天暂未载入 · 网络恢复后自动重试', RECOVERY_NOTICE_MS);
-        } finally {
-            this.recoveringWelcome = false;
-        }
     }
 
     installFetchCoordinator() {
@@ -327,7 +237,6 @@ export class StartupOptimizer {
         if (!this.started) return;
         this.started = false;
         this.diagnostics.stop();
-        window.removeEventListener('online', this.onOnline);
         if (this.fetchWrapper && window.fetch === this.fetchWrapper) window.fetch = this.nativeFetch;
         for (const [name, handler] of this.handlers) this.eventSource.removeListener(name, handler);
         this.handlers = [];
@@ -339,9 +248,6 @@ export class StartupOptimizer {
         this.recentPending.clear();
         this.fetchWrapper = null;
         this.nativeFetch = null;
-        document.body?.classList.remove('cla-early-ui');
-        this.removeBackgroundNotice();
-        this.recoveringWelcome = false;
         this.startupFeatures = true;
     }
 

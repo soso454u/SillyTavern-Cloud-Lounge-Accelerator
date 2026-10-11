@@ -153,6 +153,8 @@ export class StartupDiagnostics {
         this.completed = false;
         this.started = false;
         this.report = null;
+        this.originalEmit = null;
+        this.emitWrapper = null;
     }
 
     elapsed() {
@@ -187,7 +189,13 @@ export class StartupDiagnostics {
         this.mark('PLUGIN_ACTIVATED');
         this.bind(this.eventTypes?.SETTINGS_LOADED, () => this.mark('SETTINGS_LOADED'));
         this.bind(this.eventTypes?.APP_INITIALIZED, () => this.mark('APP_INITIALIZED'));
-        this.bind(this.eventTypes?.APP_READY, () => this.finish());
+        this.watchStartupPhases();
+        this.report.coverage.startupEventDispatch = this.emitWrapper ? 'observed' : 'unsupported';
+        this.report.coverage.individualExtensionActivation = 'not-observed';
+        this.bind(this.eventTypes?.APP_READY, () => {
+            this.mark('APP_READY');
+            if (!this.emitWrapper) this.finish();
+        });
         this.watchStartupOverlay();
         this.watchLongTasks();
     }
@@ -196,6 +204,52 @@ export class StartupDiagnostics {
         if (!name || !this.eventSource?.on) return;
         this.eventSource.on(name, handler);
         this.handlers.push([name, handler]);
+    }
+
+    watchStartupPhases() {
+        if (typeof this.eventSource?.emit !== 'function') return;
+        const phases = new Map(['EXTENSION_SETTINGS_LOADED', 'SETTINGS_LOADED', 'APP_INITIALIZED', 'APP_READY']
+            .filter(name => this.eventTypes?.[name])
+            .map(name => [this.eventTypes[name], name]));
+        const diagnostics = this;
+        const original = this.eventSource.emit;
+        // Observe dispatch boundaries, including awaited subscribers. Never read
+        // event arguments or replace the original return value / Promise.
+        const record = (name, boundary) => {
+            if (!diagnostics.started || diagnostics.completed) return;
+            try {
+                diagnostics.mark(`${name}_DISPATCH_${boundary}`);
+                if (name === 'APP_READY' && boundary === 'END') diagnostics.finish();
+            } catch {
+                // Diagnostics must not interrupt native initialization.
+            }
+        };
+        this.originalEmit = original;
+        this.emitWrapper = function (event, ...args) {
+            const phase = phases.get(event);
+            if (!phase || !diagnostics.started || diagnostics.completed) return original.call(this, event, ...args);
+            record(phase, 'START');
+            let result;
+            try {
+                result = original.call(this, event, ...args);
+            } catch (error) {
+                record(phase, 'FAILED');
+                throw error;
+            }
+            if (result && typeof result.then === 'function') {
+                result.then(() => record(phase, 'END'), () => record(phase, 'FAILED'));
+            } else {
+                record(phase, 'END');
+            }
+            return result;
+        };
+        this.eventSource.emit = this.emitWrapper;
+    }
+
+    restoreEmit() {
+        if (this.emitWrapper && this.eventSource.emit === this.emitWrapper) this.eventSource.emit = this.originalEmit;
+        this.emitWrapper = null;
+        this.originalEmit = null;
     }
 
     mark(name) {
@@ -376,13 +430,19 @@ export class StartupDiagnostics {
             settingsToInitializedMs: markerDelta(this.report.markers, 'SETTINGS_LOADED', 'APP_INITIALIZED'),
             initializedToReadyMs: markerDelta(this.report.markers, 'APP_INITIALIZED', 'APP_READY'),
             pluginToReadyMs: markerDelta(this.report.markers, 'PLUGIN_ACTIVATED', 'APP_READY'),
+            pluginToExtensionSettingsMs: markerDelta(this.report.markers, 'PLUGIN_ACTIVATED', 'EXTENSION_SETTINGS_LOADED_DISPATCH_START'),
+            extensionSettingsListenersMs: markerDelta(this.report.markers, 'EXTENSION_SETTINGS_LOADED_DISPATCH_START', 'EXTENSION_SETTINGS_LOADED_DISPATCH_END'),
+            extensionSettingsToSettingsMs: markerDelta(this.report.markers, 'EXTENSION_SETTINGS_LOADED_DISPATCH_END', 'SETTINGS_LOADED_DISPATCH_START'),
+            settingsListenersMs: markerDelta(this.report.markers, 'SETTINGS_LOADED_DISPATCH_START', 'SETTINGS_LOADED_DISPATCH_END'),
+            appInitializedListenersMs: markerDelta(this.report.markers, 'APP_INITIALIZED_DISPATCH_START', 'APP_INITIALIZED_DISPATCH_END'),
+            appReadyListenersMs: markerDelta(this.report.markers, 'APP_READY_DISPATCH_START', 'APP_READY_DISPATCH_END'),
         };
         const readyIndex = this.report.markerOrder.indexOf('APP_READY');
         const overlayIndex = this.report.markerOrder.indexOf('STARTUP_OVERLAY_HIDDEN');
         this.report.coverage = {
             ...this.report.coverage,
             overlayHiddenBeforeReady: overlayIndex >= 0 && readyIndex >= 0 && overlayIndex < readyIndex,
-            observedThroughMs: readyMs,
+            observedThroughMs: this.report.markers.APP_READY_DISPATCH_END ?? readyMs,
             settingsResourceCount: settingsResources.length,
             settingsResourcesBeforePlugin: settingsResources.filter(entry => (
                 entry.startTime < this.report.markers.PLUGIN_ACTIVATED
@@ -392,6 +452,7 @@ export class StartupDiagnostics {
         this.report.slow = readyMs >= SLOW_STARTUP_MS;
         this.report.recordedAt = new Date(this.now()).toISOString();
         this.completed = true;
+        this.restoreEmit();
         this.persist();
         this.longTaskObserver?.disconnect?.();
         this.longTaskObserver = null;
@@ -423,6 +484,7 @@ export class StartupDiagnostics {
     stop() {
         if (!this.started) return;
         this.started = false;
+        this.restoreEmit();
         for (const [name, handler] of this.handlers) this.eventSource?.removeListener?.(name, handler);
         this.handlers = [];
         this.overlayObserver?.disconnect?.();

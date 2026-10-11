@@ -80,7 +80,6 @@ function createRuntime() {
     const startupOptimizer = new StartupOptimizer({
         eventSource,
         eventTypes: event_types,
-        getCurrentChatId,
         onStatus: value => updateRuntimeStatus('startup', value),
     });
     const regexRefresh = new RegexRefreshController({

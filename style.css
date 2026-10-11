@@ -377,45 +377,6 @@
     margin-top: 0.35rem;
 }
 
-.cla-background-init-banner {
-    position: fixed;
-    top: max(4rem, calc(env(safe-area-inset-top) + 3.25rem));
-    left: 50%;
-    z-index: 10000;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.45rem;
-    transform: translateX(-50%);
-    max-width: min(28rem, calc(100vw - 2rem));
-    padding: 0.42rem 0.7rem;
-    border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 18%, transparent);
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 92%, transparent);
-    box-shadow: 0 0.3rem 0.9rem rgb(0 0 0 / 20%);
-    font-size: 0.8rem;
-    white-space: nowrap;
-    pointer-events: none;
-    animation: cla-background-notice-in 140ms ease-out;
-}
-
-.cla-background-init-spinner {
-    width: 0.75rem;
-    height: 0.75rem;
-    flex: 0 0 auto;
-    border: 0.12rem solid color-mix(in srgb, var(--SmartThemeBodyColor) 22%, transparent);
-    border-top-color: var(--SmartThemeBodyColor);
-    border-radius: 50%;
-    animation: cla-welcome-spin 0.8s linear infinite;
-}
-
-@keyframes cla-background-notice-in {
-    from { opacity: 0; transform: translate(-50%, -0.35rem); }
-}
-
-@keyframes cla-welcome-spin {
-    to { transform: rotate(1turn); }
-}
-
 #chat pre.cla-code-collapsed {
     position: relative;
     max-height: 8rem;
@@ -452,12 +413,6 @@
 
     .cla-performance-heading small {
         text-align: left;
-    }
-
-    .cla-background-init-banner {
-        top: max(3.5rem, calc(env(safe-area-inset-top) + 3rem));
-        overflow: hidden;
-        text-overflow: ellipsis;
     }
 
     .cla-number-setting {

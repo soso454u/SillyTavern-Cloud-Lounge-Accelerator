@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-import { shouldRevealUiBeforeReady, StartupOptimizer } from '../modules/startup-optimizer.js';
+import { StartupOptimizer } from '../modules/startup-optimizer.js';
 
 function descriptor() {
     return {
@@ -87,47 +87,94 @@ test('passes user libraries, settings and full chats through without cloning or 
     optimizer.stop();
 });
 
-test('keeps the native startup blocker until APP_READY on iPhone and iPad', async () => {
-    const iosNavigator = {
-        userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1',
-        platform: 'iPhone',
-        maxTouchPoints: 5,
+test('startup events and reconnect never hide the loader or recover / clear a chat', async t => {
+    const originals = { window: globalThis.window, location: globalThis.location, document: globalThis.document };
+    const events = new Map();
+    const windowEvents = new Map();
+    let requests = 0;
+    globalThis.location = { href: 'https://example.test/' };
+    globalThis.document = {
+        querySelector: () => null,
+        body: {},
+        createElement() { assert.fail('startup must not inject recovery UI'); },
     };
-    assert.equal(shouldRevealUiBeforeReady({ navigatorRef: iosNavigator, matchMediaRef: () => ({ matches: true }) }), false);
-    assert.equal(shouldRevealUiBeforeReady({
-        navigatorRef: { userAgent: 'Mozilla/5.0 Chrome/140', platform: 'Linux x86_64', maxTouchPoints: 0 },
-        matchMediaRef: () => ({ matches: false }),
-    }), true);
-
-    let loaderImports = 0;
-    const optimizer = new StartupOptimizer({
-        allowEarlyUi: () => false,
-        importActionLoader: async () => {
-            loaderImports += 1;
-            return { loader: { active: () => [] } };
-        },
+    globalThis.window = {
+        fetch: async () => { requests += 1; throw new Error('offline'); },
+        addEventListener: (name, handler) => windowEvents.set(name, handler),
+        removeEventListener: name => windowEvents.delete(name),
+    };
+    t.after(() => {
+        for (const [name, value] of Object.entries(originals)) {
+            if (value === undefined) delete globalThis[name];
+            else globalThis[name] = value;
+        }
     });
-    optimizer.started = true;
-    optimizer.startupFeatures = true;
-    await optimizer.onSettingsLoaded();
-    assert.equal(loaderImports, 0, 'iOS must not expose controls before SillyTavern has bound them');
-});
-
-test('keeps welcome recovery out of the chat layout and uses a short top notice', async () => {
-    const [source, styles] = await Promise.all([
-        readFile(new URL('../modules/startup-optimizer.js', import.meta.url), 'utf8'),
-        readFile(new URL('../style.css', import.meta.url), 'utf8'),
-    ]);
-    assert.doesNotMatch(source, /cla-welcome-placeholder|showWelcomePlaceholder|重新读取最近聊天/);
-    assert.doesNotMatch(styles, /\.cla-welcome-placeholder/);
-    assert.match(source, /BACKGROUND_NOTICE_MS = 1800/);
-    const noticeStyles = styles.match(/\.cla-background-init-banner\s*\{[^}]*\}/)?.[0] || '';
-    assert.match(noticeStyles, /top:/);
-    assert.doesNotMatch(noticeStyles, /bottom:/);
+    const eventSource = {
+        on(name, handler) { events.set(name, [...(events.get(name) || []), handler]); },
+        removeListener(name, handler) { events.set(name, (events.get(name) || []).filter(item => item !== handler)); },
+        async emit(name) { for (const handler of events.get(name) || []) await handler(); },
+    };
+    for (const startupFeatures of [true, false]) {
+        const optimizer = new StartupOptimizer({
+            eventSource, eventTypes: { SETTINGS_LOADED: 'settings', APP_READY: 'ready' },
+        });
+        optimizer.start({ startupFeatures });
+        await eventSource.emit('settings');
+        // APP_READY with a blank chat, then a role switch and reconnection.
+        await eventSource.emit('ready');
+        await eventSource.emit('chat_changed');
+        windowEvents.get('online')?.();
+        assert.equal(requests, 0);
+        assert.equal(windowEvents.has('online'), false);
+        optimizer.stop();
+    }
+    const source = await readFile(new URL('../modules/startup-optimizer.js', import.meta.url), 'utf8');
+    assert.doesNotMatch(source, /action-loader|welcome-screen|openWelcomeScreen|recoverWelcomeScreen|loader\.hide/);
 });
 
 test('never clones or reparses full chat payloads for side-channel metrics', async () => {
     const source = await readFile(new URL('../modules/startup-optimizer.js', import.meta.url), 'utf8');
     assert.doesNotMatch(source, /observe-chat|onChatPayload|inspectChatResponse/);
     assert.doesNotMatch(source, /cloneResponse\(response\).*inspectChat/s);
+});
+
+test('chat read failures stay failures and save requests retain their original payload', async t => {
+    const originals = { window: globalThis.window, location: globalThis.location };
+    const failure = new Error('network failure');
+    const response = {
+        ok: false, status: 500,
+        clone() { assert.fail('must not clone a failed chat'); },
+        json() { assert.fail('must not interpret a failed chat as an empty chat'); },
+    };
+    const calls = [];
+    globalThis.location = { href: 'https://example.test/' };
+    globalThis.window = {
+        fetch: async (input, init) => {
+            calls.push({ input, init });
+            if (init.signal) throw failure;
+            return response;
+        },
+    };
+    t.after(() => {
+        for (const [name, value] of Object.entries(originals)) {
+            if (value === undefined) delete globalThis[name];
+            else globalThis[name] = value;
+        }
+    });
+    const optimizer = new StartupOptimizer({});
+    optimizer.installFetchCoordinator();
+    for (const path of ['/api/chats/get', '/api/chats/group/get']) {
+        const init = { method: 'POST', body: '{"file_name":"fixture"}' };
+        assert.equal(await window.fetch(path, init), response);
+        assert.deepEqual(calls.at(-1), { input: path, init });
+        await assert.rejects(window.fetch(path, { ...init, signal: new AbortController().signal }), value => value === failure);
+    }
+    for (const path of ['/api/chats/save', '/api/chats/group/save']) {
+        const init = { method: 'POST', body: '{"chat":[{"mes":"fixture"}]}' };
+        assert.equal(await window.fetch(path, init), response);
+        assert.equal(calls.at(-1).init, init);
+        assert.equal(calls.at(-1).init.body, init.body);
+    }
+    assert.equal(calls.length, 6, 'no recovery reads, automatic saves or retries');
+    assert.equal(optimizer.entries.size, 0);
 });
