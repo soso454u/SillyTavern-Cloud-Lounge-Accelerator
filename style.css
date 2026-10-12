@@ -552,6 +552,29 @@ body.cla-fast-ui :is(.drawer-content, dialog.popup, .inline-drawer-content, #Wor
     transition-property: none !important;
 }
 
+body.cla-preset-drag-guard [id$="prompt_manager_list"] [data-pm-identifier][class*="prompt_manager_prompt_draggable"] {
+    padding-left: calc(1.75rem + 0.5em) !important;
+    cursor: default !important;
+}
+
+body.cla-preset-drag-guard [id$="prompt_manager_list"] [data-pm-identifier][class*="prompt_manager_prompt_draggable"]:not(.ui-sortable-helper) {
+    position: relative;
+}
+
+body.cla-preset-drag-guard [id$="prompt_manager_list"] [data-pm-identifier][class*="prompt_manager_prompt_draggable"] > .drag-handle {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    min-width: 1.75rem;
+    min-height: 1.75rem;
+    left: 0;
+    padding: 0 !important;
+    box-sizing: border-box;
+    cursor: grab;
+    touch-action: none;
+}
+
 @media (pointer: coarse) {
     .prompt-manager-toggle-action {
         display: inline-flex;

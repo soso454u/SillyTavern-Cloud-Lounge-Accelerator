@@ -2,9 +2,11 @@ const TOGGLE_SELECTOR = '.prompt-manager-toggle-action';
 const ROW_SELECTOR = '[data-pm-identifier]';
 const LOG_PREFIX = '[Cloud Lounge Accelerator]';
 const TOUCH_CLICK_SUPPRESS_MS = 900;
+const TAP_DISTANCE = 10;
 
 export class PromptToggleAdapter {
-    constructor({ isGenerating = () => false, eventSource, eventTypes }) {
+    constructor({ isGenerating = () => false, eventSource, eventTypes, documentRef = globalThis.document }) {
+        this.document = documentRef;
         this.isGenerating = isGenerating;
         this.eventSource = eventSource;
         this.eventTypes = eventTypes;
@@ -14,6 +16,10 @@ export class PromptToggleAdapter {
         this.flushTimer = null;
         this.suppressClickUntil = 0;
         this.suppressedToggle = null;
+        this.touchGesture = null;
+        this.onPointerDown = this.onPointerDown.bind(this);
+        this.onPointerMove = this.onPointerMove.bind(this);
+        this.onPointerCancel = this.onPointerCancel.bind(this);
         this.onPointerUp = this.onPointerUp.bind(this);
         this.onClick = this.onClick.bind(this);
         this.onGenerationFinished = this.onGenerationFinished.bind(this);
@@ -28,8 +34,10 @@ export class PromptToggleAdapter {
             return false;
         }
         this.started = true;
-        document.addEventListener('pointerup', this.onPointerUp, true);
-        document.addEventListener('click', this.onClick, true);
+        this.document.addEventListener('pointerdown', this.onPointerDown, true);
+        this.document.addEventListener('pointercancel', this.onPointerCancel, true);
+        this.document.addEventListener('pointerup', this.onPointerUp, true);
+        this.document.addEventListener('click', this.onClick, true);
         for (const name of [this.eventTypes?.GENERATION_STOPPED, this.eventTypes?.GENERATION_ENDED]) {
             if (name) this.eventSource?.on?.(name, this.onGenerationFinished);
         }
@@ -59,14 +67,54 @@ export class PromptToggleAdapter {
         }
     }
 
-    onPointerUp(event) {
+    clearTouchGesture() {
+        this.touchGesture = null;
+        this.document?.removeEventListener('pointermove', this.onPointerMove, true);
+    }
+
+    suppressTouchClick(toggle) {
+        this.suppressedToggle = toggle;
+        this.suppressClickUntil = Date.now() + TOUCH_CLICK_SUPPRESS_MS;
+    }
+
+    onPointerDown(event) {
         if (!this.started) return;
+        this.clearTouchGesture();
+        this.suppressedToggle = null;
+        this.suppressClickUntil = 0;
         if (event.pointerType === 'mouse' || event.isPrimary === false) return;
         if (typeof event.button === 'number' && event.button !== 0) return;
         const toggle = this.getToggle(event);
-        if (!toggle || !this.toggleEntry(event, toggle)) return;
-        this.suppressedToggle = toggle;
-        this.suppressClickUntil = Date.now() + TOUCH_CLICK_SUPPRESS_MS;
+        if (!toggle) return;
+        this.touchGesture = { toggle, pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false };
+        // Listen to movement only during a touch that began on a toggle.
+        this.document?.addEventListener('pointermove', this.onPointerMove, { capture: true, passive: true });
+    }
+
+    onPointerMove(event) {
+        const gesture = this.touchGesture;
+        if (!gesture || event.pointerId !== gesture.pointerId) return;
+        if (Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) > TAP_DISTANCE) gesture.moved = true;
+    }
+
+    onPointerCancel(event) {
+        const gesture = this.touchGesture;
+        if (!gesture || event.pointerId !== gesture.pointerId) return;
+        this.suppressTouchClick(gesture.toggle);
+        this.clearTouchGesture();
+    }
+
+    onPointerUp(event) {
+        if (!this.started || event.pointerType === 'mouse' || event.isPrimary === false) return;
+        const gesture = this.touchGesture;
+        if (!gesture || event.pointerId !== gesture.pointerId) return;
+        this.onPointerMove(event);
+        this.clearTouchGesture();
+        if (gesture.moved || this.getToggle(event) !== gesture.toggle) {
+            this.suppressTouchClick(gesture.toggle);
+            return;
+        }
+        if (this.toggleEntry(event, gesture.toggle)) this.suppressTouchClick(gesture.toggle);
     }
 
     onClick(event) {
@@ -165,8 +213,11 @@ export class PromptToggleAdapter {
     stop() {
         if (!this.started) return;
         this.started = false;
-        document.removeEventListener('pointerup', this.onPointerUp, true);
-        document.removeEventListener('click', this.onClick, true);
+        this.document.removeEventListener('pointerdown', this.onPointerDown, true);
+        this.document.removeEventListener('pointercancel', this.onPointerCancel, true);
+        this.document.removeEventListener('pointerup', this.onPointerUp, true);
+        this.document.removeEventListener('click', this.onClick, true);
+        this.clearTouchGesture();
         for (const name of [this.eventTypes?.GENERATION_STOPPED, this.eventTypes?.GENERATION_ENDED]) {
             if (name) this.eventSource?.removeListener?.(name, this.onGenerationFinished);
         }

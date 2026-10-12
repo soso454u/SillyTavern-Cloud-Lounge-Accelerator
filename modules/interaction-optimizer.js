@@ -4,6 +4,7 @@ import { InteractionRecoveryGuard } from './interaction-recovery-guard.js';
 import { InputRevealGuard, restoreNativeInputLayout } from './native-input.js';
 import { MobileInteractionGuard } from './mobile-interaction-guard.js';
 import { UiRenderOptimizer } from './ui-render-optimizer.js';
+import { PresetDragGuard } from './preset-drag-guard.js';
 
 const RENDER_PROFILE_LABELS = Object.freeze({
     desktop: '桌面流畅',
@@ -16,6 +17,7 @@ export class InteractionOptimizer {
         this.onStatus = onStatus;
         this.diagnostics = new InteractionDiagnostics();
         this.promptToggle = new PromptToggleAdapter({ isGenerating, eventSource, eventTypes });
+        this.presetDragGuard = new PresetDragGuard();
         this.mobileGuard = new MobileInteractionGuard({
             onRecovered: diagnostic => this.reportRecovery(diagnostic),
         });
@@ -34,6 +36,7 @@ export class InteractionOptimizer {
         if (this.started) return;
         this.started = true;
         this.diagnostics.start();
+        const presetDragGuardActive = this.presetDragGuard.start();
         restoreNativeInputLayout();
         const [promptToggleActive, recoveryGuardActive, mobileGuardActive, inputRevealActive, renderProfile] = await Promise.all([
             this.promptToggle.start(),
@@ -46,7 +49,7 @@ export class InteractionOptimizer {
             this.stopFeatures();
             return;
         }
-        this.features = { promptToggleActive, recoveryGuardActive, mobileGuardActive, inputRevealActive, renderProfile };
+        this.features = { promptToggleActive, presetDragGuardActive, recoveryGuardActive, mobileGuardActive, inputRevealActive, renderProfile };
         this.emitStatus();
     }
 
@@ -63,6 +66,7 @@ export class InteractionOptimizer {
         if (!this.started) return;
         const {
             promptToggleActive,
+            presetDragGuardActive,
             recoveryGuardActive,
             mobileGuardActive,
             inputRevealActive,
@@ -70,6 +74,7 @@ export class InteractionOptimizer {
         } = this.features || {};
         const status = [
             promptToggleActive ? '预设即时切换' : null,
+            presetDragGuardActive ? '预设防误拖' : null,
             RENDER_PROFILE_LABELS[renderProfile],
             recoveryGuardActive ? '全平台自愈' : null,
             mobileGuardActive ? '触控保护' : null,
@@ -85,6 +90,7 @@ export class InteractionOptimizer {
     stopFeatures() {
         this.diagnostics.stop();
         this.promptToggle.stop();
+        this.presetDragGuard.stop();
         this.recoveryGuard.stop();
         this.mobileGuard.stop();
         this.inputReveal.stop();

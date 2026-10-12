@@ -129,8 +129,12 @@ test('handles a generating touch pointer once and suppresses its ghost click', a
         let pointerStops = 0;
         let clickStops = 0;
 
+        adapter.onPointerDown({ target: toggle, pointerType: 'touch', isPrimary: true, button: 0, pointerId: 1, clientX: 20, clientY: 20 });
         adapter.onPointerUp({
             target: toggle,
+            pointerId: 1,
+            clientX: 20,
+            clientY: 20,
             pointerType: 'touch',
             isPrimary: true,
             button: 0,
@@ -167,12 +171,77 @@ test('intercepts non-generating touch immediately while leaving mouse pointerup 
         return true;
     };
 
-    adapter.onPointerUp({ pointerType: 'touch', isPrimary: true, button: 0 });
+    adapter.onPointerDown({ pointerType: 'touch', isPrimary: true, button: 0, pointerId: 1, clientX: 20, clientY: 20 });
+    adapter.onPointerUp({ pointerType: 'touch', isPrimary: true, button: 0, pointerId: 1, clientX: 20, clientY: 20 });
     assert.equal(toggles, 1);
 
     adapter.onPointerUp({ pointerType: 'mouse', isPrimary: true, button: 0 });
     assert.equal(toggles, 1);
     assert.ok(adapter.suppressClickUntil > 0);
+});
+
+test('touch scrolling, cancellation and releasing over another toggle never toggle or save', () => {
+    for (const scenario of ['move-away-and-back', 'scroll-cancel', 'different-toggle', 'no-down', 'different-pointer']) {
+        const listeners = new Map();
+        const adapter = new PromptToggleAdapter({ documentRef: {
+            addEventListener(type, callback) { listeners.set(type, callback); },
+            removeEventListener(type) { listeners.delete(type); },
+        } });
+        adapter.started = true;
+        const toggle = {};
+        const other = {};
+        adapter.getToggle = event => event.target;
+        adapter.toggleEntry = () => assert.fail(`unexpected toggle: ${scenario}`);
+        const event = { target: toggle, pointerType: 'touch', pointerId: 1, isPrimary: true, button: 0, clientX: 20, clientY: 20 };
+        if (scenario !== 'no-down') adapter.onPointerDown(event);
+        if (scenario === 'move-away-and-back') {
+            adapter.onPointerMove({ ...event, clientY: 50 });
+            adapter.onPointerMove(event);
+        }
+        if (scenario === 'scroll-cancel') adapter.onPointerCancel(event);
+        adapter.onPointerUp({ ...event, target: scenario === 'different-toggle' ? other : toggle, pointerId: scenario === 'different-pointer' ? 2 : 1 });
+        if (['move-away-and-back', 'scroll-cancel', 'different-toggle'].includes(scenario)) {
+            let stopped = false;
+            adapter.onClick({ target: toggle, stopImmediatePropagation() { stopped = true; } });
+            assert.equal(stopped, true, 'ignore a compatibility click from the cancelled gesture');
+        }
+        if (scenario === 'different-pointer') adapter.onPointerCancel(event);
+        assert.equal(listeners.has('pointermove'), false);
+    }
+});
+
+test('a new deliberate tap on the same toggle is not swallowed by the previous ghost-click window', () => {
+    const adapter = new PromptToggleAdapter({});
+    adapter.started = true;
+    const toggle = {};
+    adapter.getToggle = () => toggle;
+    let toggles = 0;
+    adapter.toggleEntry = () => { toggles += 1; return true; };
+    const event = { pointerType: 'pen', pointerId: 4, button: 0, clientX: 10, clientY: 10 };
+    for (let i = 0; i < 2; i++) {
+        adapter.onPointerDown(event);
+        adapter.onPointerUp(event);
+        adapter.onClick({ stopImmediatePropagation() {} });
+    }
+    assert.equal(toggles, 2);
+    assert.equal(adapter.touchGesture, null);
+});
+
+test('disabling during a toggle gesture removes its temporary move listener and pending state', () => {
+    const listeners = new Set();
+    const adapter = new PromptToggleAdapter({ documentRef: {
+        addEventListener(type) { listeners.add(type); },
+        removeEventListener(type) { listeners.delete(type); },
+    } });
+    adapter.started = true;
+    adapter.getToggle = () => ({});
+    adapter.onPointerDown({ pointerType: 'touch', pointerId: 1, button: 0, clientX: 10, clientY: 10 });
+    assert.equal(listeners.has('pointermove'), true);
+    adapter.stop();
+    assert.equal(listeners.size, 0);
+    assert.equal(adapter.touchGesture, null);
+    assert.equal(adapter.suppressedToggle, null);
+    assert.equal(adapter.started, false);
 });
 
 test('does not schedule a full prompt-list render for a normal toggle', async () => {
