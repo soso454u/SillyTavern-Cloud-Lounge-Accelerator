@@ -179,12 +179,16 @@ export class InteractionRecoveryGuard {
     }
 
     onBodyMutations(mutations) {
-        const relevant = mutations.some(mutation => (
-            [...(mutation.addedNodes || []), ...(mutation.removedNodes || [])].some(node => (
+        const relevant = mutations.some(mutation => {
+            // Streaming replaces whole message subtrees. Popup layers live
+            // outside #chat; do not search every new token's HTML for them.
+            const target = mutation.target?.nodeType === 3 ? mutation.target.parentElement : mutation.target;
+            if (target?.closest?.('#chat')) return false;
+            return [...(mutation.addedNodes || []), ...(mutation.removedNodes || [])].some(node => (
                 node?.matches?.(`dialog.popup, ${LEGACY_OVERLAY_SELECTOR}`)
                 || node?.querySelector?.(`dialog.popup, ${LEGACY_OVERLAY_SELECTOR}`)
-            ))
-        ));
+            ));
+        });
         if (relevant) this.scheduleScan();
     }
 
@@ -417,7 +421,9 @@ export class InteractionRecoveryGuard {
     }
 
     getStaleBlocker(event) {
-        const hit = this.document.elementFromPoint?.(event.clientX, event.clientY) || event.target;
+        // Pointer targets already identify the hit layer. Ordinary copy/edit
+        // clicks must not force another synchronous page layout here.
+        const hit = event.target;
         const overlay = getStaleLegacyOverlay(hit, { documentRef: this.document, windowRef: this.window });
         if (overlay) return { overlay, reason: 'legacy-overlay' };
         const dialog = hit?.closest?.('dialog.popup[open]') || event.target?.closest?.('dialog.popup[open]');
@@ -453,11 +459,9 @@ export class InteractionRecoveryGuard {
     async onPointerEnd(event) {
         if (!this.started || event.type !== 'pointerup' || event.button > 0) return;
         const textarea = this.document.querySelector?.('#send_textarea');
-        const textareaActionable = isControlActionable(textarea, { windowRef: this.window });
-
-        const direct = event.target === textarea || event.target?.closest?.('#send_textarea') === textarea;
+        const direct = Boolean(textarea && (event.target === textarea || event.target?.closest?.('#send_textarea') === textarea));
         if (direct) {
-            if (!textareaActionable) return;
+            if (!isControlActionable(textarea, { windowRef: this.window })) return;
             this.scheduleMicrotask(() => {
                 if (!this.started || this.document.activeElement === textarea) return;
                 const active = this.document.activeElement;

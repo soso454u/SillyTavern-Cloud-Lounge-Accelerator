@@ -8,6 +8,7 @@ import {
 const CODE_SELECTOR = '#chat .mes pre code';
 const LOG_PREFIX = '[Cloud Lounge Accelerator]';
 const ORIGINAL_TRUNCATION_KEY = 'cloud-lounge-accelerator:original-chat-truncation';
+const MAX_HIGHLIGHT_CHARS = 20000;
 
 function isVisible(element, root) {
     if (!(element instanceof Element) || !(root instanceof Element)) return false;
@@ -35,6 +36,7 @@ export class ChatOptimizer {
         scrollToBottom = null,
         refreshSwipeButtons = null,
         onStatus = null,
+        importChatApi = () => import('../../../../../script.js'),
     }) {
         this.eventSource = eventSource;
         this.eventTypes = eventTypes;
@@ -46,6 +48,7 @@ export class ChatOptimizer {
         this.scrollToBottom = scrollToBottom;
         this.refreshSwipeButtons = refreshSwipeButtons;
         this.onStatus = onStatus;
+        this.importChatApi = importChatApi;
         this.started = false;
         this.powerUser = null;
         this.originalTruncation = null;
@@ -56,6 +59,8 @@ export class ChatOptimizer {
         this.originalHighlight = null;
         this.originalHighlights = new Map();
         this.highlightWrappers = new Map();
+        this.queuedHighlights = new WeakSet();
+        this.highlightPointerId = null;
         this.highlightObserver = null;
         this.codeScanTimer = null;
         this.codeScanFrame = null;
@@ -158,15 +163,22 @@ export class ChatOptimizer {
             if (this.isGenerating?.()) return;
             this.queueCodeScan();
         });
-        this.domObserver.observe(this.chatElement, { childList: true, subtree: true });
+        if (!this.isGenerating?.()) this.resumeCodeObservation();
         if (!this.isGenerating?.()) this.queueCodeScan(0);
     }
 
     pauseCodeScanning() {
+        this.domObserver?.disconnect();
         clearTimeout(this.codeScanTimer);
         this.codeScanTimer = null;
         if (this.codeScanFrame !== null) cancelAnimationFrame(this.codeScanFrame);
         this.codeScanFrame = null;
+    }
+
+    resumeCodeObservation() {
+        if (this.chatElement && this.started && !this.isGenerating?.()) {
+            this.domObserver?.observe(this.chatElement, { childList: true, subtree: true });
+        }
     }
 
     queueCodeScan(delay = 180) {
@@ -193,7 +205,8 @@ export class ChatOptimizer {
                 this.generationEndTimer = setTimeout(waitForUnlock, 80);
                 return;
             }
-            this.queueCodeScan(0);
+            this.resumeCodeObservation();
+            this.queueCodeScan(180);
         };
         waitForUnlock();
     }
@@ -226,6 +239,9 @@ export class ChatOptimizer {
 
     installHistoryAnchorGuard() {
         this.onHistoryPointerDown = event => {
+            if (event.target?.closest?.('#chat') && event.button <= 0 && event.isPrimary !== false) {
+                this.highlightPointerId = event.pointerId;
+            }
             if (event.target?.closest?.('#show_more_messages')) {
                 this.captureHistoryAnchor();
                 return;
@@ -240,10 +256,26 @@ export class ChatOptimizer {
             this.cancelHistoryAnchor();
         };
         this.onHistoryUserInput = () => this.cancelHistoryAnchor();
+        this.onCodePointerEnd = event => {
+            if (this.highlightPointerId === null || event.pointerId !== this.highlightPointerId) return;
+            this.highlightPointerId = null;
+            this.queueCodeScan();
+        };
+        this.onCodeSelectionChange = () => {
+            if (!this.hasActiveChatSelection()) this.queueCodeScan();
+        };
+        this.onCodeVisibilityChange = () => {
+            this.highlightPointerId = null;
+            if (!document.hidden) this.queueCodeScan();
+        };
         document.addEventListener('pointerdown', this.onHistoryPointerDown, true);
         document.addEventListener('click', this.onHistoryClick, true);
         document.addEventListener('wheel', this.onHistoryUserInput, { passive: true, capture: true });
         document.addEventListener('keydown', this.onHistoryUserInput, true);
+        document.addEventListener('pointerup', this.onCodePointerEnd, true);
+        document.addEventListener('pointercancel', this.onCodePointerEnd, true);
+        document.addEventListener('selectionchange', this.onCodeSelectionChange);
+        document.addEventListener('visibilitychange', this.onCodeVisibilityChange);
     }
 
     captureHistoryAnchor() {
@@ -421,13 +453,13 @@ export class ChatOptimizer {
 
     queueHighlight(element, force = false) {
         if (!this.started || element.dataset.claHighlighted === '1' || !this.originalHighlight) return;
-        if (this.isGenerating?.()) {
+        if (this.isGenerating?.() || this.highlightPointerId !== null || this.hasActiveChatSelection()) {
             element.dataset.claHighlightPending = '1';
             return;
         }
         const messages = [...document.querySelectorAll('#chat .mes')];
         const recent = messages.slice(-3).includes(element.closest('.mes'));
-        if (isHeavyHtmlCode(element)) {
+        if (isHeavyHtmlCode(element) || (element.textContent?.length || 0) > MAX_HIGHLIGHT_CHARS) {
             if (!recent) this.collapseOldCode(element);
             element.dataset.claHighlighted = '1';
             element.dataset.claHeavyHtml = '1';
@@ -442,24 +474,45 @@ export class ChatOptimizer {
             this.highlightObserver?.observe(element);
             return;
         }
+        if (this.queuedHighlights.has(element)) return;
+        this.queuedHighlights.add(element);
+        const generation = this.generation;
         void this.scheduler.schedule(async () => {
+            if (!this.started || generation !== this.generation) return;
             if (!element.isConnected || element.dataset.claHighlighted === '1') return;
-            if (this.isGenerating?.()) {
+            if (this.isGenerating?.() || this.highlightPointerId !== null || this.hasActiveChatSelection()) {
                 element.dataset.claHighlightPending = '1';
                 return;
             }
-            this.originalHighlight.call(this.highlightLibrary, element);
+            const copyButtons = [...element.querySelectorAll('.code-copy')];
+            try {
+                if (!element.hasAttribute('data-highlighted')) this.originalHighlight.call(this.highlightLibrary, element);
+            } finally {
+                // highlight.js replaces innerHTML. Restore the same native
+                // button nodes and handlers instead of recreating them.
+                for (const button of copyButtons) {
+                    if (!element.contains(button)) element.appendChild(button);
+                }
+            }
             element.dataset.claHighlighted = '1';
             delete element.dataset.claHighlightPending;
-            const message = element.closest('.mes');
-            if (message) {
-                const api = await import('../../../../../script.js');
-                message.querySelectorAll('.code-copy').forEach(button => button.remove());
-                api.addCopyToCodeBlocks?.(message);
+            const pre = element.closest('pre');
+            if (pre && !element.querySelector('.code-copy')) {
+                const api = await this.importChatApi();
+                if (!this.started || generation !== this.generation || !element.isConnected || this.isGenerating?.()) return;
+                // The native helper highlights and adds buttons to every block
+                // it receives. Scope it to this one pre; never remove or replace
+                // sibling copy buttons that may currently have focus/capture.
+                if (!element.querySelector('.code-copy')) api.addCopyToCodeBlocks?.(pre);
             }
         }, { priority: recent ? 1 : 3 }).catch(error => {
             if (error?.name !== 'AbortError') console.debug(LOG_PREFIX, '延迟高亮失败', error);
-        });
+        }).finally(() => this.queuedHighlights.delete(element));
+    }
+
+    hasActiveChatSelection() {
+        const selection = document.getSelection?.();
+        return Boolean(selection && !selection.isCollapsed && this.chatElement?.contains?.(selection.anchorNode));
     }
 
     collapseOldCode(element) {
@@ -536,6 +589,8 @@ export class ChatOptimizer {
         this.originalHighlight = null;
         this.originalHighlights.clear();
         this.highlightWrappers.clear();
+        this.queuedHighlights = new WeakSet();
+        this.highlightPointerId = null;
         document.querySelectorAll('[data-cla-collapsible]').forEach(element => {
             element.classList.remove('cla-code-collapsed');
             delete element.dataset.claCollapsible;
@@ -554,6 +609,10 @@ export class ChatOptimizer {
         document.removeEventListener('click', this.onHistoryClick, true);
         document.removeEventListener('wheel', this.onHistoryUserInput, true);
         document.removeEventListener('keydown', this.onHistoryUserInput, true);
+        document.removeEventListener('pointerup', this.onCodePointerEnd, true);
+        document.removeEventListener('pointercancel', this.onCodePointerEnd, true);
+        document.removeEventListener('selectionchange', this.onCodeSelectionChange);
+        document.removeEventListener('visibilitychange', this.onCodeVisibilityChange);
         if (this.powerUser && Number.isFinite(this.originalTruncation)) {
             this.powerUser.chat_truncation = this.originalTruncation;
             this.saveSettings?.();

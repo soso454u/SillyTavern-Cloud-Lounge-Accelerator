@@ -50,6 +50,28 @@ const visibleWindow = {
     removeEventListener() {},
 };
 
+test('ordinary copy/button taps do not measure the chat input or perform page hit tests', async () => {
+    const textarea = createTextarea();
+    textarea.getBoundingClientRect = () => assert.fail('unrelated tap must not measure the input');
+    const guard = new InteractionRecoveryGuard({
+        documentRef: {
+            querySelector: () => textarea,
+            elementFromPoint: () => assert.fail('ordinary tap already has a native event target'),
+        },
+        windowRef: { getComputedStyle: () => assert.fail('ordinary tap must not request computed styles') },
+    });
+    guard.started = true;
+    await guard.onPointerEnd({type:'pointerup',button:0,target:{closest:()=>null}});
+});
+
+test('streaming message mutations never search added HTML for popup layers', () => {
+    const guard = new InteractionRecoveryGuard({});
+    guard.started = true;
+    guard.scheduleScan = () => assert.fail('chat-only rendering must not schedule a popup scan');
+    const node = { matches: () => assert.fail('must skip node traversal'), querySelector: () => assert.fail('must skip subtree searches') };
+    guard.onBodyMutations(Array.from({length:100}, () => ({ target:{closest:()=>({})},addedNodes:[node],removedNodes:[node] })));
+});
+
 test('accepts only visible, editable, non-inert controls for focus recovery', () => {
     const textarea = createTextarea();
     assert.equal(isControlActionable(textarea, { windowRef: visibleWindow }), true);

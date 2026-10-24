@@ -149,14 +149,7 @@ function isLikelyControl(target) {
 }
 
 function detectBlocker(documentRef, event) {
-    const x = finite(event?.clientX, Number.NaN);
-    const y = finite(event?.clientY, Number.NaN);
-    let hit = event?.target || null;
-    try {
-        hit = documentRef?.elementFromPoint?.(x, y) || hit;
-    } catch {
-        // Keep the event target when hit-testing is unavailable.
-    }
+    const hit = event?.target || null;
     const dialog = hit?.matches?.('dialog[open]') ? hit : null;
     if (dialog) return `dialog-backdrop:${describeSafeElement(dialog)}`;
     const explicit = hit?.closest?.(BLOCKER_SELECTOR);
@@ -237,6 +230,9 @@ export function classifyInteractionAnomaly(state = {}) {
     if (state.issues?.some(issue => ['pointer-events-none', 'hidden', 'display-none'].includes(issue))) {
         return 'control-not-hittable';
     }
+    // Native code-copy runs on pointerup and deliberately stops click bubbling.
+    // Its async failures are still collected through error/unhandledrejection.
+    if (state.pointerUpAction && phases.upBubble) return null;
     if ((phases.downCapture && !phases.downBubble)
         || (phases.upCapture && !phases.upBubble)
         || (phases.clickCapture && !phases.clickBubble)) return 'propagation-stopped';
@@ -319,6 +315,7 @@ export class InteractionDiagnostics {
         this.lastClipboardActivityAt = -Infinity;
         this.lastUnconfirmedActivityAt = -Infinity;
         this.analysisTimer = null;
+        this.delayTimers = new Map();
         this.started = false;
     }
 
@@ -371,23 +368,34 @@ export class InteractionDiagnostics {
     createPointerState(event) {
         const x = finite(event.clientX, Number.NaN);
         const y = finite(event.clientY, Number.NaN);
-        const inspected = inspectElementChain(event.target, this.window);
         return {
             pointerId: finite(event.pointerId),
             pointerType: safeToken(event.pointerType, 16) || 'unknown',
             startedAt: this.monotonicNow(),
             target: describeSafeElement(event.target),
             path: safePath(event),
-            hitStack: safeHitStack(this.document, x, y),
+            hitStack: [],
             point: Number.isFinite(x) && Number.isFinite(y) ? [Math.round(x), Math.round(y)] : undefined,
             actionable: isLikelyControl(event.target),
+            pointerUpAction: Boolean(event.target?.closest?.('.code-copy')),
             blocker: detectBlocker(this.document, event),
-            issues: inspected.issues,
-            elementState: inspected.chain,
-            popups: inspectPopups(this.document, this.window),
+            issues: [],
+            elementState: [],
+            popups: [],
             phases: {},
             targetElement: event.target,
         };
+    }
+
+    inspectPointerState(state) {
+        const target = state?.targetElement;
+        if (!target || state.inspected || target.isConnected === false) return;
+        state.inspected = true;
+        const inspected = inspectElementChain(target, this.window);
+        state.issues = inspected.issues;
+        state.elementState = inspected.chain;
+        state.hitStack = safeHitStack(this.document, state.point?.[0], state.point?.[1]);
+        state.popups = inspectPopups(this.document, this.window);
     }
 
     matchingState(event) {
@@ -403,6 +411,7 @@ export class InteractionDiagnostics {
         if (!this.started) return;
         if (event.type !== 'pointercancel' && Number.isFinite(event.button) && event.button > 0) return;
         if (event.type === 'pointerdown' && phase === 'capture') {
+            if (this.activePointer) this.activePointer.targetElement = null;
             this.activePointer = this.createPointerState(event);
         }
         const state = this.matchingState(event);
@@ -418,6 +427,7 @@ export class InteractionDiagnostics {
         });
 
         if (event.type === 'pointercancel') {
+            state.targetElement = null;
             if (phase === 'bubble') this.activePointer = null;
             return;
         }
@@ -433,14 +443,18 @@ export class InteractionDiagnostics {
     }
 
     measureMainThreadDelay(state) {
+        if (state.delayMeasured) return;
+        state.delayMeasured = true;
         const scheduledAt = this.monotonicNow();
-        this.setTimer(() => {
+        const timer = this.setTimer(() => {
+            this.delayTimers.delete(state);
             if (!this.started) return;
             const delayMs = Math.round(this.monotonicNow() - scheduledAt);
             if (delayMs >= BUSY_THRESHOLD_MS) {
                 this.persistAnomaly('main-thread-busy', state, { delayMs });
             }
         }, 0);
+        this.delayTimers.set(state, timer);
     }
 
     scheduleAnalysis(state) {
@@ -448,6 +462,13 @@ export class InteractionDiagnostics {
         this.analysisTimer = this.setTimer(() => {
             this.analysisTimer = null;
             if (!this.started || this.activePointer !== state) return;
+            // Rich DOM inspection is needed only for a suspected failed click,
+            // after the input handlers have finished, never on pointerdown.
+            if (!state.phases.clickBubble && !(state.pointerUpAction && state.phases.upBubble)
+                && (state.actionable || state.blocker
+                || (state.phases.downCapture && !state.phases.downBubble)
+                || (state.phases.upCapture && !state.phases.upBubble)
+                || state.phases.clickCapture)) this.inspectPointerState(state);
             try {
                 const target = state.targetElement;
                 if (target?.hasPointerCapture?.(state.pointerId)) state.pointerCaptureStuck = true;
@@ -455,6 +476,9 @@ export class InteractionDiagnostics {
                 // Pointer capture support differs across WebKit versions.
             }
             const kind = classifyInteractionAnomaly(state);
+            // Keep only plain metadata for later error correlation. Holding a
+            // detached message element can retain an entire previous chat DOM.
+            state.targetElement = null;
             if (kind) {
                 this.persistAnomaly(kind, state);
                 return;
@@ -490,6 +514,7 @@ export class InteractionDiagnostics {
         if (previous?.kind && previous.kind !== kind
             && Number.isFinite(previousAt) && this.now() - previousAt < 30000
             && (ANOMALY_PRIORITY[previous.kind] || 0) > (ANOMALY_PRIORITY[kind] || 0)) return;
+        this.inspectPointerState(state);
         const report = {
             schema: 1,
             recordedAt: new Date(this.now()).toISOString(),
@@ -502,6 +527,7 @@ export class InteractionDiagnostics {
                 hitStack: state.hitStack,
                 point: state.point,
                 actionable: state.actionable,
+                pointerUpAction: state.pointerUpAction,
                 blocker: state.blocker,
                 issues: state.issues,
                 phases: state.phases,
@@ -549,6 +575,8 @@ export class InteractionDiagnostics {
         this.listeners = [];
         if (this.analysisTimer !== null) this.clearTimer(this.analysisTimer);
         this.analysisTimer = null;
+        for (const timer of this.delayTimers.values()) this.clearTimer(timer);
+        this.delayTimers.clear();
         this.activePointer = null;
         this.lastUserState = null;
     }

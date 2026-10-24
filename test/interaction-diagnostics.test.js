@@ -60,6 +60,17 @@ test('a custom close icon with a completed click is not a propagation failure', 
     }), 'propagation-stopped');
 });
 
+test('native code-copy pointerup is not misreported for its intentional stopped click', () => {
+    assert.equal(classifyInteractionAnomaly({
+        actionable:true, pointerUpAction:true,
+        phases:{downCapture:true,downBubble:true,upCapture:true,upBubble:true,clickCapture:true},
+    }),null);
+    assert.equal(classifyInteractionAnomaly({
+        actionable:true, pointerUpAction:true,
+        phases:{downCapture:true,upCapture:true},
+    }),'propagation-stopped');
+});
+
 test('persists only a bounded diagnostic snapshot that survives a new instance', () => {
     const storage = memoryStorage();
     const diagnostics = new InteractionDiagnostics({ storage, now: () => 1000 });
@@ -113,4 +124,54 @@ test('resource failures do not become business exceptions and errors use the new
     assert.equal(diagnostics.getReport(), null);
     diagnostics.onError({ type: 'error', error: new TypeError(), filename: '/script.js' });
     assert.equal(diagnostics.getReport().pointer.target, 'button#send_but');
+});
+
+test('normal pointer capture and completed clicks perform no layout reads or hit tests', () => {
+    const timers = new Map();
+    let next = 0;
+    let reads = 0;
+    const diagnostics = new InteractionDiagnostics({
+        storage: memoryStorage(),
+        windowRef: { getComputedStyle() { reads++; return {}; } },
+        documentRef: {
+            elementsFromPoint() { reads++; return []; },
+            elementFromPoint() { reads++; return null; },
+            querySelectorAll() { reads++; return []; },
+        },
+        monotonicNow: () => 100,
+        setTimer(callback) { const id = ++next; timers.set(id, callback); return id; },
+        clearTimer(id) { timers.delete(id); },
+    });
+    diagnostics.started = true;
+    const target = { localName: 'button', classList: [], isConnected: true, closest: selector => selector.includes('button') ? target : null };
+    for (const type of ['pointerdown', 'pointerup', 'click']) {
+        for (const phase of ['capture', 'bubble']) diagnostics.onPointerEvent({ type, target, pointerId: 1, clientX: 1, clientY: 1 }, phase);
+    }
+    assert.equal(reads, 0);
+    assert.equal(diagnostics.delayTimers.size, 1, 'pointerup and click share one delay timer');
+    for (const callback of [...timers.values()]) callback();
+    assert.equal(reads, 0, 'successful clicks do not need a deferred style snapshot either');
+    assert.equal(diagnostics.activePointer.targetElement, null, 'release the message DOM after analysis');
+    diagnostics.stop();
+    assert.equal(diagnostics.delayTimers.size, 0);
+});
+
+test('a failed control receives a deferred snapshot and a cancelled pointer releases DOM references', () => {
+    let reads = 0;
+    const diagnostics = new InteractionDiagnostics({
+        windowRef: { getComputedStyle() { reads++; return {display:'block'}; } },
+        documentRef: { elementsFromPoint: () => [], querySelectorAll: () => [] },
+        monotonicNow: () => 1,
+    });
+    const target = { localName: 'button', closest: () => null, isConnected: true };
+    const state = diagnostics.createPointerState({target,clientX:1,clientY:1,pointerId:2});
+    assert.equal(reads, 0);
+    diagnostics.inspectPointerState(state);
+    assert.equal(reads, 1);
+    diagnostics.inspectPointerState(state);
+    assert.equal(reads, 1, 'capture rich details only once per gesture');
+    diagnostics.started = true;
+    diagnostics.activePointer = state;
+    diagnostics.onPointerEvent({type:'pointercancel',target,pointerId:2}, 'capture');
+    assert.equal(state.targetElement, null);
 });
