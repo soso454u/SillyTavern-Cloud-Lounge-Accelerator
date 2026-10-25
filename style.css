@@ -75,7 +75,8 @@
     margin: 0;
 }
 
-.cla-tabs .cla-tab.active {
+.cla-tabs .cla-tab.active,
+.cla-regex-organizer-toggle.active {
     border-color: color-mix(in srgb, #39c777 58%, var(--SmartThemeBorderColor, currentColor));
     background: color-mix(in srgb, #39c777 14%, transparent);
 }
@@ -133,11 +134,6 @@
     opacity: 0.82;
 }
 
-.cla-regex-organizer-toggle.active {
-    border-color: color-mix(in srgb, #39c777 58%, var(--SmartThemeBorderColor, currentColor));
-    background: color-mix(in srgb, #39c777 14%, transparent);
-}
-
 .cla-regex-organizer {
     display: grid;
     gap: 0.55rem;
@@ -188,17 +184,15 @@
     min-width: 0;
 }
 
-.cla-regex-drag-option {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    margin-left: auto;
-}
-
+.cla-regex-drag-option,
 .cla-regex-collapse-option {
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
+}
+
+.cla-regex-drag-option {
+    margin-left: auto;
 }
 
 #regex_container .regex-script-label[hidden],
@@ -405,6 +399,94 @@
     touch-action: none;
     -webkit-user-select: none;
     user-select: none;
+}
+
+#regex_container .cla-regex-group-handle {
+    flex: 0 0 1.6em;
+    align-self: center;
+    width: 1.6em;
+    min-width: 0 !important;
+    padding: 0.15em !important;
+    margin: 0 !important;
+    border: 0;
+    border-radius: 0.3em;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.cla-regex-drop-tray {
+    position: fixed;
+    z-index: 20000;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35em;
+    max-height: 35vh;
+    overflow: auto;
+    box-sizing: border-box;
+    padding: 0.6em;
+    border: 1px solid currentColor;
+    border-radius: 0.6em;
+    color: var(--SmartThemeBodyColor, #eee);
+    background: var(--SmartThemeBlurTintColor, #26272b);
+    box-shadow: 0 3px 16px #0004;
+    touch-action: none;
+}
+
+.cla-regex-drop-tray strong {
+    flex: 1 1 100%;
+    font-size: 0.85em;
+}
+
+.cla-regex-drop-tray button {
+    max-width: 100%;
+    min-width: 0;
+    padding: 0.35em 0.6em;
+    border: 1px solid currentColor;
+    border-radius: 0.4em;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    overflow-wrap: anywhere;
+}
+
+.cla-regex-drop-active {
+    outline: 2px solid var(--SmartThemeQuoteColor, #39c777) !important;
+    outline-offset: -2px;
+}
+
+.cla-regex-group-dragging {
+    opacity: 0.55;
+}
+
+.cla-regex-operation-status {
+    display: inline-block;
+    max-width: 100%;
+    margin: 0.25em;
+    color: inherit;
+    font-size: 0.85em;
+    overflow-wrap: anywhere;
+    min-width: 0;
+}
+
+/* Avoid repeatedly repainting a tall iMessage glass layer on touch devices.
+   Restore the theme when generation ends and normal scrolling has settled. */
+#chat:is(.cla-streaming-light, .cla-chat-scrolling) {
+    --im-bubble-filter: none;
+}
+
+#chat.cla-streaming-light .mes:last-child > .mes_block,
+#chat.cla-streaming-light .mes:last-child > .mes_block::before,
+#chat.cla-streaming-light .mes:last-child > .mes_block::after,
+#chat.cla-chat-scrolling .mes > .mes_block,
+#chat.cla-chat-scrolling .mes > .mes_block::before,
+#chat.cla-chat-scrolling .mes > .mes_block::after {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
 }
 
 .cla-performance {

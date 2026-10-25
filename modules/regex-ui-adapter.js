@@ -116,6 +116,12 @@ export class RegexUiAdapter {
         this.scriptApi = null;
         this.editorContext = null;
         this.saveQueue = Promise.resolve();
+        this.generation = 0;
+        this.busyEditors = new WeakSet();
+        this.deletePending = false;
+        this.pendingRestores = new Set();
+        this.groupDrag = null;
+        this.pointerFrame = null;
         this.observer = null;
         this.organizerButton = null;
         this.reorderButton = null;
@@ -135,6 +141,9 @@ export class RegexUiAdapter {
         this.onPointerDown = this.onPointerDown.bind(this);
         this.onPointerMove = this.onPointerMove.bind(this);
         this.onPointerEnd = this.onPointerEnd.bind(this);
+        this.onLostPointerCapture = event => {
+            if (this.groupDrag?.pointerId === event.pointerId || this.selectionGesture?.pointerId === event.pointerId) this.finishPointerGesture(false);
+        };
     }
 
     async start() {
@@ -151,6 +160,7 @@ export class RegexUiAdapter {
         }
         this.autoCollapseCollections = this.readAutoCollapseSetting();
         this.started = true;
+        this.generation += 1;
         document.addEventListener('click', this.onClick, true);
         document.addEventListener('input', this.onInput, true);
         document.addEventListener('change', this.onChange, true);
@@ -158,6 +168,7 @@ export class RegexUiAdapter {
         document.addEventListener('pointermove', this.onPointerMove, { capture: true, passive: false });
         document.addEventListener('pointerup', this.onPointerEnd, true);
         document.addEventListener('pointercancel', this.onPointerEnd, true);
+        document.addEventListener('lostpointercapture', this.onLostPointerCapture, true);
         this.observer = new MutationObserver(records => {
             if (recordsOnlyAffectChat(records)) return;
             if (document.querySelector('.regex_editor')) {
@@ -259,11 +270,10 @@ export class RegexUiAdapter {
         if (this.getScopeCollections(scope).has(name)) throw new Error('这个范围内已经有同名分组');
         const state = this.getCollectionState(scope);
         state.groups = [...state.groups.filter(group => group !== previous), name];
-        for (const script of this.engine.getScriptsByType(this.getType(scope)) || []) {
-            if (this.getAssignedCollection(scope, String(script.id), script.scriptName) === previous) {
-                state.assignments = { ...state.assignments, [String(script.id)]: name };
-            }
-        }
+        const renamed = (this.engine.getScriptsByType(this.getType(scope)) || [])
+            .filter(script => this.getAssignedCollection(scope, String(script.id), script.scriptName) === previous)
+            .map(script => [String(script.id), name]);
+        state.assignments = { ...state.assignments, ...Object.fromEntries(renamed) };
         // Preserve renamed assignments for rules temporarily absent from the list.
         for (const id of Object.keys(state.assignments)) {
             if (state.assignments[id] === previous) state.assignments[id] = name;
@@ -276,21 +286,30 @@ export class RegexUiAdapter {
     }
 
     moveSelectedToCollection(value) {
+        return this.moveRowsToCollection(this.getRows().filter(row => row.querySelector('.regex_bulk_checkbox')?.checked), value);
+    }
+
+    moveRowsToCollection(rows, value) {
         const name = value === UNGROUPED_COLLECTION ? value : normalizeRegexCollectionName(value);
         const plans = new Map();
-        for (const row of this.getRows().filter(row => row.querySelector('.regex_bulk_checkbox')?.checked)) {
+        for (const row of rows) {
             const scope = getTypeKey(row);
             if (!this.getCollectionContext(scope)) throw new Error('请先选择对应的预设或角色');
-            if (!(this.engine.getScriptsByType(this.getType(scope)) || []).some(script => String(script.id) === row.id)) {
+            if (!plans.has(scope)) plans.set(scope, {
+                state: this.getCollectionState(scope), ids: [],
+                knownIds: new Set((this.engine.getScriptsByType(this.getType(scope)) || []).map(script => String(script.id))),
+            });
+            const plan = plans.get(scope);
+            if (!plan.knownIds.has(row.id)) {
                 throw new Error('正则列表已变化，请重新选择后归组');
             }
-            const state = plans.get(scope) || this.getCollectionState(scope);
-            if (name !== UNGROUPED_COLLECTION && !state.groups.includes(name)) state.groups.push(name);
-            state.assignments = { ...state.assignments, [row.id]: name };
-            plans.set(scope, state);
+            plan.ids.push(row.id);
         }
         if (!plans.size) throw new Error('请先勾选要归组的正则');
-        for (const [scope, state] of plans) {
+        for (const [scope, {state, ids}] of plans) {
+            if (name !== UNGROUPED_COLLECTION && !state.groups.includes(name)) state.groups.push(name);
+            // One copy per scope, preserving even IDs named "__proto__" as data.
+            state.assignments = { ...state.assignments, ...Object.fromEntries(ids.map(id => [id, name])) };
             this.saveCollectionState(scope, state);
             this.openCollections.add(getRegexCollectionKey(scope, name));
         }
@@ -389,7 +408,7 @@ export class RegexUiAdapter {
                 <small>分组随酒馆设置保存；不修改正则名称、内容或执行顺序。</small>
             </details>
             <small data-cla-regex-feedback role="status" aria-live="polite"></small>
-            <small class="cla-regex-organizer-hint">合集就在下方正则列表中，点标题展开；点名称勾选，Shift 点击连选。需要拖拽排序时点“调整顺序”。</small>
+            <small class="cla-regex-organizer-hint">点分组标题展开，点名称勾选；开启划选后可连续滑过名称。拖动行内 ↪ 可归组，拖动已选行可批量归组；“调整顺序”中的 ☰ 仍调整执行顺序。</small>
         `;
         root.querySelector('[data-cla-regex-auto-collapse]').checked = this.autoCollapseCollections;
         root.addEventListener('input', event => {
@@ -398,10 +417,7 @@ export class RegexUiAdapter {
             }
         });
         root.addEventListener('change', event => {
-            if (event.target?.matches?.('[data-cla-regex-scope]')) {
-                this.applyOrganizerFilters();
-            }
-            if (event.target?.matches?.('[data-cla-regex-collection]')) {
+            if (event.target?.matches?.('[data-cla-regex-scope], [data-cla-regex-collection]')) {
                 this.applyOrganizerFilters();
             }
             if (event.target?.matches?.('[data-cla-regex-auto-collapse]')) {
@@ -473,6 +489,15 @@ export class RegexUiAdapter {
             row.dataset.claRegexScope = getTypeKey(row) || '';
             collections.set(collection, (collections.get(collection) || 0) + 1);
             row.classList.toggle('cla-regex-selected', Boolean(row.querySelector('.regex_bulk_checkbox')?.checked));
+            if (!row.querySelector('.cla-regex-group-handle') && label) {
+                const handle = document.createElement('button');
+                handle.type = 'button';
+                handle.className = 'cla-regex-group-handle';
+                handle.textContent = '↪';
+                handle.title = '拖到分组：已选行可一起归组';
+                handle.setAttribute('aria-label', '拖动正则归组');
+                label.before(handle);
+            }
         }
         const select = this.organizerRoot?.querySelector('[data-cla-regex-collection]');
         if (select) {
@@ -537,6 +562,8 @@ export class RegexUiAdapter {
                 const header = document.createElement('div');
                 header.className = 'cla-regex-collection-header';
                 header.dataset.claRegexFold = collection;
+                header.dataset.claRegexDropCollection = collection;
+                header.dataset.claRegexDropScope = scope;
                 header.style.order = String(order++);
                 const toggle = document.createElement('button');
                 toggle.type = 'button';
@@ -562,8 +589,7 @@ export class RegexUiAdapter {
                 selectAll.disabled = rows.length === 0;
                 selectAll.addEventListener('click', () => {
                     this.enableBulkEdit();
-                    rows.filter(row => this.rowMatchesOrganizer(row))
-                        .forEach(row => this.setRowSelected(row, true));
+                    this.setRowsSelected(rows.filter(row => this.rowMatchesOrganizer(row)), true);
                     this.updateOrganizerCount();
                 });
                 const rename = document.createElement('button');
@@ -695,12 +721,20 @@ export class RegexUiAdapter {
         bulkEdit.dispatchEvent(new Event('change', { bubbles: true }));
     }
 
-    setRowSelected(row, selected) {
+    setRowSelected(row, selected, { notify = true } = {}) {
         const checkbox = row?.querySelector?.('.regex_bulk_checkbox');
-        if (!checkbox || checkbox.checked === selected) return;
+        if (!checkbox || checkbox.checked === selected) return false;
         checkbox.checked = selected;
         row.classList?.toggle?.('cla-regex-selected', selected);
-        checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+        if (notify) checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+    }
+
+    setRowsSelected(rows, selected) {
+        let changed;
+        for (const row of rows) if (this.setRowSelected(row, selected, { notify: false })) changed = row;
+        // Native change handlers read the complete selection, not only this row.
+        changed?.querySelector('.regex_bulk_checkbox')?.dispatchEvent(new Event('change', { bubbles: true }));
     }
 
     selectRow(row, selected, { range = false } = {}) {
@@ -709,8 +743,7 @@ export class RegexUiAdapter {
         if (range && this.lastSelectedRow && visibleRows.includes(this.lastSelectedRow)) {
             const start = visibleRows.indexOf(this.lastSelectedRow);
             const end = visibleRows.indexOf(row);
-            visibleRows.slice(Math.min(start, end), Math.max(start, end) + 1)
-                .forEach(item => this.setRowSelected(item, selected));
+            this.setRowsSelected(visibleRows.slice(Math.min(start, end), Math.max(start, end) + 1), selected);
         } else {
             this.setRowSelected(row, selected);
         }
@@ -720,12 +753,12 @@ export class RegexUiAdapter {
 
     selectVisibleRows(selected) {
         this.enableBulkEdit();
-        this.getVisibleRows().forEach(row => this.setRowSelected(row, selected));
+        this.setRowsSelected(this.getVisibleRows(), selected);
         this.updateOrganizerCount();
     }
 
     clearRowSelection() {
-        this.getRows().forEach(row => this.setRowSelected(row, false));
+        this.setRowsSelected(this.getRows(), false);
         this.lastSelectedRow = null;
         this.updateOrganizerCount();
     }
@@ -750,9 +783,11 @@ export class RegexUiAdapter {
     }
 
     enqueue(task) {
-        this.saveQueue = this.saveQueue.then(task, task).catch(error => {
+        const generation = this.generation;
+        const run = () => this.started && generation === this.generation ? task() : undefined;
+        this.saveQueue = this.saveQueue.then(run, run).catch(error => {
             console.error('[Cloud Lounge Accelerator] 正则保存适配失败', error);
-            globalThis.toastr?.error?.('正则保存失败，已保留编辑窗口', '云酒馆加速器');
+            globalThis.toastr?.error?.(`操作未完成：${error.message || '请检查连接后重试'}`, '云酒馆加速器');
         });
         return this.saveQueue;
     }
@@ -780,7 +815,7 @@ export class RegexUiAdapter {
         if (editButton) {
             const label = editButton.closest('.regex-script-label[id]');
             const typeKey = getTypeKey(editButton);
-            this.editorContext = label && typeKey ? { id: label.id, typeKey, opened: false } : null;
+            this.editorContext = label && typeKey ? { id: label.id, typeKey, scopeKey: this.getCollectionContext(typeKey), opened: false } : null;
             return;
         }
 
@@ -796,7 +831,46 @@ export class RegexUiAdapter {
         if (saveButton && popup && editor && this.editorContext && popupInstance) {
             event.preventDefault();
             event.stopImmediatePropagation();
-            this.enqueue(() => this.saveExistingEditor({ popupInstance, editor, context: this.editorContext }));
+            if (this.busyEditors.has(editor)) return;
+            const context = { ...this.editorContext };
+            const previous = this.engine.getScriptsByType(this.getType(context.typeKey))?.find(script => String(script.id) === String(context.id));
+            if (!previous) return;
+            const draft = readEditorDraft(editor, context.id, previous);
+            if (!draft.scriptName) {
+                globalThis.toastr?.error?.('正则名称不能为空', '云酒馆加速器');
+                return;
+            }
+            const busyEditors = this.busyEditors;
+            busyEditors.add(editor);
+            const restore = this.markBusy(saveButton, '正在保存…');
+            this.enqueue(async () => {
+                try { await this.saveExistingEditor({ popupInstance, editor, context, draft }); }
+                finally { restore(); busyEditors.delete(editor); }
+            });
+            return;
+        }
+
+        const deleteButton = target.closest('.delete_regex, #bulk_delete_regex');
+        if (deleteButton && typeof this.popupApi.Popup?.show?.confirm === 'function') {
+            const labels = deleteButton.id === 'bulk_delete_regex'
+                ? this.getRows().filter(row => row.querySelector('.regex_bulk_checkbox')?.checked)
+                : [deleteButton.closest('.regex-script-label[id]')].filter(Boolean);
+            if (!labels.length || labels.some(label => !this.getToggleContext(label))) return;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            if (this.deletePending) return;
+            const pending = {};
+            this.deletePending = pending;
+            const contexts = new Map(labels.map(label => [getTypeKey(label), this.getCollectionContext(getTypeKey(label))]));
+            const restore = this.markBusy(deleteButton, '等待确认…');
+            this.enqueue(async () => {
+                try {
+                    const confirmed = await this.popupApi.Popup.show.confirm('删除正则', `确定删除选中的 ${labels.length} 条正则吗？`);
+                    if (!confirmed || !this.started) return;
+                    restore.update('正在删除…');
+                    await this.saveDelete(labels, contexts);
+                } finally { restore(); if (this.deletePending === pending) this.deletePending = false; }
+            });
             return;
         }
 
@@ -841,68 +915,281 @@ export class RegexUiAdapter {
     }
 
     onPointerDown(event) {
-        if (!this.started || !this.organizerOpen || event.button > 0 || event.isPrimary === false) return;
+        if (!this.started || event.button > 0 || event.isPrimary === false || this.groupDrag || this.selectionGesture) return;
+        const handle = event.target?.closest?.('.cla-regex-group-handle');
+        if (handle) {
+            const row = handle.closest('.regex-script-label');
+            if (!row || row.hidden) return;
+            const scope = getTypeKey(row);
+            const selected = Boolean(row.querySelector('.regex_bulk_checkbox')?.checked);
+            const rows = selected ? this.getRows().filter(item => getTypeKey(item) === scope && item.querySelector('.regex_bulk_checkbox')?.checked) : [row];
+            this.groupDrag = { pointerId: event.pointerId, source: handle, scope, context: this.getCollectionContext(scope), rows,
+                x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, active: false, target: null };
+            this.groupDrag.scroller = this.findGestureScroller(row);
+            handle.setPointerCapture?.(event.pointerId);
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return;
+        }
+        if (!this.organizerOpen) return;
         if (!this.organizerRoot?.querySelector('[data-cla-regex-drag]')?.checked) return;
         const row = event.target?.closest?.('.regex_script_name')?.closest?.('.regex-script-label');
         if (!row || row.hidden) return;
         event.preventDefault();
         const checkbox = row.querySelector('.regex_bulk_checkbox');
         const selected = !checkbox?.checked;
-        this.selectionGesture = { pointerId: event.pointerId, selected, rows: new Set([row]) };
+        const visible = this.getVisibleRows();
+        this.enableBulkEdit();
+        this.selectionGesture = { pointerId: event.pointerId, selected, rows: new Set([row]), visible,
+            lastIndex: visible.indexOf(row), source: event.target, x: event.clientX, y: event.clientY, changed: null,
+            scroller: this.findGestureScroller(row) };
         this.suppressRowClickUntil = performance.now() + 500;
-        this.selectRow(row, selected);
+        if (this.setRowSelected(row, selected, { notify: false })) this.selectionGesture.changed = row;
+        event.target.setPointerCapture?.(event.pointerId);
+        this.queuePointerFrame();
     }
 
     onPointerMove(event) {
-        const gesture = this.selectionGesture;
+        const gesture = this.groupDrag || this.selectionGesture;
         if (!gesture || event.pointerId !== gesture.pointerId) return;
+        gesture.x = event.clientX;
+        gesture.y = event.clientY;
         event.preventDefault();
-        const hit = document.elementFromPoint?.(event.clientX, event.clientY);
+        if (this.groupDrag) event.stopImmediatePropagation();
+        this.queuePointerFrame();
+    }
+
+    findGestureScroller(row) {
+        for (let node = row.parentElement; node && node !== document.body; node = node.parentElement) {
+            if (/(auto|scroll)/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight) return node;
+        }
+        return document.scrollingElement;
+    }
+
+    queuePointerFrame() {
+        if (this.pointerFrame !== null) return;
+        this.pointerFrame = requestAnimationFrame(() => {
+            this.pointerFrame = null;
+            const gesture = this.groupDrag || this.selectionGesture;
+            if (!gesture || !this.started) return;
+            this.paintPointerGesture();
+            const scroller = gesture.scroller;
+            if (scroller) {
+                const rect = scroller === document.scrollingElement ? { top: 0, bottom: innerHeight } : scroller.getBoundingClientRect();
+                const speed = gesture.y < rect.top + 40 ? -12 : gesture.y > rect.bottom - 40 ? 12 : 0;
+                if (speed) {
+                    const before = scroller.scrollTop;
+                    scroller.scrollTop += speed;
+                    if (before !== scroller.scrollTop) this.queuePointerFrame();
+                }
+            }
+        });
+    }
+
+    paintPointerGesture() {
+        if (this.groupDrag) {
+            const drag = this.groupDrag;
+            if (!drag.source.isConnected || drag.context !== this.getCollectionContext(drag.scope)) { this.finishPointerGesture(false); return; }
+            if (!drag.active && Math.hypot(drag.x - drag.startX, drag.y - drag.startY) < 5) return;
+            if (!drag.active) {
+                drag.active = true;
+                const tray = document.createElement('div');
+                tray.className = 'cla-regex-drop-tray';
+                const label = document.createElement('strong');
+                label.textContent = `拖动 ${drag.rows.length} 条正则，松手归入：`;
+                tray.append(label);
+                for (const name of new Set([UNGROUPED_COLLECTION, ...this.getScopeCollections(drag.scope)])) {
+                    const target = document.createElement('button');
+                    target.type = 'button';
+                    target.textContent = name;
+                    target.dataset.claRegexDropCollection = name;
+                    target.dataset.claRegexDropScope = drag.scope;
+                    tray.append(target);
+                }
+                const bounds = document.querySelector('#regex_container').getBoundingClientRect();
+                Object.assign(tray.style, { left: `${Math.max(8, bounds.left)}px`, top: '8px',
+                    width: `${Math.min(bounds.width, innerWidth - Math.max(8, bounds.left) - 8)}px` });
+                document.body.append(tray);
+                drag.tray = tray;
+                drag.rows.forEach(row => row.classList.add('cla-regex-group-dragging'));
+            }
+            const target = document.elementFromPoint(drag.x, drag.y)?.closest?.('[data-cla-regex-drop-collection]');
+            const valid = target?.dataset.claRegexDropScope === drag.scope ? target : null;
+            if (drag.target !== valid) {
+                drag.target?.classList.remove('cla-regex-drop-active');
+                drag.target = valid;
+                valid?.classList.add('cla-regex-drop-active');
+            }
+            return;
+        }
+        const gesture = this.selectionGesture;
+        if (!gesture) return;
+        const hit = document.elementFromPoint?.(gesture.x, gesture.y);
         const row = hit?.closest?.('.regex-script-label');
-        if (!row || row.hidden || gesture.rows.has(row) || !row.closest?.(REGEX_LIST_SELECTOR)) return;
-        gesture.rows.add(row);
-        this.setRowSelected(row, gesture.selected);
-        this.lastSelectedRow = row;
+        const index = row && !row.hidden ? gesture.visible.indexOf(row) : -1;
+        if (index >= 0) {
+            // Fill every crossed visual row even if pointer events skip items.
+            for (const member of gesture.visible.slice(Math.min(gesture.lastIndex, index), Math.max(gesture.lastIndex, index) + 1)) {
+                if (gesture.rows.has(member)) continue;
+                gesture.rows.add(member);
+                if (this.setRowSelected(member, gesture.selected, { notify: false })) gesture.changed = member;
+            }
+            gesture.lastIndex = index;
+            this.lastSelectedRow = row;
+        }
+        if (gesture.changed) {
+            gesture.changed.querySelector('.regex_bulk_checkbox')?.dispatchEvent(new Event('change', { bubbles: true }));
+            gesture.changed = null;
+        }
         this.updateOrganizerCount();
     }
 
     onPointerEnd(event) {
-        if (!this.selectionGesture || event.pointerId !== this.selectionGesture.pointerId) return;
+        const gesture = this.groupDrag || this.selectionGesture;
+        if (!gesture || event.pointerId !== gesture.pointerId) return;
+        gesture.x = event.clientX;
+        gesture.y = event.clientY;
+        if (event.type !== 'pointercancel') this.paintPointerGesture();
+        this.finishPointerGesture(event.type !== 'pointercancel');
+    }
+
+    finishPointerGesture(commit) {
+        if (this.pointerFrame !== null) cancelAnimationFrame(this.pointerFrame);
+        this.pointerFrame = null;
+        const drag = this.groupDrag;
+        const selection = this.selectionGesture;
+        this.groupDrag = null;
         this.selectionGesture = null;
+        const source = drag?.source || selection?.source;
+        const pointerId = drag?.pointerId ?? selection?.pointerId;
+        if (source?.hasPointerCapture?.(pointerId)) source.releasePointerCapture(pointerId);
+        if (selection?.changed) selection.changed.querySelector('.regex_bulk_checkbox')?.dispatchEvent(new Event('change', { bubbles: true }));
+        if (drag) {
+            const name = drag.target?.dataset.claRegexDropCollection;
+            drag.target?.classList.remove('cla-regex-drop-active');
+            drag.rows.forEach(row => row.classList.remove('cla-regex-group-dragging'));
+            drag.tray?.remove();
+            if (commit && drag.active && name) this.runCollectionAction(() => {
+                if (drag.context !== this.getCollectionContext(drag.scope)) throw new Error('预设或角色已切换，请重新拖动');
+                this.moveRowsToCollection(drag.rows, name);
+            });
+        }
         this.suppressRowClickUntil = performance.now() + 350;
     }
 
-    async persistScripts(type, scripts) {
-        await this.engine.saveScriptsByType(scripts, type);
-        if (type === this.engine.SCRIPT_TYPES.SCOPED) {
-            this.engine.allowScopedScripts?.(this.scriptApi.characters?.[this.scriptApi.this_chid]);
-        } else if (type === this.engine.SCRIPT_TYPES.PRESET) {
-            this.engine.allowPresetScripts?.(this.engine.getCurrentPresetAPI?.(), this.engine.getCurrentPresetName?.());
-        }
-        this.engine.RegexProvider?.instance?.clear?.();
-        this.scriptApi.saveSettingsDebounced?.();
+    markBusy(button, text) {
+        const old = { disabled: button.disabled, busy: button.getAttribute('aria-busy'), title: button.title };
+        const note = document.createElement('span');
+        note.className = 'cla-regex-operation-status';
+        note.setAttribute('role', 'status');
+        note.textContent = text;
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+        button.title = text;
+        button.after(note);
+        const restore = () => {
+            button.disabled = old.disabled;
+            if (old.busy === null) button.removeAttribute('aria-busy'); else button.setAttribute('aria-busy', old.busy);
+            button.title = old.title;
+            note.remove();
+            this.pendingRestores.delete(restore);
+        };
+        restore.update = value => { note.textContent = value; button.title = value; };
+        this.pendingRestores.add(restore);
+        return restore;
     }
 
-    async saveExistingEditor({ popupInstance, editor, context }) {
+    async persistScripts(type, scripts, { allowScope = true, scopeKey = undefined } = {}) {
+        const scope = Object.keys(this.engine.SCRIPT_TYPES).find(key => this.engine.SCRIPT_TYPES[key] === type);
+        if (scopeKey !== undefined && scopeKey !== this.getCollectionContext(scope)) throw new Error('预设或角色已切换，请重新操作');
+        const previous = [...(this.engine.getScriptsByType(type) || [])];
+        const engine = this.engine;
+        try { await engine.saveScriptsByType(scripts, type); }
+        catch (error) {
+            // Native preset saving updates memory before awaiting the server.
+            // Restore only our own array; never overwrite a newer external edit.
+            if (this.engine === engine && this.getCollectionContext(scope) === (scopeKey ?? this.getCollectionContext(scope))
+                && engine.getScriptsByType(type) === scripts) scripts.splice(0, scripts.length, ...previous);
+            throw error;
+        }
+        if (!this.started || this.engine !== engine || (scopeKey !== undefined && scopeKey !== this.getCollectionContext(scope))) return;
+        if (allowScope && type === this.engine.SCRIPT_TYPES.SCOPED) {
+            this.engine.allowScopedScripts?.(this.scriptApi.characters?.[this.scriptApi.this_chid]);
+        } else if (allowScope && type === this.engine.SCRIPT_TYPES.PRESET) {
+            this.engine.allowPresetScripts?.(this.engine.getCurrentPresetAPI?.(), this.engine.getCurrentPresetName?.());
+        }
+        // Native compilation is keyed by the fully expanded findRegex string.
+        // Changing a rule does not invalidate every other compiled pattern.
+        // GLOBAL already schedules its save. Scoped/preset writes are awaited
+        // by the official API; permission helpers save only when they change.
+    }
+
+    async saveExistingEditor({ popupInstance, editor, context, draft: capturedDraft = null }) {
         const type = this.getType(context.typeKey);
         const scripts = [...(this.engine.getScriptsByType?.(type) || [])];
         const index = scripts.findIndex(script => String(script.id) === String(context.id));
         if (type === undefined || index < 0) throw new Error('找不到正在编辑的正则');
-        const draft = readEditorDraft(editor, context.id, scripts[index]);
+        if (context.scopeKey !== undefined && context.scopeKey !== this.getCollectionContext(context.typeKey)) throw new Error('预设或角色已切换，请重新打开编辑器');
+        const draft = capturedDraft || readEditorDraft(editor, context.id, scripts[index]);
         if (!draft.scriptName) {
             globalThis.toastr?.error?.('正则名称不能为空', '云酒馆加速器');
             return;
         }
-        scripts[index] = draft;
-        await this.persistScripts(type, scripts);
+        const changed = JSON.stringify(scripts[index]) !== JSON.stringify(draft);
+        const previousScript = scripts[index];
+        if (changed) {
+            scripts[index] = draft;
+            await this.persistScripts(type, scripts, { scopeKey: context.scopeKey });
+            // Native row export/move handlers retain their original object.
+            Object.assign(previousScript, draft);
+        }
+        if (!this.started || (context.scopeKey !== undefined && context.scopeKey !== this.getCollectionContext(context.typeKey))) return;
         const labelName = document.getElementById(context.id)?.querySelector('.regex_script_name');
         if (labelName) {
             labelName.textContent = draft.scriptName;
             labelName.title = draft.scriptName;
         }
-        this.onSaved?.();
-        await popupInstance.completeCancelled();
-        this.editorContext = null;
+        const checkbox = document.getElementById(context.id)?.querySelector('.disable_regex');
+        if (checkbox) checkbox.checked = Boolean(draft.disabled);
+        if (capturedDraft && JSON.stringify(readEditorDraft(editor, context.id, draft)) !== JSON.stringify(draft)) {
+            if (changed) this.onSaved?.();
+            globalThis.toastr?.info?.('上一版已保存，窗口中还有新的修改，请再次保存', '云酒馆加速器');
+            return;
+        }
+        // Start native closing before scheduling expensive chat impact work.
+        const closing = popupInstance.completeCancelled();
+        if (this.editorContext?.id === context.id) this.editorContext = null;
+        if (changed) this.onSaved?.();
+        await closing;
+    }
+
+    async saveDelete(labels, contexts) {
+        const grouped = new Map();
+        for (const label of labels) {
+            const scope = getTypeKey(label);
+            if (!grouped.has(scope)) grouped.set(scope, []);
+            grouped.get(scope).push(label);
+        }
+        let completed = 0;
+        const failures = [];
+        for (const [scope, rows] of grouped) {
+            try {
+                if (!this.started || contexts.get(scope) !== this.getCollectionContext(scope)) throw new Error('预设或角色已切换');
+                const type = this.getType(scope);
+                const current = this.engine.getScriptsByType(type) || [];
+                const ids = new Set(rows.map(row => row.id));
+                const next = current.filter(script => !ids.has(String(script.id)));
+                if (next.length === current.length) continue;
+                await this.persistScripts(type, next, { allowScope: false, scopeKey: contexts.get(scope) });
+                completed += current.length - next.length;
+                if (this.started && contexts.get(scope) === this.getCollectionContext(scope)) rows.forEach(row => row.remove());
+            } catch (error) { failures.push(error.message); }
+        }
+        if (completed && this.started) {
+            this.scheduleOrganizerRefresh();
+            this.onSaved?.();
+        }
+        if (failures.length) throw new Error(`已删除 ${completed} 条；未完成的规则已保留：${failures.join('；')}`);
     }
 
     async saveToggle(element, disabled) {
@@ -948,6 +1235,11 @@ export class RegexUiAdapter {
     stop() {
         if (!this.started) return;
         this.started = false;
+        this.generation += 1;
+        this.finishPointerGesture(false);
+        for (const restore of [...this.pendingRestores]) restore();
+        this.busyEditors = new WeakSet();
+        this.deletePending = false;
         document.removeEventListener('click', this.onClick, true);
         document.removeEventListener('input', this.onInput, true);
         document.removeEventListener('change', this.onChange, true);
@@ -955,11 +1247,13 @@ export class RegexUiAdapter {
         document.removeEventListener('pointermove', this.onPointerMove, true);
         document.removeEventListener('pointerup', this.onPointerEnd, true);
         document.removeEventListener('pointercancel', this.onPointerEnd, true);
+        document.removeEventListener('lostpointercapture', this.onLostPointerCapture, true);
         this.observer?.disconnect();
         this.observer = null;
         clearTimeout(this.organizerTimer);
         this.organizerTimer = null;
         this.getRows().forEach(row => {
+            row.querySelector('.cla-regex-group-handle')?.remove();
             row.hidden = false;
             row.classList?.remove?.('cla-regex-selected');
             if (row.dataset) {

@@ -296,6 +296,7 @@ async function copyDiagnostics() {
         },
         startup: startupOptimizer.getDiagnosticReport(),
         interaction: interactionOptimizer.getDiagnosticReport(),
+        streaming: getRuntime().streamingRender?.getReport?.() || null,
     };
     await copyDiagnosticText(JSON.stringify(report, null, 2));
 }

@@ -125,6 +125,20 @@ test('invalid selections or missing scope contexts cannot partially save a group
     assert.equal(f.saves,0);
 });
 
+test('large group moves read each native scope once and preserve every rule definition and order', () => {
+    const f = collectionFixture();
+    f.scripts.GLOBAL = Array.from({length:1000}, (_,i) => ({id:String(i), scriptName:'规则 '+i, findRegex:'/x/g',replaceString:'y'}));
+    const original = structuredClone(f.scripts.GLOBAL);
+    let reads = 0;
+    const getScripts = f.adapter.engine.getScriptsByType;
+    f.adapter.engine.getScriptsByType = scope => { reads++; return getScripts(scope); };
+    f.adapter.moveRowsToCollection(f.scripts.GLOBAL.map(script=>f.row('GLOBAL',script.id)), '整理');
+    assert.equal(reads,1);
+    assert.equal(f.saves,1);
+    assert.equal(Object.keys(f.adapter.getCollectionState('GLOBAL').assignments).length,1000);
+    assert.deepEqual(f.scripts.GLOBAL,original);
+});
+
 test('untrusted rule IDs are stored as own data keys and never change object prototypes', () => {
     const f = collectionFixture();
     f.scripts.GLOBAL[0].id='__proto__';

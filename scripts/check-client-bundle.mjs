@@ -6,10 +6,12 @@ import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 
 const { chromium } = createRequire(import.meta.url)('playwright');
+const themeStyles = process.env.CLA_REGEX_THEME_CSS ? await readFile(process.env.CLA_REGEX_THEME_CSS,'utf8') : '';
 const pluginRoot = '/scripts/extensions/third-party/cloud-lounge-accelerator/';
 const assets = new Map(await Promise.all((await readdir(new URL('../dist/', import.meta.url))).map(async name => [
     `${pluginRoot}dist/${name}`, await readFile(new URL(`../dist/${name}`, import.meta.url), 'utf8'),
 ])));
+assets.set('/style.css',await readFile(new URL('../style.css',import.meta.url),'utf8'));
 assets.set('/script.js', `
     export const chat = [];
     export const event_types = {SETTINGS_LOADED:'settings', APP_INITIALIZED:'initialized', APP_READY:'ready', CHAT_CHANGED:'chat',
@@ -39,7 +41,7 @@ assets.set('/script.js', `
     }
     export function beginStream() {
         chat[0]={mes:''};
-        document.querySelector('#chat').innerHTML='<div class="mes" mesid="0"><div class="mes_text"></div></div>';
+        document.querySelector('#chat').innerHTML='<div class="mes" mesid="0"><div class="mes_block"><div class="mes_text"></div></div></div>';
         streamingProcessor=new FixtureProcessor();
         return streamingProcessor;
     }
@@ -59,7 +61,7 @@ assets.set('/scripts/extensions/regex/engine.js', `
 let deferredDelay = 0;
 const server = createServer((request, response) => {
     if (assets.has(request.url)) {
-        response.setHeader('Content-Type', 'text/javascript');
+        response.setHeader('Content-Type', request.url.endsWith('.css')?'text/css':'text/javascript');
         const send = () => response.end(assets.get(request.url));
         if (request.url.includes('/dist/deferred-runtime-') && deferredDelay) setTimeout(send, deferredDelay);
         else send();
@@ -68,7 +70,7 @@ const server = createServer((request, response) => {
         response.end('{"ok":false}');
     } else if (request.url === '/') {
         response.setHeader('Content-Type', 'text/html');
-        response.end('<!doctype html><html><body><div id="chat"></div><div id="extensions_settings2"></div><div id="regex_container"><div class="regex_settings"><div class="inline-drawer-content"><div class="flex-container"></div><div id="saved_regex_scripts"></div><div id="saved_preset_scripts"></div><div id="saved_scoped_scripts"></div></div></div></div></body></html>');
+        response.end('<!doctype html><html><head><link rel="stylesheet" href="/style.css"><style>:root{--im-bubble-filter:blur(8px)}#chat .mes_block::before{content:"";backdrop-filter:var(--im-bubble-filter)}</style></head><body><div id="chat"></div><div id="extensions_settings2"></div><div id="regex_container"><div class="regex_settings"><div class="inline-drawer-content"><div class="flex-container"></div><div id="saved_regex_scripts"></div><div id="saved_preset_scripts"></div><div id="saved_scoped_scripts"></div></div></div></div></body></html>');
     } else {
         response.writeHead(404);
         response.end('missing fixture');
@@ -111,6 +113,29 @@ try {
         await page.waitForFunction(() => document.querySelector('.cla-regex-organizer-toggle'));
         assert.equal(requests.filter(url => url.includes('/dist/')).length, 3);
         assert.equal(await page.evaluate(() => window.settingsSaves || 0), 0);
+        const idleScroll = await page.evaluate(async () => {
+            const native = await import('/script.js');
+            const chat = document.querySelector('#chat');
+            chat.style.cssText = 'height:200px;overflow:auto';
+            chat.innerHTML = '<div class="mes"><div class="mes_block"><div class="mes_text" style="height:3000px">Existing unchanged message</div></div></div>';
+            const bubble = chat.querySelector('.mes_block');
+            const height = bubble.getBoundingClientRect().height;
+            chat.scrollTop = 600;
+            chat.dispatchEvent(new Event('scroll'));
+            const during = getComputedStyle(bubble,'::before').backdropFilter;
+            const duringHeight = bubble.getBoundingClientRect().height;
+            await new Promise(resolve => setTimeout(resolve, 260));
+            return {generating:native.isGenerating(), during, after:getComputedStyle(bubble,'::before').backdropFilter,
+                height, duringHeight, afterHeight:bubble.getBoundingClientRect().height,
+                top:chat.scrollTop,text:bubble.textContent};
+        });
+        assert.equal(idleScroll.generating,false,'scroll relief works without a generation');
+        assert.equal(idleScroll.during,options.hasTouch?'none':'blur(8px)');
+        assert.equal(idleScroll.after,'blur(8px)');
+        assert.equal(idleScroll.height,idleScroll.duringHeight);
+        assert.equal(idleScroll.height,idleScroll.afterHeight);
+        assert.equal(idleScroll.top,600,'relief never moves the reading position');
+        assert.equal(idleScroll.text,'Existing unchanged message');
         const streaming = await page.evaluate(async () => {
             const native = await import('/script.js');
             const processor = native.beginStream();
@@ -128,16 +153,20 @@ try {
             }
             await processor.finalizeIntermediaryMessage(0, 'Complete final text');
             const state = {tokens,renders:processor.renders.length,last:processor.renders.at(-1),message:native.chat[0].mes,
-                text:document.querySelector('#chat .mes_text').textContent,hooked:processor.onProgressStreaming!==originalProgress};
+                text:document.querySelector('#chat .mes_text').textContent,hooked:processor.onProgressStreaming!==originalProgress,
+                glassDuring:getComputedStyle(document.querySelector('#chat .mes_block'),'::before').backdropFilter};
             processor.running = false;
             await native.eventSource.emit('end');
             state.restored = processor.onProgressStreaming === originalProgress;
+            state.glassAfter=getComputedStyle(document.querySelector('#chat .mes_block'),'::before').backdropFilter;
             return state;
         });
         assert.equal(streaming.tokens,80,'all token events still reach other subscribers');
         assert.ok(streaming.renders>1 && streaming.renders<30,'native full-message previews are coalesced');
         assert.equal(streaming.hooked,true,'production runtime hooks the live native binding');
         assert.equal(streaming.restored,true);
+        assert.equal(streaming.glassDuring,options.hasTouch?'none':'blur(8px)');
+        assert.equal(streaming.glassAfter,'blur(8px)','original glass style is restored at generation end');
         assert.deepEqual(streaming.last,{id:0,text:'Complete final text',final:true});
         assert.equal(streaming.message,streaming.text);
         assert.equal(streaming.message,'Complete final text');
@@ -145,6 +174,32 @@ try {
             const {power_user}=await import('/scripts/power-user.js');
             return {fps:power_user.streaming_fps,fade:power_user.stream_fade_in,saves:window.settingsSaves||0};
         }),{fps:30,fade:true,saves:0},'render budgets do not mutate or save native preferences');
+        if (themeStyles && options.hasTouch) {
+            const theme = await page.addStyleTag({content:themeStyles});
+            const styledScroll = await page.evaluate(async () => {
+                const chat = document.querySelector('#chat'), bubble = chat.querySelector('.mes_block');
+                const snapshot = () => {
+                    const style = getComputedStyle(bubble,'::before'), bounds = bubble.getBoundingClientRect();
+                    return {filter:style.backdropFilter,mask:style.maskImage,background:style.backgroundColor,
+                        width:bounds.width,height:bounds.height,top:chat.scrollTop,text:bubble.textContent};
+                };
+                chat.style.setProperty('height','200px','important');
+                chat.style.setProperty('overflow','auto','important');
+                bubble.querySelector('.mes_text').style.height='3000px';
+                chat.scrollTop=600;
+                await new Promise(resolve=>setTimeout(resolve,260));
+                const before=snapshot();
+                chat.dispatchEvent(new Event('scroll'));
+                const during=snapshot();
+                await new Promise(resolve=>setTimeout(resolve,260));
+                return {before,during,after:snapshot()};
+            });
+            assert.match(styledScroll.before.filter,/blur\(/,'exercise actual theme glass, including its stronger selectors');
+            assert.equal(styledScroll.during.filter,'none');
+            assert.deepEqual({...styledScroll.during,filter:styledScroll.before.filter},styledScroll.before,'theme mask, fill, geometry, text and reading position stay unchanged');
+            assert.deepEqual(styledScroll.after,styledScroll.before,'restore every sampled theme property');
+            await theme.evaluate(element=>element.remove());
+        }
         await page.locator('.cla-regex-organizer-toggle').click();
         await page.locator('.cla-regex-group-manager summary').click();
         await page.locator('[data-cla-regex-new-name]').fill('发布包分组');
@@ -185,7 +240,7 @@ try {
     await page.waitForTimeout(450);
     assert.equal(await page.locator('#cloud-lounge-accelerator-settings').count(), 0);
     assert.deepEqual(errors, []);
-    console.log('PASS production bundle on desktop/mobile: startup budget, streaming/finalization, native group catalog persistence, preferences, stop/disable and delayed startup');
+    console.log('PASS production bundle on desktop/mobile: startup budget, ordinary scroll/theme restoration, unchanged geometry/text/position, streaming/finalization, native group persistence, preferences, stop/disable and delayed startup');
 } finally {
     await browser?.close();
     await new Promise(resolve => server.close(resolve));
