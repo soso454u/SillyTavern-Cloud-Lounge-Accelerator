@@ -146,6 +146,12 @@
     border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 16%, transparent);
     border-radius: 0.65rem;
     background: color-mix(in srgb, var(--SmartThemeBodyColor) 5%, transparent);
+    container-type: inline-size;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    color: inherit;
 }
 
 .cla-regex-organizer[hidden] {
@@ -173,7 +179,7 @@
 
 .cla-regex-filters {
     display: grid;
-    grid-template-columns: minmax(8rem, 1.5fr) minmax(7rem, 1fr) minmax(6rem, 0.8fr);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
     gap: 0.4rem;
 }
 
@@ -210,6 +216,10 @@
     order: var(--cla-regex-order);
     margin-left: 0.65rem;
     border-left: 2px solid color-mix(in srgb, var(--SmartThemeBodyColor) 20%, transparent);
+    width: calc(100% - 0.65rem) !important;
+    max-width: calc(100% - 0.65rem) !important;
+    min-width: 0 !important;
+    box-sizing: border-box;
 }
 
 #regex_container .cla-regex-grouped-row .drag-handle {
@@ -225,11 +235,15 @@
     border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 13%, transparent);
     border-radius: 0.5rem;
     background: color-mix(in srgb, var(--SmartThemeBodyColor) 3%, transparent);
+    flex-wrap: wrap;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
 }
 
 .cla-regex-collection-toggle {
     display: flex;
-    flex: 1;
+    flex: 1 1 9rem;
     min-width: 0;
     align-items: center;
     gap: 0.45rem;
@@ -251,6 +265,7 @@
 }
 
 .cla-regex-collection-name {
+    min-width: 0;
     overflow-wrap: anywhere;
 }
 
@@ -261,10 +276,119 @@
 }
 
 .cla-regex-collection-select {
-    flex-shrink: 0;
+    flex-shrink: 1;
     margin: 0;
-    white-space: nowrap;
+    white-space: normal;
     font-size: 0.85em;
+}
+
+/* Use the actual sidebar width, including desktop columns and large theme fonts. */
+#regex_container :is(.regex_settings, .cla-regex-grouped-list, .cla-regex-organizer > *) {
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+#regex_container .cla-regex-organizer :is(input:not([type="checkbox"]), select),
+#regex_container .cla-regex-rename-form input {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    box-sizing: border-box !important;
+    font: inherit;
+}
+
+#regex_container .cla-regex-organizer :is(.menu_button, .checkbox_label),
+#regex_container .cla-regex-collection-header .menu_button {
+    min-width: 0 !important;
+    max-width: 100%;
+    margin: 0 !important;
+    box-sizing: border-box;
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+    font-family: inherit;
+    color: inherit;
+}
+
+#regex_container .cla-regex-organizer .checkbox_label {
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    flex: 1 1 12rem;
+}
+
+#regex_container .cla-regex-organizer input[type="checkbox"] {
+    flex: 0 0 auto;
+    width: 1em !important;
+    min-width: 1em !important;
+    max-width: 1em !important;
+    margin: 0 !important;
+}
+
+#regex_container .cla-regex-group-manager {
+    min-width: 0;
+    border-top: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor, currentColor) 15%, transparent);
+    padding-top: 0.55em;
+}
+
+.cla-regex-group-manager summary {
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.cla-regex-group-create,
+.cla-regex-group-move {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: center;
+    gap: 0.45em;
+    margin: 0.65em 0;
+}
+
+.cla-regex-group-create input {
+    grid-column: 1 / -1;
+}
+
+.cla-regex-rename-form {
+    display: flex;
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    gap: 0.4em;
+    min-width: 0;
+}
+
+#regex_container .cla-regex-rename-form input {
+    flex: 1 1 10rem;
+    width: 0 !important;
+}
+
+#regex_container .cla-regex-collection-header [hidden] {
+    display: none !important;
+}
+
+#regex_container .regex-script-label .regex_script_name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cla-regex-organizer-hint,
+.cla-regex-group-manager small,
+[data-cla-regex-feedback] {
+    overflow-wrap: anywhere;
+}
+
+[data-cla-regex-feedback]:empty {
+    display: none;
+}
+
+@container (max-width: 32rem) {
+    .cla-regex-filters,
+    .cla-regex-group-move {
+        grid-template-columns: minmax(0, 1fr);
+    }
 }
 
 #regex_container .regex-script-label.cla-regex-selected {

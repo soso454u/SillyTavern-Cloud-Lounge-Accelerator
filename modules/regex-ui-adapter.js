@@ -8,6 +8,14 @@ const REGEX_LIST_SELECTOR = '#saved_regex_scripts, #saved_scoped_scripts, #saved
 const REGEX_ROW_SELECTOR = `${REGEX_LIST_SELECTOR.split(', ').map(selector => `${selector} .regex-script-label`).join(', ')}`;
 const UNGROUPED_COLLECTION = '未分类';
 const AUTO_COLLAPSE_STORAGE_KEY = 'cloud-lounge-accelerator:regex-auto-collapse';
+const COLLECTION_SETTINGS_KEY = 'cloud_lounge_accelerator_regex_collections';
+
+export function normalizeRegexCollectionName(value) {
+    const name = String(value || '').trim();
+    if (!name || name.length > 60 || /[\u0000-\u001f\u007f]/u.test(name)) throw new Error('分组名称请输入 1–60 个字符');
+    if (name === UNGROUPED_COLLECTION || name === 'all') throw new Error('这个名称已被系统使用，请换一个分组名称');
+    return name;
+}
 
 export function getRegexCollectionName(scriptName) {
     const name = String(scriptName || '').trim();
@@ -99,8 +107,9 @@ function readEditorDraft(editor, id, previous = {}) {
 }
 
 export class RegexUiAdapter {
-    constructor({ onSaved = null } = {}) {
+    constructor({ onSaved = null, extensionSettings = {} } = {}) {
         this.onSaved = onSaved;
+        this.extensionSettings = extensionSettings;
         this.started = false;
         this.engine = null;
         this.popupApi = null;
@@ -187,6 +196,126 @@ export class RegexUiAdapter {
         }
     }
 
+    getCollectionContext(scope) {
+        if (scope === 'GLOBAL') return JSON.stringify([scope]);
+        if (scope === 'SCOPED') {
+            const avatar = this.scriptApi?.characters?.[this.scriptApi.this_chid]?.avatar;
+            return avatar ? JSON.stringify([scope, avatar]) : null;
+        }
+        if (scope === 'PRESET') {
+            const api = this.engine?.getCurrentPresetAPI?.();
+            const name = this.engine?.getCurrentPresetName?.();
+            return api && name ? JSON.stringify([scope, api, name]) : null;
+        }
+        return null;
+    }
+
+    getCollectionState(scope) {
+        const key = this.getCollectionContext(scope);
+        const state = key && this.extensionSettings[COLLECTION_SETTINGS_KEY]?.[key];
+        return {
+            groups: Array.isArray(state?.groups) ? state.groups.filter(name => typeof name === 'string') : [],
+            assignments: state?.assignments && typeof state.assignments === 'object' ? { ...state.assignments } : {},
+        };
+    }
+
+    saveCollectionState(scope, state) {
+        const key = this.getCollectionContext(scope);
+        if (!key) throw new Error('请先选择对应的预设或角色');
+        this.extensionSettings[COLLECTION_SETTINGS_KEY] = {
+            ...this.extensionSettings[COLLECTION_SETTINGS_KEY], [key]: state,
+        };
+    }
+
+    getAssignedCollection(scope, id, scriptName) {
+        const key = this.getCollectionContext(scope);
+        const assignments = this.extensionSettings[COLLECTION_SETTINGS_KEY]?.[key]?.assignments || {};
+        return Object.hasOwn(assignments, id) && typeof assignments[id] === 'string'
+            ? assignments[id] : getRegexCollectionName(scriptName);
+    }
+
+    getScopeCollections(scope) {
+        const names = new Set(this.getCollectionState(scope).groups);
+        for (const script of this.engine?.getScriptsByType?.(this.getType(scope)) || []) {
+            names.add(this.getAssignedCollection(scope, String(script.id), script.scriptName));
+        }
+        return names;
+    }
+
+    createCollection(scope, value) {
+        const name = normalizeRegexCollectionName(value);
+        if (!this.getCollectionContext(scope)) throw new Error('请先选择对应的预设或角色');
+        if (this.getScopeCollections(scope).has(name)) throw new Error('这个范围内已经有同名分组');
+        const state = this.getCollectionState(scope);
+        state.groups.push(name);
+        this.saveCollectionState(scope, state);
+        this.finishCollectionChange(scope, name);
+    }
+
+    renameCollection(scope, previous, value) {
+        const name = normalizeRegexCollectionName(value);
+        if (name === previous) return;
+        if (!this.getCollectionContext(scope)) throw new Error('请先选择对应的预设或角色');
+        if (this.getScopeCollections(scope).has(name)) throw new Error('这个范围内已经有同名分组');
+        const state = this.getCollectionState(scope);
+        state.groups = [...state.groups.filter(group => group !== previous), name];
+        for (const script of this.engine.getScriptsByType(this.getType(scope)) || []) {
+            if (this.getAssignedCollection(scope, String(script.id), script.scriptName) === previous) {
+                state.assignments = { ...state.assignments, [String(script.id)]: name };
+            }
+        }
+        // Preserve renamed assignments for rules temporarily absent from the list.
+        for (const id of Object.keys(state.assignments)) {
+            if (state.assignments[id] === previous) state.assignments[id] = name;
+        }
+        this.saveCollectionState(scope, state);
+        this.openCollections.delete(getRegexCollectionKey(scope, previous));
+        const filter = this.organizerRoot?.querySelector('[data-cla-regex-collection]');
+        if (filter?.value === previous) filter.value = 'all';
+        this.finishCollectionChange(scope, name);
+    }
+
+    moveSelectedToCollection(value) {
+        const name = value === UNGROUPED_COLLECTION ? value : normalizeRegexCollectionName(value);
+        const plans = new Map();
+        for (const row of this.getRows().filter(row => row.querySelector('.regex_bulk_checkbox')?.checked)) {
+            const scope = getTypeKey(row);
+            if (!this.getCollectionContext(scope)) throw new Error('请先选择对应的预设或角色');
+            if (!(this.engine.getScriptsByType(this.getType(scope)) || []).some(script => String(script.id) === row.id)) {
+                throw new Error('正则列表已变化，请重新选择后归组');
+            }
+            const state = plans.get(scope) || this.getCollectionState(scope);
+            if (name !== UNGROUPED_COLLECTION && !state.groups.includes(name)) state.groups.push(name);
+            state.assignments = { ...state.assignments, [row.id]: name };
+            plans.set(scope, state);
+        }
+        if (!plans.size) throw new Error('请先勾选要归组的正则');
+        for (const [scope, state] of plans) {
+            this.saveCollectionState(scope, state);
+            this.openCollections.add(getRegexCollectionKey(scope, name));
+        }
+        this.finishCollectionChange();
+    }
+
+    finishCollectionChange(scope, name) {
+        if (scope && name) this.openCollections.add(getRegexCollectionKey(scope, name));
+        this.scriptApi?.saveSettingsDebounced?.();
+        this.refreshOrganizerRows();
+    }
+
+    runCollectionAction(action) {
+        const feedback = this.organizerRoot?.querySelector('[data-cla-regex-feedback]');
+        try {
+            action();
+            if (feedback) feedback.textContent = '分组已保存';
+            return true;
+        } catch (error) {
+            if (feedback) feedback.textContent = error.message;
+            globalThis.toastr?.error?.(error.message, '正则分组');
+            return false;
+        }
+    }
+
     createOrganizerButton() {
         const button = document.createElement('button');
         button.type = 'button';
@@ -244,6 +373,22 @@ export class RegexUiAdapter {
                     <span>按住名称划选多条</span>
                 </label>
             </div>
+            <details class="cla-regex-group-manager">
+                <summary>管理分组</summary>
+                <div class="cla-regex-group-create">
+                    <input class="text_pole" data-cla-regex-new-name maxlength="60" placeholder="新分组名称" aria-label="新分组名称" />
+                    <select class="text_pole" data-cla-regex-new-scope aria-label="新分组范围">
+                        <option value="GLOBAL">全局</option><option value="PRESET">当前预设</option><option value="SCOPED">当前角色</option>
+                    </select>
+                    <button type="button" class="menu_button" data-cla-regex-action="create-collection">新建分组</button>
+                </div>
+                <div class="cla-regex-group-move">
+                    <select class="text_pole" data-cla-regex-move-target aria-label="移入的分组"></select>
+                    <button type="button" class="menu_button" data-cla-regex-action="move-selected">将已选正则移入分组</button>
+                </div>
+                <small>分组随酒馆设置保存；不修改正则名称、内容或执行顺序。</small>
+            </details>
+            <small data-cla-regex-feedback role="status" aria-live="polite"></small>
             <small class="cla-regex-organizer-hint">合集就在下方正则列表中，点标题展开；点名称勾选，Shift 点击连选。需要拖拽排序时点“调整顺序”。</small>
         `;
         root.querySelector('[data-cla-regex-auto-collapse]').checked = this.autoCollapseCollections;
@@ -274,6 +419,11 @@ export class RegexUiAdapter {
             const action = event.target?.closest?.('[data-cla-regex-action]')?.dataset?.claRegexAction;
             if (action === 'select-visible') this.selectVisibleRows(true);
             if (action === 'clear') this.clearRowSelection();
+            if (action === 'create-collection') {
+                const input = root.querySelector('[data-cla-regex-new-name]');
+                if (this.runCollectionAction(() => this.createCollection(root.querySelector('[data-cla-regex-new-scope]').value, input.value))) input.value = '';
+            }
+            if (action === 'move-selected') this.runCollectionAction(() => this.moveSelectedToCollection(root.querySelector('[data-cla-regex-move-target]').value));
         });
         return root;
     }
@@ -311,9 +461,14 @@ export class RegexUiAdapter {
     refreshOrganizerRows() {
         const rows = this.getRows();
         const collections = new Map();
+        for (const scope of Object.values(TYPE_BY_LIST_ID)) {
+            for (const name of this.getCollectionState(scope).groups) collections.set(name, 0);
+        }
         for (const row of rows) {
-            const name = String(row.querySelector('.regex_script_name')?.textContent || '').trim();
-            const collection = getRegexCollectionName(name);
+            const label = row.querySelector('.regex_script_name');
+            const name = String(label?.textContent || '').trim();
+            if (label) label.title = name;
+            const collection = this.getAssignedCollection(getTypeKey(row), row.id, name);
             row.dataset.claRegexCollection = collection;
             row.dataset.claRegexScope = getTypeKey(row) || '';
             collections.set(collection, (collections.get(collection) || 0) + 1);
@@ -335,6 +490,18 @@ export class RegexUiAdapter {
             });
             select.value = [...select.options].some(option => option.value === previous) ? previous : 'all';
         }
+        const moveTarget = this.organizerRoot?.querySelector('[data-cla-regex-move-target]');
+        if (moveTarget) {
+            const previous = moveTarget.value;
+            moveTarget.replaceChildren();
+            for (const name of new Set([UNGROUPED_COLLECTION, ...collections.keys()])) {
+                const option = document.createElement('option');
+                option.value = name;
+                option.textContent = name === UNGROUPED_COLLECTION ? '移至未分类' : name;
+                moveTarget.append(option);
+            }
+            if ([...moveTarget.options].some(option => option.value === previous)) moveTarget.value = previous;
+        }
         this.refreshCollectionFolds();
         this.applyOrganizerFilters();
     }
@@ -352,12 +519,16 @@ export class RegexUiAdapter {
         let order = 0;
         for (const list of document.querySelectorAll(REGEX_LIST_SELECTOR)) {
             const collections = new Map();
+            const scope = TYPE_BY_LIST_ID[list.id];
             // Leave rows as direct children in their original DOM order: native
             // saving reads list.children. Only the flex display order is grouped.
             for (const row of [...list.children].filter(node => node.matches('.regex-script-label'))) {
                 const collection = row.dataset.claRegexCollection;
                 if (!collections.has(collection)) collections.set(collection, []);
                 collections.get(collection).push(row);
+            }
+            for (const name of this.getCollectionState(scope).groups) {
+                if (!collections.has(name)) collections.set(name, []);
             }
             if (!collections.size) continue;
             list.classList.add('cla-regex-grouped-list');
@@ -388,21 +559,63 @@ export class RegexUiAdapter {
                 selectAll.type = 'button';
                 selectAll.className = 'menu_button cla-regex-collection-select';
                 selectAll.textContent = '选择此合集';
+                selectAll.disabled = rows.length === 0;
                 selectAll.addEventListener('click', () => {
                     this.enableBulkEdit();
                     rows.filter(row => this.rowMatchesOrganizer(row))
                         .forEach(row => this.setRowSelected(row, true));
                     this.updateOrganizerCount();
                 });
-                header.append(toggle, selectAll);
+                const rename = document.createElement('button');
+                rename.type = 'button';
+                rename.className = 'menu_button cla-regex-collection-rename';
+                rename.textContent = '改名';
+                rename.title = `重命名${collection}`;
+                const form = document.createElement('form');
+                form.className = 'cla-regex-rename-form';
+                form.hidden = true;
+                const input = document.createElement('input');
+                input.className = 'text_pole';
+                input.value = collection;
+                input.maxLength = 60;
+                input.setAttribute('aria-label', '分组新名称');
+                const submit = document.createElement('button');
+                submit.type = 'submit';
+                submit.className = 'menu_button';
+                submit.textContent = '保存';
+                const cancel = document.createElement('button');
+                cancel.type = 'button';
+                cancel.className = 'menu_button';
+                cancel.textContent = '取消';
+                form.append(input, submit, cancel);
+                const showRename = editing => {
+                    form.hidden = !editing;
+                    toggle.hidden = selectAll.hidden = rename.hidden = editing;
+                    if (editing) { input.focus(); input.select(); }
+                };
+                rename.addEventListener('click', () => showRename(true));
+                cancel.addEventListener('click', () => showRename(false));
+                input.addEventListener('keydown', event => {
+                    if (event.key === 'Escape') { event.preventDefault(); showRename(false); }
+                });
+                const context = this.getCollectionContext(scope);
+                form.addEventListener('submit', event => {
+                    event.preventDefault();
+                    this.runCollectionAction(() => {
+                        if (context !== this.getCollectionContext(scope)) throw new Error('预设或角色已切换，请重新操作');
+                        this.renameCollection(scope, collection, input.value);
+                        showRename(false);
+                    });
+                });
+                header.append(toggle, selectAll, rename, form);
                 // Headers have no script ID or drag handle and cannot be saved
                 // as regexes. Grouped mode offers an explicit native-order view.
-                list.insertBefore(header, rows[0]);
+                list.insertBefore(header, rows[0] || null);
                 rows.forEach(row => {
                     row.classList.add('cla-regex-grouped-row');
                     row.style.setProperty('--cla-regex-order', String(order++));
                 });
-                this.collectionGroups.push({ header, toggle, count, key, rows });
+                this.collectionGroups.push({ header, toggle, count, key, rows, collection, scope });
             }
         }
     }
@@ -445,9 +658,15 @@ export class RegexUiAdapter {
             row.hidden = !show;
             if (show) visible += 1;
         }
-        for (const { header, toggle, count, key, rows: members } of this.collectionGroups) {
+        for (const { header, toggle, count, key, rows: members, collection, scope } of this.collectionGroups) {
             const matching = members.filter(row => this.rowMatchesOrganizer(row)).length;
-            header.hidden = matching === 0;
+            const emptyMatches = !this.organizerOpen || matchesRegexOrganizerFilter({
+                name: collection, collection, scope,
+                query: this.organizerRoot?.querySelector('[data-cla-regex-search]')?.value || '',
+                selectedCollection: this.organizerRoot?.querySelector('[data-cla-regex-collection]')?.value || 'all',
+                selectedScope: this.organizerRoot?.querySelector('[data-cla-regex-scope]')?.value || 'all',
+            });
+            header.hidden = members.length ? matching === 0 : !emptyMatches;
             toggle.setAttribute('aria-expanded', String(this.openCollections.has(key)));
             count.textContent = `${matching} 条`;
         }

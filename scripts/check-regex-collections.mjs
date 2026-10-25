@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 const { chromium } = createRequire(import.meta.url)('playwright');
 const adapterSource = await readFile(new URL('../modules/regex-ui-adapter.js', import.meta.url), 'utf8');
 const styles = await readFile(new URL('../style.css', import.meta.url), 'utf8');
+const themeStyles = process.env.CLA_REGEX_THEME_CSS ? await readFile(process.env.CLA_REGEX_THEME_CSS,'utf8') : '';
 const server = createServer((request, response) => {
     if (request.url === '/adapter.js') {
         response.setHeader('Content-Type', 'text/javascript');
@@ -17,12 +18,17 @@ const server = createServer((request, response) => {
         response.end(`
             export const SCRIPT_TYPES = { GLOBAL: 0, PRESET: 1, SCOPED: 2 };
             export const getScriptsByType = type => window.scripts[type] || [];
+            export const getCurrentPresetAPI = () => 'openai';
+            export const getCurrentPresetName = () => 'test-preset';
             export const saveScriptsByType = async (next, type) => {
                 window.scripts[type] = next;
                 window.saved.push({ next, type });
             };
         `);
-    } else if (request.url === '/popup.js' || request.url === '/script.js') {
+    } else if (request.url === '/script.js') {
+        response.setHeader('Content-Type', 'text/javascript');
+        response.end('export const characters=[{avatar:"test.png"}];export const this_chid=0;export const saveSettingsDebounced=()=>window.groupSaves=(window.groupSaves||0)+1;');
+    } else if (request.url === '/popup.js') {
         response.setHeader('Content-Type', 'text/javascript');
         response.end('export {};');
     } else {
@@ -49,6 +55,7 @@ try {
             .regex_script_name { flex: 1; }
             .menu_button { padding: 6px; }
             ${styles}
+            ${themeStyles}
         ` });
         await page.evaluate(async () => {
             const { RegexUiAdapter } = await import('/adapter.js');
@@ -80,8 +87,11 @@ try {
             document.querySelector('#saved_preset_scripts').append(row('preset-a', '[月下美化]预设'), row('preset-plain', '预设普通正则'));
             document.querySelector('#saved_scoped_scripts').append(row('scoped-a', '[月下美化]角色'), row('scoped-plain', '角色普通正则'));
             window.saved = [];
-            window.scripts = { 0: data.map(([id, scriptName]) => ({ id, scriptName, disabled: false })) };
-            window.adapter = new RegexUiAdapter();
+            window.scripts = { 0: data.map(([id, scriptName]) => ({ id, scriptName, disabled: false })),
+                1:[{id:'preset-a',scriptName:'[月下美化]预设'},{id:'preset-plain',scriptName:'预设普通正则'}],
+                2:[{id:'scoped-a',scriptName:'[月下美化]角色'},{id:'scoped-plain',scriptName:'角色普通正则'}] };
+            window.collectionSettings = {};
+            window.adapter = new RegexUiAdapter({extensionSettings:collectionSettings});
             window.refreshes = 0;
             const enhance = adapter.enhanceRegexUi.bind(adapter);
             adapter.enhanceRegexUi = () => {
@@ -168,6 +178,7 @@ try {
 
         await page.evaluate(() => {
             document.querySelector('#b1 .regex_script_name').textContent = '[月下美化]第三条';
+            scripts[0].find(script=>script.id==='b1').scriptName='[月下美化]第三条';
         });
         await page.waitForFunction(() => document.querySelector('#b1').dataset.claRegexCollection === '月下美化');
         assert.equal(await page.locator('#saved_regex_scripts [data-cla-regex-fold="MEET"]').count(), 0);
@@ -176,6 +187,81 @@ try {
         const settledRefreshes = await page.evaluate(() => refreshes);
         await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 120)));
         assert.equal(await page.evaluate(() => refreshes), settledRefreshes, 'own collection headers must not cause a refresh loop');
+
+        const originalScripts = await page.evaluate(()=>JSON.stringify(scripts));
+        await page.locator('.cla-regex-organizer-toggle').click();
+        await page.locator('.cla-regex-group-manager summary').click();
+        await page.locator('[data-cla-regex-new-name]').fill('自建空组');
+        await page.locator('[data-cla-regex-action="create-collection"]').click();
+        assert.equal(await page.locator('#saved_regex_scripts [data-cla-regex-fold="自建空组"]').isVisible(),true);
+        assert.equal(await page.locator('#saved_regex_scripts [data-cla-regex-fold="自建空组"] small').textContent(),'0 条');
+        await page.locator('[data-cla-regex-action="clear"]').click();
+        await header.locator('.cla-regex-collection-toggle').click();
+        await page.locator('#a1 .regex_script_name').click();
+        await page.locator('#a2 .regex_script_name').click();
+        await page.locator('[data-cla-regex-move-target]').selectOption('自建空组');
+        await page.locator('[data-cla-regex-action="move-selected"]').click();
+        assert.deepEqual(await page.evaluate(()=>['a1','a2'].map(id=>document.getElementById(id).dataset.claRegexCollection)),['自建空组','自建空组']);
+        const customName='自定义分组名字很长也应该自动换行不撑出边框';
+        await page.locator('#saved_regex_scripts [data-cla-regex-fold="自建空组"] .cla-regex-collection-rename').click();
+        await page.locator('.cla-regex-rename-form:not([hidden]) input').fill(customName);
+        await page.locator('.cla-regex-rename-form:not([hidden]) input').press('Enter');
+        assert.equal(await page.locator('#saved_regex_scripts [data-cla-regex-fold="自建空组"]').count(),0);
+        assert.equal(await page.locator(`#saved_regex_scripts [data-cla-regex-fold="${customName}"]`).isVisible(),true);
+        assert.equal(await page.evaluate(()=>JSON.stringify(scripts)),originalScripts,'grouping never rewrites native rule definitions');
+        assert.deepEqual(await page.evaluate(()=>nativeIds()),initialIds);
+        const savesBeforeDuplicate=await page.evaluate(()=>groupSaves);
+        await page.locator('[data-cla-regex-new-name]').fill(customName);
+        await page.locator('[data-cla-regex-action="create-collection"]').click();
+        assert.match(await page.locator('[data-cla-regex-feedback]').textContent(),/同名/);
+        assert.equal(await page.evaluate(()=>groupSaves),savesBeforeDuplicate);
+        await page.evaluate(async()=>{
+            const {RegexUiAdapter}=await import('/adapter.js');
+            adapter.stop();
+            window.collectionSettings=JSON.parse(JSON.stringify(collectionSettings));
+            window.adapter=new RegexUiAdapter({extensionSettings:collectionSettings});
+            await adapter.start();
+        });
+        await page.waitForFunction(()=>document.querySelector('.cla-regex-organizer-toggle'));
+        assert.equal(await page.evaluate(()=>document.getElementById('a1').dataset.claRegexCollection),customName,'groups survive serialized settings and adapter restart');
+        await page.locator('.cla-regex-organizer-toggle').click();
+        await page.locator('.cla-regex-group-manager summary').click();
+        await page.locator(`#saved_regex_scripts [data-cla-regex-fold="${customName}"] .cla-regex-collection-toggle`).click();
+        await page.evaluate(()=>{
+            window.originalRuleTitle=document.querySelector('#a1 .regex_script_name').textContent;
+            document.querySelector('#a1 .regex_script_name').textContent='01 | 社交动态 | 正文 | 超长规则名称'.repeat(8);
+        });
+        // Desktop sidebar columns can be narrower than the mobile breakpoint.
+        for(const fontSize of [16,22])for(const width of [260,320,480,Math.min(760,viewport.width-16)]) {
+            await page.evaluate(({width,fontSize})=>{
+                document.querySelector('#regex_container').style.width=width+'px';
+                document.querySelector('#regex_container').style.maxWidth='100%';
+                document.querySelector('#regex_container').style.fontSize=fontSize+'px';
+            },{width,fontSize});
+            const overflow=await page.evaluate(()=>{
+                const root=document.querySelector('#regex_container');
+                const elements=[...root.querySelectorAll('.cla-regex-organizer, .cla-regex-organizer input, .cla-regex-organizer select, .cla-regex-organizer button, .cla-regex-collection-header, .cla-regex-collection-header button, .regex-script-label, .regex-script-label > *')];
+                const rect=root.getBoundingClientRect();
+                return elements.filter(node=>node.getClientRects().length).filter(node=>{
+                    const box=node.getBoundingClientRect();return box.right>rect.right+1||box.left<rect.left-1;
+                }).map(node=>({node:node.className,width:node.getBoundingClientRect().width}));
+            });
+            assert.deepEqual(overflow,[],`controls fit a ${width}px sidebar / ${fontSize}px font at viewport ${viewport.width}px`);
+            const customHeader=page.locator(`#saved_regex_scripts [data-cla-regex-fold="${customName}"]`);
+            await customHeader.locator('.cla-regex-collection-rename').click();
+            const formOverflow=await customHeader.locator('.cla-regex-rename-form').evaluate(form=>{
+                const box=form.closest('.cla-regex-collection-header').getBoundingClientRect();
+                return [...form.children].some(node=>{const rect=node.getBoundingClientRect();return rect.right>box.right+1||rect.left<box.left-1;});
+            });
+            assert.equal(formOverflow,false,`inline rename form fits ${width}px sidebar / ${fontSize}px font`);
+            await customHeader.locator('.cla-regex-rename-form input').press('Escape');
+        }
+        if(process.env.CLA_REGEX_SCREENSHOT_PREFIX)await page.screenshot({path:`${process.env.CLA_REGEX_SCREENSHOT_PREFIX}-groups-${viewport.width}.png`,fullPage:true});
+        await page.evaluate(()=>{
+            document.querySelector('#regex_container').style.width='';
+            document.querySelector('#regex_container').style.fontSize='';
+            document.querySelector('#a1 .regex_script_name').textContent=originalRuleTitle;
+        });
 
         await page.locator('.cla-regex-reorder-toggle').click();
         assert.equal(await page.locator('[data-cla-regex-fold]').count(), 0);
@@ -189,7 +275,6 @@ try {
         const reorderedIds = ['a2', 'a1', 'b1', 'plain', 'player'];
         await page.locator('.cla-regex-reorder-toggle').click();
         assert.deepEqual(await page.evaluate(() => nativeIds()), reorderedIds);
-        await page.locator('.cla-regex-organizer-toggle').click();
         await page.locator('[data-cla-regex-auto-collapse]').uncheck();
         assert.equal(await page.locator('[data-cla-regex-fold]').count(), 0);
         assert.equal(await page.locator('#a1').isVisible(), true);
@@ -201,7 +286,7 @@ try {
         assert.equal(await page.locator('#a1').isVisible(), true);
         assert.equal(await page.evaluate(() => originalRows.every(row => !row.style.getPropertyValue('--cla-regex-order'))), true);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-        console.log(`PASS ${viewport.width}px: independent scope folds, inline layout, native rows/actions/order, search, selection, mutation refresh and cleanup`);
+        console.log(`PASS ${viewport.width}px: create/rename/move/persist groups, 260–760px sidebar layout, independent scopes, native rows/actions/order, search, selection, mutation refresh and cleanup`);
         await page.close();
     }
 } finally {

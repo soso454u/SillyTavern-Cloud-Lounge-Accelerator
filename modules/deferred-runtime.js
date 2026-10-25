@@ -13,6 +13,7 @@ export function createDeferredRuntime({
     chat, eventSource, eventTypes, getCurrentChatId, getRequestHeaders,
     isGenerating, scheduler, onStatus,
     getStreamingProcessor,
+    extensionSettings,
 }) {
     const regexRefresh = new RegexRefreshController({
         chat, eventSource, eventTypes, getCurrentChatId, isGenerating, scheduler, onStatus,
@@ -23,6 +24,6 @@ export function createDeferredRuntime({
         performanceConfig: new PerformanceConfigController({ getRequestHeaders }),
         regexRefresh,
         streamingRender: new StreamingRenderOptimizer({ eventSource, eventTypes, getStreamingProcessor }),
-        regexUiAdapter: new RegexUiAdapter({ onSaved: () => regexRefresh.noteChange() }),
+        regexUiAdapter: new RegexUiAdapter({ onSaved: () => regexRefresh.noteChange(), extensionSettings }),
     };
 }

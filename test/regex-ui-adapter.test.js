@@ -4,6 +4,7 @@ import {
     getRegexCollectionName,
     getRegexCollectionKey,
     matchesRegexOrganizerFilter,
+    normalizeRegexCollectionName,
     RegexUiAdapter,
     shouldShowRegexOrganizerRow,
 } from '../modules/regex-ui-adapter.js';
@@ -16,6 +17,123 @@ test('groups bracket-prefixed regex names into organizer collections', () => {
     assert.equal(getRegexCollectionName('「播放器」隐藏播放器文字'), '播放器');
     assert.equal(getRegexCollectionName('『播放器』不发送提示词'), '播放器');
     assert.equal(getRegexCollectionName('普通正则'), '未分类');
+});
+
+function collectionFixture(settings = {}) {
+    const scripts = {
+        GLOBAL: [{ id:'a', scriptName:'[旧组]正则 A', findRegex:'a', replaceString:'A', disabled:true }, { id:'b', scriptName:'普通规则', placement:[1,2] }],
+        PRESET: [{ id:'a', scriptName:'[旧组]预设正则' }],
+        SCOPED: [{ id:'a', scriptName:'[旧组]角色正则' }],
+    };
+    const original = structuredClone(scripts);
+    let saves = 0, refreshes = 0;
+    const current = { preset:'预设 A', api:'openai' };
+    const adapter = new RegexUiAdapter({ extensionSettings:settings, onSaved:() => assert.fail('classification must not refresh chat') });
+    adapter.engine = {
+        SCRIPT_TYPES:{ GLOBAL:'GLOBAL', PRESET:'PRESET', SCOPED:'SCOPED' },
+        getScriptsByType:scope => scripts[scope],
+        saveScriptsByType:() => assert.fail('classification must not rewrite native scripts'),
+        getCurrentPresetAPI:() => current.api,
+        getCurrentPresetName:() => current.preset,
+    };
+    adapter.scriptApi = { characters:[{ avatar:'a.png' },{ avatar:'b.png' }], this_chid:0, saveSettingsDebounced:() => saves++ };
+    adapter.refreshOrganizerRows = () => refreshes++;
+    adapter.getRows = () => [];
+    function row(scope, id, checked=true) {
+        return { id, closest:() => ({id:{ GLOBAL:'saved_regex_scripts', PRESET:'saved_preset_scripts', SCOPED:'saved_scoped_scripts' }[scope]}),
+            querySelector:() => ({checked}) };
+    }
+    return { adapter, scripts, original, settings, current, row, get saves() { return saves; }, get refreshes() { return refreshes; } };
+}
+
+test('creates persistent empty collections and rejects duplicate or reserved names', () => {
+    const f = collectionFixture();
+    f.adapter.createCollection('GLOBAL','  自建空组  ');
+    assert.deepEqual(f.adapter.getCollectionState('GLOBAL').groups,['自建空组']);
+    const reload = collectionFixture(JSON.parse(JSON.stringify(f.settings)));
+    assert.deepEqual(reload.adapter.getCollectionState('GLOBAL').groups,['自建空组']);
+    assert.throws(() => f.adapter.createCollection('GLOBAL','自建空组'),/同名/);
+    for (const name of ['', ' ', '未分类', 'all', 'a\nb', 'x'.repeat(61)]) assert.throws(() => normalizeRegexCollectionName(name));
+    assert.equal(normalizeRegexCollectionName('<分组> "自定义"'),'<分组> "自定义"');
+    assert.equal(f.saves,1);
+});
+
+test('renames inferred collections without changing native names, content, permissions or order', () => {
+    const f = collectionFixture();
+    f.adapter.renameCollection('GLOBAL','旧组','新组');
+    assert.equal(f.adapter.getAssignedCollection('GLOBAL','a','[旧组]正则 A'),'新组');
+    assert.equal(f.adapter.getAssignedCollection('PRESET','a','[旧组]预设正则'),'旧组');
+    assert.equal(f.adapter.getAssignedCollection('GLOBAL','b','普通规则'),'未分类');
+    assert.deepEqual(f.scripts,f.original);
+    assert.equal(f.saves,1);
+    assert.equal(f.refreshes,1);
+});
+
+test('renames empty and unclassified collections and rejects collisions without partial writes', () => {
+    const f = collectionFixture();
+    f.adapter.createCollection('GLOBAL','空组');
+    f.adapter.renameCollection('GLOBAL','空组','空组新名');
+    assert.deepEqual(f.adapter.getCollectionState('GLOBAL').groups,['空组新名']);
+    f.adapter.renameCollection('GLOBAL','未分类','其他工具');
+    assert.equal(f.adapter.getAssignedCollection('GLOBAL','b','普通规则'),'其他工具');
+    const before = JSON.stringify(f.settings);
+    assert.throws(() => f.adapter.renameCollection('GLOBAL','旧组','其他工具'),/同名/);
+    assert.equal(JSON.stringify(f.settings),before);
+});
+
+test('separates catalogs by API/preset name and stable character avatar rather than array index', () => {
+    const f = collectionFixture();
+    f.adapter.createCollection('PRESET','预设 A 分组');
+    f.current.preset='预设 B';
+    assert.deepEqual(f.adapter.getCollectionState('PRESET').groups,[]);
+    f.current.preset='预设 A';
+    f.current.api='kobold';
+    assert.deepEqual(f.adapter.getCollectionState('PRESET').groups,[]);
+    f.current.api='openai';
+    assert.deepEqual(f.adapter.getCollectionState('PRESET').groups,['预设 A 分组']);
+    f.adapter.createCollection('SCOPED','角色 A 分组');
+    f.adapter.scriptApi.this_chid=1;
+    assert.deepEqual(f.adapter.getCollectionState('SCOPED').groups,[]);
+    f.adapter.scriptApi.characters.reverse();
+    assert.deepEqual(f.adapter.getCollectionState('SCOPED').groups,['角色 A 分组']);
+    assert.deepEqual(f.adapter.getCollectionState('GLOBAL').groups,[]);
+});
+
+test('moves checked rules across independent scopes and can override prefixes with unclassified', () => {
+    const f = collectionFixture();
+    f.adapter.getRows=() => [f.row('GLOBAL','a'),f.row('GLOBAL','b',false),f.row('PRESET','a')];
+    f.adapter.moveSelectedToCollection('自建分组');
+    for (const scope of ['GLOBAL','PRESET']) assert.equal(f.adapter.getAssignedCollection(scope,'a','[旧组]x'),'自建分组');
+    assert.equal(f.adapter.getAssignedCollection('GLOBAL','b','普通规则'),'未分类');
+    assert.equal(f.adapter.getAssignedCollection('SCOPED','a','[旧组]x'),'旧组');
+    f.adapter.moveSelectedToCollection('未分类');
+    assert.equal(f.adapter.getAssignedCollection('GLOBAL','a','[旧组]x'),'未分类');
+    assert.deepEqual(f.scripts,f.original);
+    assert.equal(f.saves,2,'one settings save for each bulk action');
+});
+
+test('invalid selections or missing scope contexts cannot partially save a group move', () => {
+    const f = collectionFixture();
+    assert.throws(() => f.adapter.moveSelectedToCollection('目标'),/先勾选/);
+    f.adapter.getRows=() => [f.row('GLOBAL','a'),f.row('PRESET','missing')];
+    assert.throws(() => f.adapter.moveSelectedToCollection('目标'),/列表已变化/);
+    assert.deepEqual(f.settings,{});
+    f.current.preset=null;
+    assert.throws(() => f.adapter.createCollection('PRESET','新组'),/选择/);
+    f.adapter.scriptApi.this_chid=undefined;
+    assert.throws(() => f.adapter.createCollection('SCOPED','新组'),/选择/);
+    assert.equal(f.saves,0);
+});
+
+test('untrusted rule IDs are stored as own data keys and never change object prototypes', () => {
+    const f = collectionFixture();
+    f.scripts.GLOBAL[0].id='__proto__';
+    f.adapter.getRows=() => [f.row('GLOBAL','__proto__')];
+    f.adapter.moveSelectedToCollection('安全分组');
+    const assignments=f.adapter.getCollectionState('GLOBAL').assignments;
+    assert.equal(Object.getPrototypeOf(assignments),Object.prototype);
+    assert.equal(Object.hasOwn(assignments,'__proto__'),true);
+    assert.equal(f.adapter.getAssignedCollection('GLOBAL','__proto__','[旧组]x'),'安全分组');
 });
 
 test('filters regex collections by name, scope, and search text', () => {

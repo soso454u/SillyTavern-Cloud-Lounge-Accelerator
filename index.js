@@ -98,6 +98,7 @@ async function loadDeferredRuntime(current) {
             chat, eventSource, eventTypes: event_types, getCurrentChatId,
             getRequestHeaders, isGenerating, scheduler: current.scheduler,
             getStreamingProcessor: () => chatApi.streamingProcessor,
+            extensionSettings: extension_settings,
             onStatus: updateRuntimeStatus,
         }), {
             SettingsPanel: module.SettingsPanel,

@@ -145,6 +145,15 @@ try {
             const {power_user}=await import('/scripts/power-user.js');
             return {fps:power_user.streaming_fps,fade:power_user.stream_fade_in,saves:window.settingsSaves||0};
         }),{fps:30,fade:true,saves:0},'render budgets do not mutate or save native preferences');
+        await page.locator('.cla-regex-organizer-toggle').click();
+        await page.locator('.cla-regex-group-manager summary').click();
+        await page.locator('[data-cla-regex-new-name]').fill('发布包分组');
+        await page.locator('[data-cla-regex-action="create-collection"]').click();
+        assert.deepEqual(await page.evaluate(async()=>{
+            const {extension_settings}=await import('/scripts/extensions.js');
+            return {groups:extension_settings.cloud_lounge_accelerator_regex_collections?.['["GLOBAL"]']?.groups,
+                saves:window.settingsSaves||0};
+        }),{groups:['发布包分组'],saves:1},'custom group catalog uses the live native settings object and save callback');
         await page.evaluate(async()=>{
             const native=await import('/script.js');
             window.streamingFixture=native.beginStream();window.originalProgress=streamingFixture.onProgressStreaming;
@@ -176,7 +185,7 @@ try {
     await page.waitForTimeout(450);
     assert.equal(await page.locator('#cloud-lounge-accelerator-settings').count(), 0);
     assert.deepEqual(errors, []);
-    console.log('PASS production bundle on desktop/mobile: startup budget, native streaming binding, token delivery, coalesced previews, complete final DOM/chat, preferences, stop/disable and delayed startup');
+    console.log('PASS production bundle on desktop/mobile: startup budget, streaming/finalization, native group catalog persistence, preferences, stop/disable and delayed startup');
 } finally {
     await browser?.close();
     await new Promise(resolve => server.close(resolve));
