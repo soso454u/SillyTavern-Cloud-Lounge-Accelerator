@@ -9,6 +9,7 @@ import {
     saveSettingsDebounced,
     scrollChatToBottom,
 } from '../../../../script.js';
+import * as chatApi from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
 import { ChatOptimizer } from './modules/chat-optimizer.js';
 import { StartupOptimizer } from './modules/startup-optimizer.js';
@@ -96,6 +97,7 @@ async function loadDeferredRuntime(current) {
         Object.assign(current, module.createDeferredRuntime({
             chat, eventSource, eventTypes: event_types, getCurrentChatId,
             getRequestHeaders, isGenerating, scheduler: current.scheduler,
+            getStreamingProcessor: () => chatApi.streamingProcessor,
             onStatus: updateRuntimeStatus,
         }), {
             SettingsPanel: module.SettingsPanel,
@@ -141,6 +143,7 @@ async function startEnabledModules({ skipCache = false, forceCache = false } = {
         if (settings.interactionOptimization) await current.interactionOptimizer.start();
         if (!isCurrent()) return;
         if (settings.chatOptimization) {
+            current.streamingRender.start();
             const refreshReady = await current.regexRefresh.start();
             if (!isCurrent()) {
                 current.regexRefresh.stop();
@@ -185,6 +188,7 @@ async function stopOptimizationModules({ stopCache = false } = {}) {
     runtime.startupOptimizer.stop();
     runtime.regexUiAdapter?.stop();
     runtime.regexRefresh?.stop();
+    runtime.streamingRender?.stop();
     await runtime.chatOptimizer.stop();
     runtime.interactionOptimizer?.stop();
     runtime.scheduler.cancelAll('优化模块正在重启');
@@ -211,6 +215,7 @@ async function changeChatOptimization(enabled, current) {
     if (!enabled) {
         current.regexUiAdapter.stop();
         current.regexRefresh.stop();
+        current.streamingRender.stop();
         await current.chatOptimizer.stop();
         if (!settings.pageAcceleration) current.startupOptimizer.stop();
         return;
@@ -220,6 +225,7 @@ async function changeChatOptimization(enabled, current) {
     await chatStart;
     legacyTruncation = null;
     if (!appReady) return;
+    current.streamingRender.start();
     const refreshReady = await current.regexRefresh.start();
     if (refreshReady) await current.regexUiAdapter.start();
 }

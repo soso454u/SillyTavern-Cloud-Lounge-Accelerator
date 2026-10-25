@@ -48,6 +48,7 @@ async function fixture(t, previous) {
                 return {
                     interactionOptimizer: {async start() { state.interactionStarts++; await state.interactionGate; }, stop() {}},
                     regexRefresh: {async start() { return true; }, stop() {}},
+                    streamingRender: {start() {}, stop() {}},
                     regexUiAdapter: {async start() {}, stop() {}},
                     cacheController: {async startAfterLogin() {state.cacheStarts++;}, stop() {}},
                 };

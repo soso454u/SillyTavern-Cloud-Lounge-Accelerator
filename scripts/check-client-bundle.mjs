@@ -12,7 +12,9 @@ const assets = new Map(await Promise.all((await readdir(new URL('../dist/', impo
 ])));
 assets.set('/script.js', `
     export const chat = [];
-    export const event_types = {SETTINGS_LOADED:'settings', APP_INITIALIZED:'initialized', APP_READY:'ready', CHAT_CHANGED:'chat'};
+    export const event_types = {SETTINGS_LOADED:'settings', APP_INITIALIZED:'initialized', APP_READY:'ready', CHAT_CHANGED:'chat',
+        STREAM_TOKEN_RECEIVED:'token', GENERATION_STARTED:'start', GENERATION_ENDED:'end', GENERATION_STOPPED:'stop'};
+    export let streamingProcessor = null;
     const handlers = new Map();
     export const eventSource = {
         on(name, callback) { handlers.set(name, [...(handlers.get(name) || []), callback]); },
@@ -22,15 +24,30 @@ assets.set('/script.js', `
     };
     export const getCurrentChatId = () => null;
     export const getRequestHeaders = () => ({'Content-Type':'application/json'});
-    export const isGenerating = () => false;
+    export const isGenerating = () => Boolean(streamingProcessor?.running);
     export const refreshSwipeButtons = () => {};
     export const scrollChatToBottom = () => {};
     export const saveSettingsDebounced = () => { window.settingsSaves = (window.settingsSaves || 0) + 1; };
+    class FixtureProcessor {
+        constructor() { this.type='normal'; this.running=true; this.renders=[]; }
+        async onProgressStreaming(id, text, final) {
+            this.renders.push({id,text,final});
+            chat[id].mes=text;
+            document.querySelector('#chat .mes_text').textContent=text;
+        }
+        async finalizeIntermediaryMessage(id, text) { await this.onProgressStreaming(id,text,true); }
+    }
+    export function beginStream() {
+        chat[0]={mes:''};
+        document.querySelector('#chat').innerHTML='<div class="mes" mesid="0"><div class="mes_text"></div></div>';
+        streamingProcessor=new FixtureProcessor();
+        return streamingProcessor;
+    }
 `);
 assets.set('/scripts/extensions.js', `export const extension_settings = {cloud_lounge_accelerator:{
     pageAcceleration:true, chatOptimization:true, interactionOptimization:true, chatPageSize:5, settingsVersion:'2.1.32',
 }};`);
-assets.set('/scripts/power-user.js', 'export const power_user = {chat_truncation:100};');
+assets.set('/scripts/power-user.js', 'export const power_user = {chat_truncation:100,streaming_fps:30,stream_fade_in:true};');
 assets.set('/lib.js', 'export const hljs = {highlightElement() {}, highlightBlock() {}, highlightAll() {}};');
 assets.set('/scripts/openai.js', 'export const promptManager = null;');
 assets.set('/scripts/popup.js', 'export const Popup = {util:{popups:[]}};');
@@ -94,7 +111,47 @@ try {
         await page.waitForFunction(() => document.querySelector('.cla-regex-organizer-toggle'));
         assert.equal(requests.filter(url => url.includes('/dist/')).length, 3);
         assert.equal(await page.evaluate(() => window.settingsSaves || 0), 0);
+        const streaming = await page.evaluate(async () => {
+            const native = await import('/script.js');
+            const processor = native.beginStream();
+            window.streamingFixture = processor;
+            window.originalProgress = processor.onProgressStreaming;
+            let tokens = 0;
+            native.eventSource.on('token', () => tokens++);
+            await native.eventSource.emit('start');
+            for (let i = 0; i < 80; i++) {
+                processor.result = 'snapshot-' + i;
+                await native.eventSource.emit('token', processor.result);
+                await processor.onProgressStreaming(0, processor.result);
+                if (i === 20) document.querySelector('#chat .mes_text').dispatchEvent(new WheelEvent('wheel', {bubbles:true,deltaY:-100}));
+                await new Promise(resolve => setTimeout(resolve, 4));
+            }
+            await processor.finalizeIntermediaryMessage(0, 'Complete final text');
+            const state = {tokens,renders:processor.renders.length,last:processor.renders.at(-1),message:native.chat[0].mes,
+                text:document.querySelector('#chat .mes_text').textContent,hooked:processor.onProgressStreaming!==originalProgress};
+            processor.running = false;
+            await native.eventSource.emit('end');
+            state.restored = processor.onProgressStreaming === originalProgress;
+            return state;
+        });
+        assert.equal(streaming.tokens,80,'all token events still reach other subscribers');
+        assert.ok(streaming.renders>1 && streaming.renders<30,'native full-message previews are coalesced');
+        assert.equal(streaming.hooked,true,'production runtime hooks the live native binding');
+        assert.equal(streaming.restored,true);
+        assert.deepEqual(streaming.last,{id:0,text:'Complete final text',final:true});
+        assert.equal(streaming.message,streaming.text);
+        assert.equal(streaming.message,'Complete final text');
+        assert.deepEqual(await page.evaluate(async()=>{
+            const {power_user}=await import('/scripts/power-user.js');
+            return {fps:power_user.streaming_fps,fade:power_user.stream_fade_in,saves:window.settingsSaves||0};
+        }),{fps:30,fade:true,saves:0},'render budgets do not mutate or save native preferences');
+        await page.evaluate(async()=>{
+            const native=await import('/script.js');
+            window.streamingFixture=native.beginStream();window.originalProgress=streamingFixture.onProgressStreaming;
+            await native.eventSource.emit('token','pending');
+        });
         await page.evaluate(() => accelerator.onDisable());
+        assert.equal(await page.evaluate(()=>streamingFixture.onProgressStreaming===originalProgress),true,'disable during generation restores the native method');
         assert.equal(await page.locator('#cloud-lounge-accelerator-settings').count(), 0);
         assert.equal(await page.evaluate(async () => (await import('/scripts/power-user.js')).power_user.chat_truncation), 100);
         assert.equal(await page.locator('.cla-regex-organizer-toggle').count(), 0);
@@ -119,7 +176,7 @@ try {
     await page.waitForTimeout(450);
     assert.equal(await page.locator('#cloud-lounge-accelerator-settings').count(), 0);
     assert.deepEqual(errors, []);
-    console.log('PASS production bundle on desktop/mobile: 2 activation requests, optional chunk after readiness, chat limit/regex UI/panel preserved, disable cancels delayed startup');
+    console.log('PASS production bundle on desktop/mobile: startup budget, native streaming binding, token delivery, coalesced previews, complete final DOM/chat, preferences, stop/disable and delayed startup');
 } finally {
     await browser?.close();
     await new Promise(resolve => server.close(resolve));
