@@ -463,16 +463,6 @@
     opacity: 0.55;
 }
 
-.cla-regex-operation-status {
-    display: inline-block;
-    max-width: 100%;
-    margin: 0.25em;
-    color: inherit;
-    font-size: 0.85em;
-    overflow-wrap: anywhere;
-    min-width: 0;
-}
-
 /* Avoid repeatedly repainting a tall iMessage glass layer on touch devices.
    Restore the theme when generation ends and normal scrolling has settled. */
 #chat:is(.cla-streaming-light, .cla-chat-scrolling) {

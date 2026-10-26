@@ -67,7 +67,8 @@ try {
                 dlg.innerHTML='<div class="regex_editor"><input class="regex_script_name"><input class="find_regex"><textarea class="regex_replace_string"></textarea><textarea class="regex_trim_strings"></textarea><input name="replace_position" type="checkbox" value="2" checked><input name="disabled" type="checkbox"><input name="only_format_display" type="checkbox" checked><input name="only_format_prompt" type="checkbox"><input name="run_on_edit" type="checkbox" checked><select name="substitute_regex"><option value="0">0</option></select><input name="min_depth"><input name="max_depth"></div><button class="popup-button-ok">保存</button>';
                 for(const [selector,value]of[['.regex_script_name',script.scriptName],['.find_regex',script.findRegex],['.regex_replace_string',script.replaceString]])dlg.querySelector(selector).value=value;
                 dlg.querySelector('.popup-button-ok').addEventListener('click',()=>nativeSaves++);
-                const popup={dlg,async completeCancelled(){dlg.close();dlg.remove();Popup.util.popups=Popup.util.popups.filter(item=>item!==popup);}};
+                const popup={dlg,async completeCancelled(){dlg.close();await Promise.resolve();dlg.remove();Popup.util.popups=Popup.util.popups.filter(item=>item!==popup);},
+                    async show(){if(!Popup.util.popups.includes(popup))Popup.util.popups.push(popup);document.body.append(dlg);dlg.showModal();}};
                 Popup.util.popups.push(popup);document.body.append(dlg);dlg.showModal();
             };
             window.adapter=new RegexUiAdapter({extensionSettings:{},onSaved:()=>refreshes++});await adapter.start();
@@ -120,8 +121,9 @@ try {
         await page.evaluate(()=>{adapter.clearRowSelection();for(let i=0;i<10;i++)adapter.setRowSelected(document.getElementById('PRESET-'+i),true);holdWrites=true;});
         await page.locator('#bulk_delete_regex').scrollIntoViewIfNeeded();await page.locator('#bulk_delete_regex').click();
         await page.waitForFunction(()=>typeof releaseWrite==='function');
-        assert.equal(await page.locator('#PRESET-0').count(),1);
-        assert.equal(await page.locator('#bulk_delete_regex').isDisabled(),true);
+        assert.equal(await page.locator('#PRESET-0').count(),0,'confirmed deletion leaves the list immediately');
+        assert.equal(await page.locator('#bulk_delete_regex').isDisabled(),false);
+        assert.equal(await page.locator('.cla-regex-operation-status').count(),0);
         assert.equal(await page.evaluate(()=>writes.length),1);
         await page.evaluate(async()=>{holdWrites=false;releaseWrite();await adapter.saveQueue;});
         assert.equal(await page.evaluate(()=>data[2].length),10);
@@ -133,10 +135,11 @@ try {
         await page.evaluate(()=>{holdWrites=true;releaseWrite=null;const button=document.querySelector('.popup-button-ok');button.click();button.dispatchEvent(new MouseEvent('click',{bubbles:true}));});
         await page.waitForFunction(()=>typeof releaseWrite==='function');
         assert.equal(await page.evaluate(()=>writes.length),2,'double-click queues only one editor write');
-        assert.equal(await page.locator('dialog.popup').count(),1);
-        await page.locator('.regex_replace_string').fill('newer draft');
+        assert.equal(await page.locator('dialog.popup').count(),0,'save closes immediately while the network is pending');
+        assert.equal(await page.locator('.cla-regex-operation-status').count(),0);
         await page.evaluate(async()=>{holdWrites=false;releaseWrite();await adapter.saveQueue;});
-        assert.equal(await page.locator('dialog.popup').count(),1,'new typing during a save stays editable');
+        await page.locator('#PRESET-10 .edit_existing_regex').click();
+        await page.locator('.regex_replace_string').fill('newer draft');
         await page.locator('.popup-button-ok').click();await page.evaluate(()=>adapter.saveQueue);
         assert.equal(await page.locator('dialog.popup').count(),0);
         assert.equal(await page.evaluate(()=>data[2][0].replaceString),'newer draft');
@@ -144,7 +147,7 @@ try {
         await page.locator('.cla-regex-reorder-toggle').click();
         await page.evaluate(()=>{adapter.clearRowSelection();adapter.openCollections.add('["GLOBAL","A"]');adapter.applyOrganizerFilters();});
         const originalGlobalDefinitions=await page.evaluate(()=>Object.fromEntries(data[0].map(script=>[script.id,JSON.stringify(script)])));
-        async function sortRule(sourceId,targetId,{cancel=false}={}) {
+        async function sortRule(sourceId,targetId,{cancel=false,wait=true}={}) {
             await page.locator('#'+sourceId+' .cla-regex-group-handle').evaluate(node=>node.scrollIntoView({block:'center'}));
             const start=await center(page.locator('#'+sourceId+' .cla-regex-group-handle'));
             await pointer('down',start.x,start.y);await pointer('move',start.x+10,start.y);
@@ -153,7 +156,7 @@ try {
             const target={x:box.x+box.width/2,y:box.y+box.height/4};
             await pointer('move',target.x,target.y);
             await pointer(cancel?'cancel':'up',target.x,target.y);
-            await page.evaluate(()=>adapter.saveQueue);
+            if(wait)await page.evaluate(()=>adapter.saveQueue);
         }
         const beforeSortWrites=await page.evaluate(()=>writes.length);
         await sortRule('GLOBAL-10','GLOBAL-9');
@@ -161,16 +164,24 @@ try {
         assert.deepEqual(await page.evaluate(()=>data[0].slice(9,12).map(script=>script.id)),['GLOBAL-10','GLOBAL-9','GLOBAL-11']);
         assert.deepEqual(await page.evaluate(()=>originalIds()),await page.evaluate(()=>data[0].map(script=>script.id)),'native DOM order follows the saved execution order');
         assert.equal(await page.evaluate(()=>adapter.reorderMode),false,'sorting never leaves collection view');
-        await page.evaluate(()=>{adapter.setRowSelected(document.getElementById('GLOBAL-11'),true);adapter.setRowSelected(document.getElementById('GLOBAL-12'),true);});
-        await sortRule('GLOBAL-11','GLOBAL-9');
-        assert.deepEqual(await page.evaluate(()=>data[0].slice(9,14).map(script=>script.id)),['GLOBAL-10','GLOBAL-11','GLOBAL-12','GLOBAL-9','GLOBAL-13']);
-        assert.equal(await page.evaluate(()=>writes.length),beforeSortWrites+2);
+        await page.evaluate(()=>{holdWrites=true;releaseWrite=null;adapter.setRowSelected(document.getElementById('GLOBAL-11'),true);adapter.setRowSelected(document.getElementById('GLOBAL-12'),true);});
+        await sortRule('GLOBAL-11','GLOBAL-9',{wait:false});
+        await page.waitForFunction(()=>typeof releaseWrite==='function');
+        assert.deepEqual(await page.evaluate(()=>originalIds().slice(9,14)),['GLOBAL-10','GLOBAL-11','GLOBAL-12','GLOBAL-9','GLOBAL-13'],'a pending write does not delay moving the visible rows');
+        await page.evaluate(()=>adapter.clearRowSelection());
+        await sortRule('GLOBAL-13','GLOBAL-9',{wait:false});
+        assert.deepEqual(await page.evaluate(()=>originalIds().slice(9,14)),['GLOBAL-10','GLOBAL-11','GLOBAL-12','GLOBAL-13','GLOBAL-9'],'another drop remains available during a slow save');
+        assert.equal(await page.locator('.cla-regex-operation-status').count(),0);
+        assert.equal(await page.evaluate(()=>writes.length),beforeSortWrites+2,'network writes stay serialized');
+        await page.evaluate(async()=>{holdWrites=false;releaseWrite();await adapter.saveQueue;});
+        assert.deepEqual(await page.evaluate(()=>data[0].slice(9,14).map(script=>script.id)),['GLOBAL-10','GLOBAL-11','GLOBAL-12','GLOBAL-13','GLOBAL-9']);
+        assert.equal(await page.evaluate(()=>writes.length),beforeSortWrites+3);
         assert.deepEqual(await page.evaluate(()=>Object.fromEntries(data[0].map(script=>[script.id,JSON.stringify(script)]))),originalGlobalDefinitions,'sorting preserves rule definitions and switches');
         await page.evaluate(()=>adapter.clearRowSelection());
         const savedOrder=await page.evaluate(()=>data[0].map(script=>script.id));
-        await sortRule('GLOBAL-13','GLOBAL-9',{cancel:true});
+        await sortRule('GLOBAL-14','GLOBAL-9',{cancel:true});
         assert.deepEqual(await page.evaluate(()=>data[0].map(script=>script.id)),savedOrder);
-        assert.equal(await page.evaluate(()=>writes.length),beforeSortWrites+2);
+        assert.equal(await page.evaluate(()=>writes.length),beforeSortWrites+3);
         const headerA=page.locator('#saved_regex_scripts [data-cla-regex-fold="A"]');
         const headerB=page.locator('#saved_regex_scripts [data-cla-regex-fold="B"]');
         await headerA.evaluate(node=>node.scrollIntoView({block:'center'}));
@@ -181,7 +192,7 @@ try {
         await pointer('move',groupBox.x+groupBox.width/2,groupBox.y+groupBox.height/4);
         await pointer('up',groupBox.x+groupBox.width/2,groupBox.y+groupBox.height/4);
         assert.deepEqual(await page.evaluate(()=>adapter.collectionGroups.filter(group=>group.scope==='GLOBAL').map(group=>group.collection)),['A','B']);
-        assert.equal(await page.evaluate(()=>writes.length),beforeSortWrites+2,'moving titles saves only display settings');
+        assert.equal(await page.evaluate(()=>writes.length),beforeSortWrites+3,'moving titles saves only display settings');
         assert.deepEqual(await page.evaluate(()=>data[0].map(script=>script.id)),savedOrder);
         await page.evaluate(async()=>{
             const {RegexUiAdapter}=await import('/adapter.js');
@@ -191,10 +202,30 @@ try {
         await page.waitForFunction(()=>document.querySelector('.cla-regex-collection-order-handle'));
         assert.deepEqual(await page.evaluate(()=>adapter.collectionGroups.filter(group=>group.scope==='GLOBAL').map(group=>group.collection)),['A','B']);
         assert.deepEqual(await page.evaluate(()=>originalIds()),savedOrder);
+        await page.evaluate(()=>{adapter.openCollections.add('["PRESET","A"]');adapter.applyOrganizerFilters();adapter.clearRowSelection();adapter.setRowSelected(document.getElementById('PRESET-12'),true);holdWrites=true;releaseWrite=null;failType=2;});
+        await page.locator('#bulk_delete_regex').scrollIntoViewIfNeeded();await page.locator('#bulk_delete_regex').click();
+        await page.waitForFunction(()=>typeof releaseWrite==='function');
+        assert.equal(await page.locator('#PRESET-12').count(),0);
+        await page.evaluate(async()=>{holdWrites=false;releaseWrite();await adapter.saveQueue;});
+        assert.equal(await page.locator('#PRESET-12').count(),1,'failed background deletion restores the original row');
+        await page.locator('#PRESET-12 .edit_existing_regex').click();
+        await page.locator('.regex_replace_string').fill('recover this draft');
+        await page.evaluate(()=>{holdWrites=true;releaseWrite=null;});
+        await page.locator('.popup-button-ok').click();
+        await page.waitForFunction(()=>typeof releaseWrite==='function');
+        assert.equal(await page.locator('dialog.popup').count(),0);
+        await page.evaluate(async()=>{holdWrites=false;releaseWrite();await adapter.saveQueue;});
+        assert.equal(await page.locator('dialog.popup').count(),1,'failed background editor save restores its editable draft');
+        assert.equal(await page.locator('.regex_replace_string').inputValue(),'recover this draft');
+        await page.evaluate(()=>failType=null);
+        await page.locator('.popup-button-ok').click();await page.evaluate(()=>adapter.saveQueue);
+        assert.equal(await page.locator('dialog.popup').count(),0);
+        assert.equal(await page.evaluate(()=>data[2].find(script=>script.id==='PRESET-12').replaceString),'recover this draft');
+        assert.equal(await page.locator('.cla-regex-operation-status').count(),0);
         await page.evaluate(()=>adapter.stop());
         assert.equal(await page.locator('.cla-regex-group-handle,.cla-regex-drop-tray,.cla-regex-operation-status').count(),0);
         assert.deepEqual(errors,[]);
-        console.log(`PASS ${touch?'touch':'mouse'}: unified sort/group handle, selected block sorting, persisted collection title order, cancellation, native-order grouping, bulk delete, editor saves and cleanup`);
+        console.log(`PASS ${touch?'touch':'mouse'}: instant repeated sorting during slow writes, immediate editor close and confirmed deletion, no status labels, failed row/draft recovery, grouping and cleanup`);
         await page.close();
     }
 } finally {await browser?.close();await new Promise(resolve=>server.close(resolve));}

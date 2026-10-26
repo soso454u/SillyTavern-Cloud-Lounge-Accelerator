@@ -114,6 +114,25 @@ test('edited draft uses native persistence and starts closing before scheduling 
     assert.equal(f.fullSaves,0);
 });
 
+test('a closed background editor persists its captured draft without closing the popup again',async t=>{
+    const f=fixture(t),context=f.context('PRESET');
+    const draft={...f.data.PRESET[0],replaceString:'background draft'};
+    await f.adapter.saveExistingEditor({popupInstance:f.popup,editor:{},context,draft,closed:true});
+    assert.equal(f.closes,0);
+    assert.equal(f.data.PRESET[0].replaceString,'background draft');
+    assert.equal(f.refreshes,1);
+});
+
+test('background editor completion preserves another scope editor with the same rule ID',async t=>{
+    const f=fixture(t),context=f.context('PRESET');let release;
+    f.gate=new Promise(resolve=>{release=resolve;});
+    const pending=f.adapter.saveExistingEditor({popupInstance:f.popup,editor:{},context,draft:{...f.data.PRESET[0],replaceString:'background'},closed:true});
+    const other={...f.context('SCOPED'),id:context.id};
+    f.adapter.editorContext=other;
+    release();await pending;
+    assert.equal(f.adapter.editorContext,other);
+});
+
 test('failed editor save does not close and restores only its own native in-memory write',async t=>{
     const f=fixture(t),context=f.context('PRESET');f.failScope='PRESET';
     const before=structuredClone(f.data.PRESET);

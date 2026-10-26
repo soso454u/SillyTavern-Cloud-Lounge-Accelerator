@@ -136,7 +136,9 @@ export class RegexUiAdapter {
         this.deletePending = false;
         this.pendingRestores = new Set();
         this.groupDrag = null;
-        this.orderPending = null;
+        this.orderPreviews = new Map();
+        this.pendingEditorWrites = new Map();
+        this.failedEditorDrafts = new Map();
         this.pointerFrame = null;
         this.observer = null;
         this.organizerButton = null;
@@ -290,7 +292,35 @@ export class RegexUiAdapter {
         this.finishCollectionChange();
     }
 
-    async moveRuleWithinCollection({ scope, context, collection, sourceId, sourceIds = [sourceId], targetId, after }) {
+    syncRuleRows(scope, scripts, {refresh=true}={}) {
+        const listId = Object.keys(TYPE_BY_LIST_ID).find(id => TYPE_BY_LIST_ID[id] === scope);
+        const list = document.getElementById(listId);
+        if (list) {
+            const rows = new Map([...list.children].filter(row => row.matches('.regex-script-label')).map(row => [row.id, row]));
+            for (const script of scripts) {
+                const row = rows.get(String(script.id ?? script));
+                if (row) list.append(row);
+            }
+        }
+        if(refresh)this.refreshOrganizerRows();
+    }
+
+    previewRuleOrder(options) {
+        const {scope,context,collection,sourceIds,targetId,after}=options;
+        if (!this.started || context !== this.getCollectionContext(scope)) throw new Error('预设或角色已切换，请重新拖动');
+        const rows=this.getRows().filter(row=>getTypeKey(row)===scope);
+        const ids=rows.filter(row=>row.dataset.claRegexCollection===collection).map(row=>row.id);
+        const desiredIds=moveOrderedItems(ids,sourceIds,targetId,after);
+        if(desiredIds.every((id,index)=>id===ids[index]))return null;
+        const members=new Set(ids);
+        let index=0;
+        const preview={...options,desiredIds,generation:this.generation};
+        this.orderPreviews.set(context,preview);
+        this.syncRuleRows(scope,rows.map(row=>members.has(row.id)?desiredIds[index++]:row.id));
+        return preview;
+    }
+
+    async moveRuleWithinCollection({ scope, context, collection, sourceId, sourceIds = [sourceId], targetId, after, desiredIds, preview }) {
         if (!this.started || !context || context !== this.getCollectionContext(scope)) throw new Error('预设或角色已切换，请重新拖动');
         const type = this.getType(scope);
         const engine = this.engine;
@@ -298,7 +328,10 @@ export class RegexUiAdapter {
         const current = [...(engine.getScriptsByType(type) || [])];
         const members = current.filter(script => this.getAssignedCollection(scope, String(script.id), script.scriptName) === collection);
         const ids = members.map(script => String(script.id));
-        const nextIds = moveOrderedItems(ids, sourceIds, targetId, after);
+        if (desiredIds?.some(id=>!ids.includes(id))) throw new Error('排序目标已变化，请重新拖动');
+        const desiredSet=new Set(desiredIds);
+        let desiredIndex=0;
+        const nextIds = desiredIds ? ids.map(id=>desiredSet.has(id)?desiredIds[desiredIndex++]:id) : moveOrderedItems(ids, sourceIds, targetId, after);
         if (nextIds.every((id, index) => id === ids[index])) return;
         const byId = new Map(members.map(script => [String(script.id), script]));
         const memberIds = new Set(ids);
@@ -307,14 +340,23 @@ export class RegexUiAdapter {
         const next = current.map(script => memberIds.has(String(script.id)) ? byId.get(nextIds[index++]) : script);
         await this.persistScripts(type, next, { allowScope: false, scopeKey: context });
         if (!this.started || generation !== this.generation || this.engine !== engine || this.getCollectionContext(scope) !== context) return;
-        const listId = Object.keys(TYPE_BY_LIST_ID).find(id => TYPE_BY_LIST_ID[id] === scope);
-        const list = document.getElementById(listId);
-        if (list) {
-            const rows = new Map([...list.children].filter(row => row.matches('.regex-script-label')).map(row => [row.id, row]));
-            for (const script of engine.getScriptsByType(type) || []) if (rows.has(String(script.id))) list.append(rows.get(String(script.id)));
-        }
-        this.refreshOrganizerRows();
+        if (!preview || this.orderPreviews.get(context)===preview) this.syncRuleRows(scope,engine.getScriptsByType(type)||[]);
         this.onSaved?.();
+    }
+
+    saveRulePreview(preview) {
+        return this.enqueue(async()=>{
+            try { await this.moveRuleWithinCollection({...preview,preview}); }
+            catch(error) {
+                if(this.started && preview.generation===this.generation && this.getCollectionContext(preview.scope)===preview.context
+                    && this.orderPreviews.get(preview.context)===preview) {
+                    this.syncRuleRows(preview.scope,this.engine.getScriptsByType(this.getType(preview.scope))||[]);
+                }
+                throw error;
+            } finally {
+                if(this.orderPreviews.get(preview.context)===preview)this.orderPreviews.delete(preview.context);
+            }
+        });
     }
 
     createCollection(scope, value) {
@@ -443,7 +485,7 @@ export class RegexUiAdapter {
         const feedback = this.organizerRoot?.querySelector('[data-cla-regex-feedback]');
         try {
             action();
-            if (feedback) feedback.textContent = '分组已保存';
+            if (feedback) feedback.textContent = '';
             return true;
         } catch (error) {
             if (feedback) feedback.textContent = error.message;
@@ -941,6 +983,11 @@ export class RegexUiAdapter {
             const label = editButton.closest('.regex-script-label[id]');
             const typeKey = getTypeKey(editButton);
             this.editorContext = label && typeKey ? { id: label.id, typeKey, scopeKey: this.getCollectionContext(typeKey), opened: false } : null;
+            const key=this.editorDraftKey(this.editorContext);
+            const failed=this.failedEditorDrafts.get(key);
+            if (this.pendingEditorWrites.has(key) || (failed && this.restoreEditorDraft(failed))) {
+                event.preventDefault();event.stopImmediatePropagation();
+            }
             return;
         }
 
@@ -953,6 +1000,9 @@ export class RegexUiAdapter {
         const popup = saveButton?.closest('.popup');
         const editor = popup?.querySelector('.regex_editor');
         const popupInstance = this.popupApi.Popup?.util?.popups?.find(item => item.dlg === popup);
+        if(saveButton && editor && this.busyEditors.has(editor)) {
+            event.preventDefault();event.stopImmediatePropagation();return;
+        }
         if (saveButton && popup && editor && this.editorContext && popupInstance) {
             event.preventDefault();
             event.stopImmediatePropagation();
@@ -967,10 +1017,27 @@ export class RegexUiAdapter {
             }
             const busyEditors = this.busyEditors;
             busyEditors.add(editor);
-            const restore = this.markBusy(saveButton, '正在保存…');
+            const restore = this.lockButton(saveButton);
+            const key=this.editorDraftKey(context);
+            const entry={popupInstance,editor,context,draft,generation:this.generation};
+            // Native closing begins on the click, independently of the write queue/network.
+            entry.closing=Promise.resolve(popupInstance.completeCancelled()).catch(error=>console.debug('[Cloud Lounge Accelerator] 编辑器关闭失败',error));
+            this.pendingEditorWrites.set(key,entry);
+            this.failedEditorDrafts.set(key,entry);
+            if(this.editorDraftKey(this.editorContext)===key)this.editorContext=null;
             this.enqueue(async () => {
-                try { await this.saveExistingEditor({ popupInstance, editor, context, draft }); }
-                finally { restore(); busyEditors.delete(editor); }
+                try {
+                    await this.saveExistingEditor({ popupInstance, editor, context, draft, closed:true });
+                    if(this.failedEditorDrafts.get(key)===entry)this.failedEditorDrafts.delete(key);
+                } catch(error) {
+                    await entry.closing;
+                    if(!this.failedEditorDrafts.has(key) || this.failedEditorDrafts.get(key)===entry)this.failedEditorDrafts.set(key,entry);
+                    this.restoreEditorDraft(entry);
+                    throw new Error(`保存失败，草稿已保留；可再次打开该正则继续编辑。${error.message||error}`);
+                } finally {
+                    restore();busyEditors.delete(editor);
+                    if(this.pendingEditorWrites.get(key)===entry)this.pendingEditorWrites.delete(key);
+                }
             });
             return;
         }
@@ -987,15 +1054,22 @@ export class RegexUiAdapter {
             const pending = {};
             this.deletePending = pending;
             const contexts = new Map(labels.map(label => [getTypeKey(label), this.getCollectionContext(getTypeKey(label))]));
-            const restore = this.markBusy(deleteButton, '等待确认…');
-            this.enqueue(async () => {
+            const restore = this.lockButton(deleteButton);
+            void (async () => {
                 try {
                     const confirmed = await this.popupApi.Popup.show.confirm('删除正则', `确定删除选中的 ${labels.length} 条正则吗？`);
                     if (!confirmed || !this.started) return;
-                    restore.update('正在删除…');
-                    await this.saveDelete(labels, contexts);
+                    const optimistic=this.detachDeleteRows(labels,contexts);
+                    restore();
+                    if(this.deletePending===pending)this.deletePending=false;
+                    await this.enqueue(async()=>{
+                        try { await this.saveDelete(labels,contexts,optimistic); }
+                        finally { optimistic.restore(); }
+                    });
+                } catch(error) {
+                    globalThis.toastr?.error?.(error.message||String(error),'正则删除');
                 } finally { restore(); if (this.deletePending === pending) this.deletePending = false; }
-            });
+            })();
             return;
         }
 
@@ -1040,7 +1114,7 @@ export class RegexUiAdapter {
     }
 
     onPointerDown(event) {
-        if (!this.started || event.button > 0 || event.isPrimary === false || this.groupDrag || this.selectionGesture || this.orderPending) return;
+        if (!this.started || event.button > 0 || event.isPrimary === false || this.groupDrag || this.selectionGesture) return;
         const collectionHandle = event.target?.closest?.('.cla-regex-collection-order-handle');
         if (collectionHandle) {
             const header = collectionHandle.closest('[data-cla-regex-fold]');
@@ -1240,14 +1314,10 @@ export class RegexUiAdapter {
                 this.moveCollection(drag.scope, drag.collection, sortTarget.row.dataset.claRegexFold, sortTarget.after, drag.context);
             });
             else if (commit && drag.active && sortTarget) {
-                const pending = {};
-                this.orderPending = pending;
-                const restore = this.markBusy(drag.source, '正在保存顺序…');
-                this.enqueue(async () => {
-                    try {
-                        await this.moveRuleWithinCollection({scope:drag.scope, context:drag.context, collection:drag.collection,
-                            sourceIds:drag.rows.map(row => row.id), targetId:sortTarget.row.id, after:sortTarget.after});
-                    } finally { restore(); if (this.orderPending === pending) this.orderPending = null; }
+                this.runCollectionAction(()=>{
+                    const preview=this.previewRuleOrder({scope:drag.scope,context:drag.context,collection:drag.collection,
+                        sourceIds:drag.rows.map(row=>row.id),targetId:sortTarget.row.id,after:sortTarget.after});
+                    if(preview)this.saveRulePreview(preview);
                 });
             } else if (commit && drag.active && name) this.runCollectionAction(() => {
                 if (drag.context !== this.getCollectionContext(drag.scope)) throw new Error('预设或角色已切换，请重新拖动');
@@ -1257,26 +1327,67 @@ export class RegexUiAdapter {
         this.suppressRowClickUntil = performance.now() + 350;
     }
 
-    markBusy(button, text) {
-        const old = { disabled: button.disabled, busy: button.getAttribute('aria-busy'), title: button.title };
-        const note = document.createElement('span');
-        note.className = 'cla-regex-operation-status';
-        note.setAttribute('role', 'status');
-        note.textContent = text;
+    lockButton(button) {
+        const old = { disabled: button.disabled, busy: button.getAttribute('aria-busy') };
         button.disabled = true;
         button.setAttribute('aria-busy', 'true');
-        button.title = text;
-        button.after(note);
+        let restored=false;
         const restore = () => {
+            if(restored)return;
+            restored=true;
             button.disabled = old.disabled;
             if (old.busy === null) button.removeAttribute('aria-busy'); else button.setAttribute('aria-busy', old.busy);
-            button.title = old.title;
-            note.remove();
             this.pendingRestores.delete(restore);
         };
-        restore.update = value => { note.textContent = value; button.title = value; };
         this.pendingRestores.add(restore);
         return restore;
+    }
+
+    editorDraftKey(context) { return context ? JSON.stringify([context.scopeKey,context.id]) : ''; }
+
+    restoreEditorDraft(entry) {
+        const {popupInstance,context,generation}=entry;
+        const row=document.getElementById(context.id);
+        if(!this.started || generation!==this.generation || context.scopeKey!==this.getCollectionContext(context.typeKey)
+            || !row || getTypeKey(row)!==context.typeKey || document.querySelector('.regex_editor, dialog[open]:not([closing])')
+            || !popupInstance.dlg || typeof popupInstance.show!=='function')return false;
+        popupInstance.dlg.removeAttribute('closing');
+        popupInstance.result=popupInstance.value=undefined;
+        const popups=this.popupApi.Popup?.util?.popups;
+        if(Array.isArray(popups) && !popups.includes(popupInstance))popups.push(popupInstance);
+        this.editorContext={...context,opened:true};
+        this.failedEditorDrafts.delete(this.editorDraftKey(context));
+        void popupInstance.show().catch(error=>{
+            this.failedEditorDrafts.set(this.editorDraftKey(context),entry);
+            console.debug('[Cloud Lounge Accelerator] 草稿恢复窗口不可用',error);
+        });
+        return true;
+    }
+
+    detachDeleteRows(labels,contexts) {
+        for(const scope of new Set(labels.map(getTypeKey))) {
+            if(!this.started || contexts.get(scope)!==this.getCollectionContext(scope))throw new Error('预设或角色已切换，请重新删除');
+        }
+        const records=new Map(),scopes=new Map(labels.map(row=>[row,getTypeKey(row)]));
+        for(const row of labels) {
+            if(!row.parentNode)continue;
+            const scope=getTypeKey(row),anchor=document.createComment('regex delete');
+            row.before(anchor);row.remove();records.set(row,{anchor,scope});
+        }
+        const commit=rows=>{
+            for(const row of rows){records.get(row)?.anchor.remove();records.delete(row);}
+        };
+        const restore=()=>{
+            for(const [row,{anchor,scope}] of records) {
+                if(anchor.isConnected && contexts.get(scope)===this.getCollectionContext(scope))anchor.replaceWith(row);
+                else anchor.remove();
+            }
+            records.clear();this.pendingRestores.delete(restore);
+            if(this.started)this.scheduleOrganizerRefresh();
+        };
+        this.pendingRestores.add(restore);
+        this.scheduleOrganizerRefresh();
+        return {commit,restore,scopes};
     }
 
     async persistScripts(type, scripts, { allowScope = true, scopeKey = undefined } = {}) {
@@ -1284,12 +1395,14 @@ export class RegexUiAdapter {
         if (scopeKey !== undefined && scopeKey !== this.getCollectionContext(scope)) throw new Error('预设或角色已切换，请重新操作');
         const previous = [...(this.engine.getScriptsByType(type) || [])];
         const engine = this.engine;
+        const submitted=[...scripts];
         try { await engine.saveScriptsByType(scripts, type); }
         catch (error) {
             // Native preset saving updates memory before awaiting the server.
             // Restore only our own array; never overwrite a newer external edit.
-            if (this.engine === engine && this.getCollectionContext(scope) === (scopeKey ?? this.getCollectionContext(scope))
-                && engine.getScriptsByType(type) === scripts) scripts.splice(0, scripts.length, ...previous);
+            if (scripts.length===submitted.length && scripts.every((script,index)=>script===submitted[index])) {
+                scripts.splice(0, scripts.length, ...previous);
+            }
             throw error;
         }
         if (!this.started || this.engine !== engine || (scopeKey !== undefined && scopeKey !== this.getCollectionContext(scope))) return;
@@ -1304,7 +1417,8 @@ export class RegexUiAdapter {
         // by the official API; permission helpers save only when they change.
     }
 
-    async saveExistingEditor({ popupInstance, editor, context, draft: capturedDraft = null }) {
+    async saveExistingEditor({ popupInstance, editor, context, draft: capturedDraft = null, closed = false }) {
+        const generation=this.generation;
         const type = this.getType(context.typeKey);
         const scripts = [...(this.engine.getScriptsByType?.(type) || [])];
         const index = scripts.findIndex(script => String(script.id) === String(context.id));
@@ -1323,7 +1437,7 @@ export class RegexUiAdapter {
             // Native row export/move handlers retain their original object.
             Object.assign(previousScript, draft);
         }
-        if (!this.started || (context.scopeKey !== undefined && context.scopeKey !== this.getCollectionContext(context.typeKey))) return;
+        if (!this.started || generation!==this.generation || (context.scopeKey !== undefined && context.scopeKey !== this.getCollectionContext(context.typeKey))) return;
         const labelName = document.getElementById(context.id)?.querySelector('.regex_script_name');
         if (labelName) {
             labelName.textContent = draft.scriptName;
@@ -1331,22 +1445,22 @@ export class RegexUiAdapter {
         }
         const checkbox = document.getElementById(context.id)?.querySelector('.disable_regex');
         if (checkbox) checkbox.checked = Boolean(draft.disabled);
-        if (capturedDraft && JSON.stringify(readEditorDraft(editor, context.id, draft)) !== JSON.stringify(draft)) {
+        if (!closed && capturedDraft && JSON.stringify(readEditorDraft(editor, context.id, draft)) !== JSON.stringify(draft)) {
             if (changed) this.onSaved?.();
             globalThis.toastr?.info?.('上一版已保存，窗口中还有新的修改，请再次保存', '云酒馆加速器');
             return;
         }
         // Start native closing before scheduling expensive chat impact work.
-        const closing = popupInstance.completeCancelled();
-        if (this.editorContext?.id === context.id) this.editorContext = null;
+        const closing = closed ? null : popupInstance.completeCancelled();
+        if (this.editorDraftKey(this.editorContext) === this.editorDraftKey(context)) this.editorContext = null;
         if (changed) this.onSaved?.();
         await closing;
     }
 
-    async saveDelete(labels, contexts) {
+    async saveDelete(labels, contexts, optimistic = null) {
         const grouped = new Map();
         for (const label of labels) {
-            const scope = getTypeKey(label);
+            const scope = optimistic?.scopes?.get(label) ?? getTypeKey(label);
             if (!grouped.has(scope)) grouped.set(scope, []);
             grouped.get(scope).push(label);
         }
@@ -1359,10 +1473,11 @@ export class RegexUiAdapter {
                 const current = this.engine.getScriptsByType(type) || [];
                 const ids = new Set(rows.map(row => row.id));
                 const next = current.filter(script => !ids.has(String(script.id)));
-                if (next.length === current.length) continue;
+                if (next.length === current.length) { optimistic?.commit(rows); continue; }
                 await this.persistScripts(type, next, { allowScope: false, scopeKey: contexts.get(scope) });
                 completed += current.length - next.length;
-                if (this.started && contexts.get(scope) === this.getCollectionContext(scope)) rows.forEach(row => row.remove());
+                if(optimistic)optimistic.commit(rows);
+                else if (this.started && contexts.get(scope) === this.getCollectionContext(scope)) rows.forEach(row => row.remove());
             } catch (error) { failures.push(error.message); }
         }
         if (completed && this.started) {
@@ -1420,7 +1535,11 @@ export class RegexUiAdapter {
         for (const restore of [...this.pendingRestores]) restore();
         this.busyEditors = new WeakSet();
         this.deletePending = false;
-        this.orderPending = null;
+        for(const preview of this.orderPreviews.values()) {
+            if(preview.context===this.getCollectionContext(preview.scope))this.syncRuleRows(preview.scope,this.engine.getScriptsByType(this.getType(preview.scope))||[],{refresh:false});
+        }
+        this.orderPreviews.clear();
+        this.pendingEditorWrites.clear();
         document.removeEventListener('click', this.onClick, true);
         document.removeEventListener('input', this.onInput, true);
         document.removeEventListener('change', this.onChange, true);
