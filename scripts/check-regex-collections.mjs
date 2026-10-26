@@ -33,7 +33,7 @@ const server = createServer((request, response) => {
         response.end('export {};');
     } else {
         response.setHeader('Content-Type', 'text/html');
-        response.end('<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body></body></html>');
+        response.end('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body></body></html>');
     }
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -45,6 +45,8 @@ try {
     });
     for (const viewport of [{ width: 1100, height: 1000 }, { width: 390, height: 844 }]) {
         const page = await browser.newPage({ viewport });
+        const errors = [];
+        page.on('pageerror', error => errors.push(error.message));
         await page.goto(`http://127.0.0.1:${server.address().port}`);
         await page.addStyleTag({ content: `
             :root { --SmartThemeBodyColor: #333; }
@@ -286,7 +288,79 @@ try {
         assert.equal(await page.locator('#a1').isVisible(), true);
         assert.equal(await page.evaluate(() => originalRows.every(row => !row.style.getPropertyValue('--cla-regex-order'))), true);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-        console.log(`PASS ${viewport.width}px: create/rename/move/persist groups, 260–760px sidebar layout, independent scopes, native rows/actions/order, search, selection, mutation refresh and cleanup`);
+        assert.equal(await page.locator('[data-cla-regex-scope-actions]').count(), 0);
+
+        // Reproduce the reported numbered packs, then use each local create button.
+        await page.evaluate(async () => {
+            const {RegexUiAdapter} = await import('/adapter.js');
+            const names = {a1:'01 | 社交动态 | 正文', a2:'19 | 社交动态 | 微博 · 动态外观',
+                plain:'00b | iMessage | 会话视角', 'preset-plain':'01 | iMessage | 连续消息',
+                'scoped-plain':'16 | iMessage | 文字气泡'};
+            for (const [id, name] of Object.entries(names)) {
+                document.querySelector('#'+id+' .regex_script_name').textContent = name;
+                Object.values(scripts).flat().find(script => script.id === id).scriptName = name;
+            }
+            window.quickOriginalScripts = JSON.stringify(scripts);
+            window.quickNativeWrites = saved.length;
+            window.collectionSettings = {};
+            window.adapter = new RegexUiAdapter({extensionSettings:collectionSettings});
+            await adapter.start();
+        });
+        await page.waitForFunction(() => document.querySelector('#plain').dataset.claRegexCollection === 'iMessage');
+        assert.deepEqual(await page.evaluate(() => ['a1','a2'].map(id=>document.getElementById(id).dataset.claRegexCollection)), ['社交动态','社交动态']);
+        assert.deepEqual(await page.evaluate(() => ['plain','preset-plain','scoped-plain'].map(id=>document.getElementById(id).dataset.claRegexCollection)), ['iMessage','iMessage','iMessage']);
+        assert.equal(await page.locator('#saved_regex_scripts [data-cla-regex-fold="社交动态"] small').textContent(), '2 条');
+        assert.equal(await page.locator('[data-cla-regex-create-scope]').count(), 3);
+        assert.equal(await page.locator('#saved_regex_scripts [data-cla-regex-create-scope]').count(), 0, 'create controls stay outside native sortable lists');
+        for (const [scope, list] of [['GLOBAL','saved_regex_scripts'], ['PRESET','saved_preset_scripts'], ['SCOPED','saved_scoped_scripts']]) {
+            await page.locator(`[data-cla-regex-create-scope="${scope}"]`).click();
+            const group = page.locator(`#${list} [data-cla-regex-fold="新分组"]`);
+            assert.equal(await group.isVisible(), true);
+            assert.equal(await group.locator('small').textContent(), '0 条');
+            assert.equal(await group.locator('.cla-regex-rename-form').isVisible(), true);
+            assert.equal(await group.locator('input').evaluate(input => input === document.activeElement), true);
+            if (scope === 'SCOPED') {
+                await group.locator('input').fill('手机工具');
+                await group.locator('input').press('Enter');
+            } else await group.locator('input').press('Escape');
+        }
+        await page.locator('[data-cla-regex-create-scope="GLOBAL"]').click();
+        await page.locator('#saved_regex_scripts [data-cla-regex-fold="新分组2"] input').press('Escape');
+        await page.evaluate(() => adapter.moveRowsToCollection([document.getElementById('scoped-plain')], '手机工具'));
+        assert.equal(await page.locator('#saved_scoped_scripts [data-cla-regex-fold="手机工具"] small').textContent(), '1 条');
+        assert.equal(await page.evaluate(() => JSON.stringify(scripts) === quickOriginalScripts && saved.length === quickNativeWrites), true, 'recognition and empty groups preserve every native definition and order');
+        assert.deepEqual(await page.evaluate(() => nativeIds()), reorderedIds);
+        const scopesSettled = await page.evaluate(() => refreshes);
+        await page.waitForTimeout(120);
+        assert.equal(await page.evaluate(() => refreshes), scopesSettled, 'local create toolbars cannot cause mutation loops');
+        if (process.env.CLA_REGEX_SCREENSHOT_PREFIX) await page.screenshot({path:`${process.env.CLA_REGEX_SCREENSHOT_PREFIX}-numbered-${viewport.width}.png`,fullPage:true});
+        await page.evaluate(async () => {
+            const {RegexUiAdapter} = await import('/adapter.js');
+            adapter.stop();
+            window.collectionSettings = JSON.parse(JSON.stringify(collectionSettings));
+            window.adapter = new RegexUiAdapter({extensionSettings:collectionSettings});
+            await adapter.start();
+        });
+        await page.waitForFunction(() => document.querySelector('#scoped-plain').dataset.claRegexCollection === '手机工具');
+        assert.equal(await page.locator('#saved_regex_scripts [data-cla-regex-fold="新分组2"]').count(), 1);
+        await page.locator('#saved_regex_scripts [data-cla-regex-fold="社交动态"] .cla-regex-collection-select').click();
+        assert.equal(await page.locator('#a1 .regex_bulk_checkbox').isChecked(), true);
+        assert.equal(await page.locator('#a2 .regex_bulk_checkbox').isChecked(), true);
+        await page.evaluate(() => {
+            document.querySelectorAll('#saved_scoped_scripts .regex-script-label').forEach(row => row.remove());
+            scripts[2] = [];
+            adapter.saveCollectionState('SCOPED', {groups:[], assignments:{}});
+            adapter.refreshOrganizerRows();
+        });
+        assert.equal(await page.locator('#saved_scoped_scripts [data-cla-regex-fold]').count(), 0);
+        await page.locator('[data-cla-regex-create-scope="SCOPED"]').click();
+        assert.equal(await page.locator('#saved_scoped_scripts [data-cla-regex-fold="新分组"] small').textContent(), '0 条', 'a scope with no rules still supports its first empty group');
+        await page.locator('#saved_scoped_scripts [data-cla-regex-fold="新分组"] input').press('Escape');
+        await page.evaluate(() => adapter.stop());
+        assert.equal(await page.locator('[data-cla-regex-scope-actions]').count(), 0);
+        assert.deepEqual(await page.evaluate(() => nativeIds()), reorderedIds);
+        assert.deepEqual(errors, []);
+        console.log(`PASS ${viewport.width}px: numbered pack recognition, per-scope quick empty groups, rename/move/persistence, 260–760px sidebar layout, native rows/actions/order, search, selection and cleanup`);
         await page.close();
     }
 } finally {

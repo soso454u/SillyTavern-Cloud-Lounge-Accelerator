@@ -19,6 +19,28 @@ test('groups bracket-prefixed regex names into organizer collections', () => {
     assert.equal(getRegexCollectionName('普通正则'), '未分类');
 });
 
+test('uses the middle collection field in numbered social and iMessage rule names', () => {
+    for (const name of ['01 | 社交动态 | 正文', '19 | 社交动态 | 微博 · 动态外观']) {
+        assert.equal(getRegexCollectionName(name), '社交动态');
+    }
+    for (const name of ['00 | iMessage | 顶部联系人 · 无侧边头像', '00b | iMessage | 会话视角 · 手机主人与联系人', '16 | iMessage | 文字气泡 · 圆润短尾']) {
+        assert.equal(getRegexCollectionName(name), 'iMessage');
+    }
+});
+
+test('accepts compact and full-width pipe separators while retaining the collection spelling', () => {
+    for (const name of [' 00b|iMessage|会话视角 ', '０１｜iMessage｜文字预处理', '02 │ iMessage │ 引用回复', '02B | iMessage | 文字预处理 | 其他说明']) {
+        assert.equal(getRegexCollectionName(name), 'iMessage');
+    }
+});
+
+test('keeps explicit bracket prefixes and avoids inventing collections from ordinary or incomplete titles', () => {
+    assert.equal(getRegexCollectionName('[明确分组] 01 | iMessage | 正文'), '明确分组');
+    for (const name of ['姜知宜 · 开场白', '状态栏 · 冷银毛玻璃（选一）', 'iMessage | 正文', '01 | iMessage', '01 | | 正文', '01 | iMessage |  ', '版本1 | iMessage | 正文']) {
+        assert.equal(getRegexCollectionName(name), '未分类', name);
+    }
+});
+
 function collectionFixture(settings = {}) {
     const scripts = {
         GLOBAL: [{ id:'a', scriptName:'[旧组]正则 A', findRegex:'a', replaceString:'A', disabled:true }, { id:'b', scriptName:'普通规则', placement:[1,2] }],
@@ -56,6 +78,53 @@ test('creates persistent empty collections and rejects duplicate or reserved nam
     for (const name of ['', ' ', '未分类', 'all', 'a\nb', 'x'.repeat(61)]) assert.throws(() => normalizeRegexCollectionName(name));
     assert.equal(normalizeRegexCollectionName('<分组> "自定义"'),'<分组> "自定义"');
     assert.equal(f.saves,1);
+});
+
+test('quick creation adds only a unique empty group to the chosen scope', () => {
+    const f = collectionFixture();
+    assert.equal(f.adapter.createEmptyCollection('GLOBAL'), '新分组');
+    assert.equal(f.adapter.createEmptyCollection('GLOBAL'), '新分组2');
+    assert.equal(f.adapter.createEmptyCollection('PRESET'), '新分组');
+    assert.deepEqual(f.adapter.getCollectionState('GLOBAL').groups, ['新分组', '新分组2']);
+    assert.deepEqual(f.adapter.getCollectionState('PRESET').groups, ['新分组']);
+    assert.deepEqual(f.adapter.getCollectionState('SCOPED').groups, []);
+    assert.deepEqual(f.adapter.getCollectionState('GLOBAL').assignments, {});
+    assert.deepEqual(f.scripts, f.original);
+    const reloaded = collectionFixture(JSON.parse(JSON.stringify(f.settings)));
+    assert.deepEqual(reloaded.adapter.getCollectionState('GLOBAL').groups, ['新分组', '新分组2']);
+    assert.equal(f.saves, 3);
+});
+
+test('quick creation skips inferred name collisions and refuses a missing scope before changing view or settings', () => {
+    const f = collectionFixture();
+    f.scripts.GLOBAL[0].scriptName = '[新分组]正文';
+    assert.equal(f.adapter.createEmptyCollection('GLOBAL'), '新分组2');
+    f.current.preset = null;
+    f.adapter.autoCollapseCollections = false;
+    f.adapter.reorderMode = true;
+    const before = JSON.stringify(f.settings);
+    assert.throws(() => f.adapter.createEmptyCollection('PRESET'), /先选择/);
+    assert.equal(JSON.stringify(f.settings), before);
+    assert.equal(f.adapter.autoCollapseCollections, false);
+    assert.equal(f.adapter.reorderMode, true);
+    assert.equal(f.saves, 1);
+});
+
+test('manual collections and explicit unclassified assignments override inferred second fields across scopes', () => {
+    const f = collectionFixture();
+    for (const scope of ['GLOBAL', 'PRESET', 'SCOPED']) {
+        f.scripts[scope][0].scriptName = '00b | iMessage | 会话视角';
+        assert.equal(f.adapter.getAssignedCollection(scope, 'a', f.scripts[scope][0].scriptName), 'iMessage');
+    }
+    const original = structuredClone(f.scripts);
+    f.adapter.moveRowsToCollection([f.row('GLOBAL', 'a')], '我的工具');
+    f.adapter.moveRowsToCollection([f.row('SCOPED', 'a')], '未分类');
+    const settings = JSON.parse(JSON.stringify(f.settings));
+    const reloaded = collectionFixture(settings).adapter;
+    assert.equal(reloaded.getAssignedCollection('GLOBAL', 'a', '00b | iMessage | 会话视角'), '我的工具');
+    assert.equal(reloaded.getAssignedCollection('SCOPED', 'a', '00b | iMessage | 会话视角'), '未分类');
+    assert.equal(reloaded.getAssignedCollection('PRESET', 'a', '00b | iMessage | 会话视角'), 'iMessage');
+    assert.deepEqual(f.scripts, original);
 });
 
 test('renames inferred collections without changing native names, content, permissions or order', () => {

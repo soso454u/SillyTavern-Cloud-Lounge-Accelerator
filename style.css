@@ -833,3 +833,23 @@ body.cla-preset-drag-guard [id$="prompt_manager_list"] [data-pm-identifier][clas
     pointer-events: none;
     opacity: 0.35;
 }
+
+#regex_container .cla-regex-scope-actions {
+    display: flex;
+    justify-content: flex-end;
+    min-width: 0;
+    max-width: 100%;
+    padding: 0.25rem 0;
+    box-sizing: border-box;
+}
+#regex_container .cla-regex-scope-actions .menu_button {
+    width: auto;
+    min-width: 0;
+    max-width: 100%;
+    margin: 0;
+    box-sizing: border-box;
+    color: inherit;
+    font-family: inherit;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}

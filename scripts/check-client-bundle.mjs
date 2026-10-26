@@ -57,7 +57,7 @@ assets.set('/scripts/group-chats.js', 'export const selected_group=null; export 
 assets.set('/scripts/utils.js', 'export const regexFromString = input => new RegExp(input);');
 assets.set('/scripts/extensions/regex/engine.js', `
     export const SCRIPT_TYPES = {GLOBAL:0, PRESET:1, SCOPED:2};
-    export const getScriptsByType = () => [];
+    export const getScriptsByType = type => type === 0 ? (window.fixtureScripts || []) : [];
 `);
 let deferredDelay = 0;
 const server = createServer((request, response) => {
@@ -210,6 +210,24 @@ try {
             return {groups:extension_settings.cloud_lounge_accelerator_regex_collections?.['["GLOBAL"]']?.groups,
                 saves:window.settingsSaves||0};
         }),{groups:['发布包分组'],saves:1},'custom group catalog uses the live native settings object and save callback');
+        await page.evaluate(() => {
+            window.fixtureScripts = [{id:'bundle-numbered',scriptName:'00b | iMessage | 会话视角'}];
+            const row = document.createElement('div');
+            row.id = 'bundle-numbered';
+            row.className = 'regex-script-label';
+            row.innerHTML = '<input class="regex_bulk_checkbox" type="checkbox"><span class="regex_script_name">00b | iMessage | 会话视角</span>';
+            document.querySelector('#saved_regex_scripts').append(row);
+        });
+        await page.waitForFunction(() => document.getElementById('bundle-numbered').dataset.claRegexCollection === 'iMessage');
+        assert.equal(await page.locator('[data-cla-regex-create-scope]').count(), 3);
+        await page.locator('[data-cla-regex-create-scope="GLOBAL"]').click();
+        assert.equal(await page.locator('#saved_regex_scripts [data-cla-regex-fold="新分组"] .cla-regex-rename-form').isVisible(), true);
+        await page.locator('#saved_regex_scripts [data-cla-regex-fold="新分组"] input').press('Escape');
+        assert.deepEqual(await page.evaluate(async () => {
+            const {extension_settings} = await import('/scripts/extensions.js');
+            return {groups:extension_settings.cloud_lounge_accelerator_regex_collections?.['["GLOBAL"]']?.groups,
+                saves:window.settingsSaves||0};
+        }), {groups:['发布包分组','新分组'],saves:2}, 'quick empty groups persist through the published runtime');
         await page.evaluate(async()=>{
             const native=await import('/script.js');
             window.streamingFixture=native.beginStream();window.originalProgress=streamingFixture.onProgressStreaming;
@@ -220,6 +238,7 @@ try {
         assert.equal(await page.locator('#cloud-lounge-accelerator-settings').count(), 0);
         assert.equal(await page.evaluate(async () => (await import('/scripts/power-user.js')).power_user.chat_truncation), 100);
         assert.equal(await page.locator('.cla-regex-organizer-toggle').count(), 0);
+        assert.equal(await page.locator('[data-cla-regex-scope-actions]').count(), 0);
         assert.deepEqual(errors, []);
         await page.close();
     }
@@ -241,7 +260,7 @@ try {
     await page.waitForTimeout(450);
     assert.equal(await page.locator('#cloud-lounge-accelerator-settings').count(), 0);
     assert.deepEqual(errors, []);
-    console.log('PASS production bundle on desktop/mobile: startup budget, ordinary scroll/theme restoration, unchanged geometry/text/position, streaming/finalization, native group persistence, preferences, stop/disable and delayed startup');
+    console.log('PASS production bundle on desktop/mobile: numbered collection recognition, quick empty group creation/persistence, startup budget, scroll/theme restoration, streaming/finalization, preferences, disable and delayed startup');
 } finally {
     await browser?.close();
     await new Promise(resolve => server.close(resolve));

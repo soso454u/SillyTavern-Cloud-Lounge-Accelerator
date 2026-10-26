@@ -21,7 +21,9 @@ export function getRegexCollectionName(scriptName) {
     const name = String(scriptName || '').trim();
     const bracketed = name.match(/^(?:\[([^\]]+)\]|【([^】]+)】|〔([^〕]+)〕|「([^」]+)」|『([^』]+)』)/u);
     const collection = bracketed?.slice(1).find(Boolean)?.trim();
-    return collection || UNGROUPED_COLLECTION;
+    // Numbered packs use the second field as their collection, e.g. 00b | iMessage | 会话视角.
+    const numbered = name.match(/^[0-9０-９]+[a-z]?\s*[|｜│]\s*([^|｜│]+)[|｜│]\s*\S/iu);
+    return collection || numbered?.[1].trim() || UNGROUPED_COLLECTION;
 }
 
 export function getRegexCollectionKey(scope = '', collection = UNGROUPED_COLLECTION) {
@@ -74,9 +76,9 @@ function getTypeKey(element) {
 
 function mutationAffectsRegexUi(record) {
     const target = record.target instanceof Element ? record.target : record.target?.parentElement;
-    if (target?.closest?.('[data-cla-regex-fold]')) return false;
+    if (target?.closest?.('[data-cla-regex-fold], [data-cla-regex-scope-actions]')) return false;
     const changedNodes = [...(record.addedNodes || []), ...(record.removedNodes || [])];
-    if (changedNodes.length && changedNodes.every(node => node?.matches?.('[data-cla-regex-fold]'))) return false;
+    if (changedNodes.length && changedNodes.every(node => node?.matches?.('[data-cla-regex-fold], [data-cla-regex-scope-actions]'))) return false;
     if (target?.closest?.(REGEX_LIST_SELECTOR)) return true;
     return changedNodes.some(node => (
         node?.matches?.('.regex_settings, .regex-script-label, #saved_regex_scripts, #saved_scoped_scripts, #saved_preset_scripts')
@@ -261,6 +263,58 @@ export class RegexUiAdapter {
         state.groups.push(name);
         this.saveCollectionState(scope, state);
         this.finishCollectionChange(scope, name);
+    }
+
+    createEmptyCollection(scope) {
+        if (!this.getCollectionContext(scope)) throw new Error('请先选择对应的预设或角色');
+        const names = this.getScopeCollections(scope);
+        let name = '新分组';
+        for (let suffix = 2; names.has(name); suffix++) name = `新分组${suffix}`;
+        // A newly created empty group must be visible even from search or native-order view.
+        this.reorderMode = false;
+        if (!this.autoCollapseCollections) {
+            this.autoCollapseCollections = true;
+            this.saveAutoCollapseSetting();
+            const checkbox = this.organizerRoot?.querySelector('[data-cla-regex-auto-collapse]');
+            if (checkbox) checkbox.checked = true;
+        }
+        for (const selector of ['[data-cla-regex-collection]', '[data-cla-regex-scope]', '[data-cla-regex-search]']) {
+            const input = this.organizerRoot?.querySelector(selector);
+            if (input) input.value = selector === '[data-cla-regex-search]' ? '' : 'all';
+        }
+        this.createCollection(scope, name);
+        this.collectionGroups.find(group => group.scope === scope && group.collection === name)
+            ?.header.querySelector('.cla-regex-collection-rename')?.click();
+        return name;
+    }
+
+    refreshScopeActions() {
+        for (const list of document.querySelectorAll(REGEX_LIST_SELECTOR)) {
+            const scope = TYPE_BY_LIST_ID[list.id];
+            let actions = list.previousElementSibling;
+            if (actions?.dataset.claRegexScopeActions !== scope) {
+                actions = document.createElement('div');
+                actions.className = 'cla-regex-scope-actions';
+                actions.dataset.claRegexScopeActions = scope;
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'menu_button menu_button_icon';
+                button.dataset.claRegexCreateScope = scope;
+                button.textContent = '+ 新建分组';
+                button.addEventListener('click', () => this.runCollectionAction(() => {
+                    if (actions.dataset.claRegexContext !== this.getCollectionContext(scope)) throw new Error('预设或角色已切换，请重新操作');
+                    this.createEmptyCollection(scope);
+                }));
+                actions.append(button);
+                // Outside sortable lists: native saving sees exactly its existing rule rows/headers.
+                list.before(actions);
+            }
+            const context = this.getCollectionContext(scope);
+            actions.dataset.claRegexContext = context || '';
+            const button = actions.querySelector('button');
+            button.disabled = !context;
+            button.title = context ? '在当前范围新建一个空分组，可改名或拖入正则' : '请先选择对应的预设或角色';
+        }
     }
 
     renameCollection(scope, previous, value) {
@@ -475,6 +529,7 @@ export class RegexUiAdapter {
     }
 
     refreshOrganizerRows() {
+        this.refreshScopeActions();
         const rows = this.getRows();
         const collections = new Map();
         for (const scope of Object.values(TYPE_BY_LIST_ID)) {
@@ -1263,6 +1318,7 @@ export class RegexUiAdapter {
         });
         document.querySelector('#regex_container')?.classList?.remove?.('cla-regex-drag-selecting');
         this.organizerButton?.remove?.();
+        document.querySelectorAll('[data-cla-regex-scope-actions]').forEach(actions => actions.remove());
         this.reorderButton?.remove?.();
         this.clearCollectionFolds();
         this.organizerRoot?.remove?.();
