@@ -58,6 +58,12 @@ assets.set('/scripts/utils.js', 'export const regexFromString = input => new Reg
 assets.set('/scripts/extensions/regex/engine.js', `
     export const SCRIPT_TYPES = {GLOBAL:0, PRESET:1, SCOPED:2};
     export const getScriptsByType = type => type === 0 ? (window.fixtureScripts || []) : [];
+    export const saveScriptsByType = async (next, type) => {
+        if (type !== 0) throw new Error('unexpected fixture scope');
+        window.fixtureScripts = next;
+        window.ruleOrderWrites = (window.ruleOrderWrites || 0) + 1;
+        (await import('/script.js')).saveSettingsDebounced();
+    };
 `);
 let deferredDelay = 0;
 const server = createServer((request, response) => {
@@ -228,6 +234,26 @@ try {
             return {groups:extension_settings.cloud_lounge_accelerator_regex_collections?.['["GLOBAL"]']?.groups,
                 saves:window.settingsSaves||0};
         }), {groups:['发布包分组','新分组'],saves:2}, 'quick empty groups persist through the published runtime');
+        await page.evaluate(() => {
+            fixtureScripts.push({id:'bundle-numbered-2',scriptName:'01 | iMessage | 正文'});
+            const row=document.createElement('div');row.id='bundle-numbered-2';row.className='regex-script-label';
+            row.innerHTML='<input class="regex_bulk_checkbox" type="checkbox"><span class="regex_script_name">01 | iMessage | 正文</span>';
+            document.querySelector('#saved_regex_scripts').append(row);
+        });
+        await page.waitForFunction(()=>document.querySelector('#bundle-numbered-2 .cla-regex-group-handle'));
+        await page.locator('#saved_regex_scripts [data-cla-regex-fold="iMessage"] .cla-regex-collection-toggle').click();
+        const handle=page.locator('#bundle-numbered-2 .cla-regex-group-handle');
+        assert.equal(await handle.textContent(),'⠿','published rules expose one unified grip');
+        await handle.scrollIntoViewIfNeeded();
+        const grip=await handle.boundingBox();
+        await page.mouse.move(grip.x+grip.width/2,grip.y+grip.height/2);
+        await page.mouse.down();await page.mouse.move(grip.x+grip.width/2+10,grip.y+grip.height/2);
+        await page.locator('.cla-regex-drop-tray').waitFor();
+        const target=await page.locator('#bundle-numbered').boundingBox();
+        await page.mouse.move(target.x+target.width/2,target.y+target.height/4);await page.mouse.up();
+        await page.waitForFunction(()=>window.ruleOrderWrites===1);
+        assert.deepEqual(await page.evaluate(()=>fixtureScripts.map(script=>script.id)),['bundle-numbered-2','bundle-numbered']);
+        assert.equal(await page.locator('.cla-regex-reorder-toggle').textContent(),'查看原始顺序','sorting remains in collection view');
         await page.evaluate(async()=>{
             const native=await import('/script.js');
             window.streamingFixture=native.beginStream();window.originalProgress=streamingFixture.onProgressStreaming;
@@ -260,7 +286,7 @@ try {
     await page.waitForTimeout(450);
     assert.equal(await page.locator('#cloud-lounge-accelerator-settings').count(), 0);
     assert.deepEqual(errors, []);
-    console.log('PASS production bundle on desktop/mobile: numbered collection recognition, quick empty group creation/persistence, startup budget, scroll/theme restoration, streaming/finalization, preferences, disable and delayed startup');
+    console.log('PASS production bundle on desktop/mobile: unified grip and native order saving in collection view, recognition, empty groups, startup budget, scroll/theme restoration, streaming/finalization, disable and delayed startup');
 } finally {
     await browser?.close();
     await new Promise(resolve => server.close(resolve));

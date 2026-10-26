@@ -853,3 +853,25 @@ body.cla-preset-drag-guard [id$="prompt_manager_list"] [data-pm-identifier][clas
     white-space: normal;
     overflow-wrap: anywhere;
 }
+
+#regex_container .cla-regex-collection-order-handle {
+    flex: 0 0 1.4em;
+    min-width: 0;
+    width: 1.4em;
+    padding: 0.15em;
+    border: 0;
+    margin: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+#regex_container :is(.regex-script-label, .cla-regex-collection-header).cla-regex-sort-before {
+    box-shadow: inset 0 3px 0 var(--SmartThemeQuoteColor, #5b98e5) !important;
+}
+#regex_container :is(.regex-script-label, .cla-regex-collection-header).cla-regex-sort-after {
+    box-shadow: inset 0 -3px 0 var(--SmartThemeQuoteColor, #5b98e5) !important;
+}

@@ -6,7 +6,7 @@
   "js": "dist/index.js",
   "css": "style.css",
   "author": "soso454u",
-  "version": "2.1.40",
+  "version": "2.1.41",
   "auto_update": true,
   "hooks": {
     "activate": "onActivate",

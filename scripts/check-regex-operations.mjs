@@ -141,10 +141,60 @@ try {
         assert.equal(await page.locator('dialog.popup').count(),0);
         assert.equal(await page.evaluate(()=>data[2][0].replaceString),'newer draft');
         assert.equal(await page.evaluate(()=>nativeSaves),0);
+        await page.locator('.cla-regex-reorder-toggle').click();
+        await page.evaluate(()=>{adapter.clearRowSelection();adapter.openCollections.add('["GLOBAL","A"]');adapter.applyOrganizerFilters();});
+        const originalGlobalDefinitions=await page.evaluate(()=>Object.fromEntries(data[0].map(script=>[script.id,JSON.stringify(script)])));
+        async function sortRule(sourceId,targetId,{cancel=false}={}) {
+            await page.locator('#'+sourceId+' .cla-regex-group-handle').evaluate(node=>node.scrollIntoView({block:'center'}));
+            const start=await center(page.locator('#'+sourceId+' .cla-regex-group-handle'));
+            await pointer('down',start.x,start.y);await pointer('move',start.x+10,start.y);
+            await page.locator('.cla-regex-drop-tray').waitFor();
+            const box=await page.locator('#'+targetId).boundingBox();
+            const target={x:box.x+box.width/2,y:box.y+box.height/4};
+            await pointer('move',target.x,target.y);
+            await pointer(cancel?'cancel':'up',target.x,target.y);
+            await page.evaluate(()=>adapter.saveQueue);
+        }
+        const beforeSortWrites=await page.evaluate(()=>writes.length);
+        await sortRule('GLOBAL-10','GLOBAL-9');
+        await page.waitForFunction(count=>writes.length===count,beforeSortWrites+1);
+        assert.deepEqual(await page.evaluate(()=>data[0].slice(9,12).map(script=>script.id)),['GLOBAL-10','GLOBAL-9','GLOBAL-11']);
+        assert.deepEqual(await page.evaluate(()=>originalIds()),await page.evaluate(()=>data[0].map(script=>script.id)),'native DOM order follows the saved execution order');
+        assert.equal(await page.evaluate(()=>adapter.reorderMode),false,'sorting never leaves collection view');
+        await page.evaluate(()=>{adapter.setRowSelected(document.getElementById('GLOBAL-11'),true);adapter.setRowSelected(document.getElementById('GLOBAL-12'),true);});
+        await sortRule('GLOBAL-11','GLOBAL-9');
+        assert.deepEqual(await page.evaluate(()=>data[0].slice(9,14).map(script=>script.id)),['GLOBAL-10','GLOBAL-11','GLOBAL-12','GLOBAL-9','GLOBAL-13']);
+        assert.equal(await page.evaluate(()=>writes.length),beforeSortWrites+2);
+        assert.deepEqual(await page.evaluate(()=>Object.fromEntries(data[0].map(script=>[script.id,JSON.stringify(script)]))),originalGlobalDefinitions,'sorting preserves rule definitions and switches');
+        await page.evaluate(()=>adapter.clearRowSelection());
+        const savedOrder=await page.evaluate(()=>data[0].map(script=>script.id));
+        await sortRule('GLOBAL-13','GLOBAL-9',{cancel:true});
+        assert.deepEqual(await page.evaluate(()=>data[0].map(script=>script.id)),savedOrder);
+        assert.equal(await page.evaluate(()=>writes.length),beforeSortWrites+2);
+        const headerA=page.locator('#saved_regex_scripts [data-cla-regex-fold="A"]');
+        const headerB=page.locator('#saved_regex_scripts [data-cla-regex-fold="B"]');
+        await headerA.evaluate(node=>node.scrollIntoView({block:'center'}));
+        const groupStart=await center(headerA.locator('.cla-regex-collection-order-handle'));
+        await pointer('down',groupStart.x,groupStart.y);await pointer('move',groupStart.x+10,groupStart.y);
+        await headerB.evaluate(node=>node.scrollIntoView({block:'center'}));
+        const groupBox=await headerB.boundingBox();
+        await pointer('move',groupBox.x+groupBox.width/2,groupBox.y+groupBox.height/4);
+        await pointer('up',groupBox.x+groupBox.width/2,groupBox.y+groupBox.height/4);
+        assert.deepEqual(await page.evaluate(()=>adapter.collectionGroups.filter(group=>group.scope==='GLOBAL').map(group=>group.collection)),['A','B']);
+        assert.equal(await page.evaluate(()=>writes.length),beforeSortWrites+2,'moving titles saves only display settings');
+        assert.deepEqual(await page.evaluate(()=>data[0].map(script=>script.id)),savedOrder);
+        await page.evaluate(async()=>{
+            const {RegexUiAdapter}=await import('/adapter.js');
+            const settings=JSON.parse(JSON.stringify(adapter.extensionSettings));adapter.stop();
+            window.adapter=new RegexUiAdapter({extensionSettings:settings,onSaved:()=>refreshes++});await adapter.start();
+        });
+        await page.waitForFunction(()=>document.querySelector('.cla-regex-collection-order-handle'));
+        assert.deepEqual(await page.evaluate(()=>adapter.collectionGroups.filter(group=>group.scope==='GLOBAL').map(group=>group.collection)),['A','B']);
+        assert.deepEqual(await page.evaluate(()=>originalIds()),savedOrder);
         await page.evaluate(()=>adapter.stop());
         assert.equal(await page.locator('.cla-regex-group-handle,.cla-regex-drop-tray,.cla-regex-operation-status').count(),0);
         assert.deepEqual(errors,[]);
-        console.log(`PASS ${touch?'touch':'mouse'}: fast range selection, selected/native-order group drag, cancellation, one-write bulk delete, pending UI, editor double click/new typing and cleanup`);
+        console.log(`PASS ${touch?'touch':'mouse'}: unified sort/group handle, selected block sorting, persisted collection title order, cancellation, native-order grouping, bulk delete, editor saves and cleanup`);
         await page.close();
     }
 } finally {await browser?.close();await new Promise(resolve=>server.close(resolve));}
