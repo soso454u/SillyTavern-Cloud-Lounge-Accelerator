@@ -53,6 +53,7 @@ assets.set('/scripts/power-user.js', 'export const power_user = {chat_truncation
 assets.set('/lib.js', 'export const hljs = {highlightElement() {}, highlightBlock() {}, highlightAll() {}};');
 assets.set('/scripts/openai.js', 'export const promptManager = null;');
 assets.set('/scripts/popup.js', 'export const Popup = {util:{popups:[]}};');
+assets.set('/scripts/group-chats.js', 'export const selected_group=null; export const groups=[];');
 assets.set('/scripts/utils.js', 'export const regexFromString = input => new RegExp(input);');
 assets.set('/scripts/extensions/regex/engine.js', `
     export const SCRIPT_TYPES = {GLOBAL:0, PRESET:1, SCOPED:2};

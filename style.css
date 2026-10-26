@@ -792,3 +792,44 @@ body.cla-preset-drag-guard [id$="prompt_manager_list"] [data-pm-identifier][clas
         -webkit-tap-highlight-color: transparent;
     }
 }
+
+/* Native chat history batch selection, including narrow/mobile themes. */
+#select_chat_popup .cla-chat-batch-toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    flex: 0 0 auto;
+    gap: 6px;
+    padding: 6px 0;
+    min-width: 0;
+}
+#select_chat_popup .cla-chat-batch-toolbar button {
+    width: auto;
+    max-width: 100%;
+    min-height: 32px;
+    margin: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+#select_chat_popup .cla-chat-batch-toolbar [hidden],
+#select_chat_popup .cla-chat-batch-choice[hidden] { display: none !important; }
+#select_chat_popup .cla-chat-batch-toolbar button:disabled { opacity: 0.5; cursor: default; }
+#select_chat_popup .cla-chat-batch-toolbar [data-cla-chat-action="delete"] { color: var(--SmartThemeQuoteColor, #c45e4b); }
+#select_chat_popup .cla-chat-batch-status { font-size: 0.85em; overflow-wrap: anywhere; min-width: 0; }
+#select_chat_popup .cla-chat-batch-choice {
+    display: flex;
+    align-items: center;
+    align-self: flex-start;
+    gap: 6px;
+    min-height: 32px;
+    padding: 2px 6px;
+    cursor: pointer;
+    font-size: 0.85em;
+}
+#select_chat_popup .cla-chat-batch-choice input { margin: 0; width: 18px; height: 18px; flex: 0 0 18px; }
+#select_chat_popup .cla-chat-batch-mode .select_chat_block { cursor: pointer; }
+#select_chat_popup .cla-chat-batch-selected { outline: 2px solid var(--SmartThemeQuoteColor, #7594df); outline-offset: -2px; }
+#select_chat_popup .cla-chat-batch-mode :is(.PastChat_cross, .renameChatButton, .exportRawChatButton, .exportChatButton) {
+    pointer-events: none;
+    opacity: 0.35;
+}

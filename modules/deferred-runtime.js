@@ -5,6 +5,7 @@ import { PerformanceConfigController } from './performance-config.js';
 import { RegexRefreshController } from './regex-refresh.js';
 import { RegexUiAdapter } from './regex-ui-adapter.js';
 import { StreamingRenderOptimizer } from './streaming-render-optimizer.js';
+import { ChatHistoryBatchActions } from './chat-history-batch.js';
 export { copyDiagnosticText } from './interaction-diagnostics.js';
 export { repairAccelerator } from './repair.js';
 export { SettingsPanel } from '../ui/panel.js';
@@ -14,6 +15,7 @@ export function createDeferredRuntime({
     isGenerating, scheduler, onStatus,
     getStreamingProcessor,
     extensionSettings,
+    scriptApi,
 }) {
     const regexRefresh = new RegexRefreshController({
         chat, eventSource, eventTypes, getCurrentChatId, isGenerating, scheduler, onStatus,
@@ -25,5 +27,6 @@ export function createDeferredRuntime({
         regexRefresh,
         streamingRender: new StreamingRenderOptimizer({ eventSource, eventTypes, getStreamingProcessor }),
         regexUiAdapter: new RegexUiAdapter({ onSaved: () => regexRefresh.noteChange(), extensionSettings }),
+        chatHistoryBatch: new ChatHistoryBatchActions({ scriptApi }),
     };
 }

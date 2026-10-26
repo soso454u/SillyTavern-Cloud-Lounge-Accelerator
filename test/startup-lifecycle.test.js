@@ -7,7 +7,7 @@ const dataUrl = source => `data:text/javascript,${encodeURIComponent(source)}`;
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 async function fixture(t, previous) {
-    const state = { saves: 0, chatStarts: 0, deferredLoads: 0, interactionStarts: 0, cacheStarts: 0, panels: 0 };
+    const state = { saves: 0, chatStarts: 0, deferredLoads: 0, interactionStarts: 0, batchStarts: 0, batchStops: 0, cacheStarts: 0, panels: 0 };
     const handlers = new Map();
     const events = {
         once(name, callback) { this.on(name, callback); },
@@ -47,6 +47,7 @@ async function fixture(t, previous) {
             export function createDeferredRuntime() {
                 return {
                     interactionOptimizer: {async start() { state.interactionStarts++; await state.interactionGate; }, stop() {}},
+                    chatHistoryBatch: {async start() { state.batchStarts++; await state.batchGate; }, stop() {state.batchStops++;}},
                     regexRefresh: {async start() { return true; }, stop() {}},
                     streamingRender: {start() {}, stop() {}},
                     regexUiAdapter: {async start() {}, stop() {}},
@@ -85,12 +86,14 @@ test('activation and SETTINGS_LOADED leave optional downloads and settings uploa
     assert.equal(state.chatStarts, 1, 'chat limit must be prepared before native initial chat loading');
     assert.equal(state.deferredLoads, 0);
     assert.equal(state.interactionStarts, 0);
+    assert.equal(state.batchStarts, 0);
     assert.equal(state.saves, 0);
     events.emit('ready');
     await tick();
     assert.equal(state.deferredLoads, 1);
     assert.equal(state.cacheStarts, 1);
     assert.equal(state.panels, 1);
+    assert.equal(state.batchStarts, 1);
     assert.equal(state.saves, 1);
 });
 
@@ -149,6 +152,33 @@ test('disable while optional initialization waits prevents cache and panel start
     await tick();
     assert.equal(state.cacheStarts, 0);
     assert.equal(state.panels, 0);
+    assert.equal(state.batchStarts, 0);
+});
+
+test('disable while batch actions initialize prevents cache startup and cleans up the batch adapter', async t => {
+    const {plugin, state, events} = await fixture(t, oldSettings);
+    let release;
+    state.batchGate = new Promise(resolve => { release = resolve; });
+    plugin.onActivate();
+    events.emit('ready');
+    await tick();
+    assert.equal(state.batchStarts, 1);
+    await plugin.onDisable();
+    release();
+    await tick();
+    assert.ok(state.batchStops >= 1);
+    assert.equal(state.cacheStarts, 0);
+    assert.equal(state.panels, 0);
+});
+
+test('batch history actions follow the interaction optimization switch', async t => {
+    const {plugin, state, events} = await fixture(t, { ...oldSettings, interactionOptimization: false });
+    plugin.onActivate();
+    events.emit('ready');
+    await tick();
+    assert.equal(state.batchStarts, 0);
+    assert.equal(state.interactionStarts, 0);
+    assert.equal(state.panels, 1);
 });
 
 test('entry dependency graph keeps optional UI and interaction modules off the activation path', async () => {

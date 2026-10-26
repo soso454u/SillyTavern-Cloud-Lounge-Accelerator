@@ -99,6 +99,7 @@ async function loadDeferredRuntime(current) {
             getRequestHeaders, isGenerating, scheduler: current.scheduler,
             getStreamingProcessor: () => chatApi.streamingProcessor,
             extensionSettings: extension_settings,
+            scriptApi: chatApi,
             onStatus: updateRuntimeStatus,
         }), {
             SettingsPanel: module.SettingsPanel,
@@ -143,6 +144,11 @@ async function startEnabledModules({ skipCache = false, forceCache = false } = {
     const pending = (async () => {
         if (settings.interactionOptimization) await current.interactionOptimizer.start();
         if (!isCurrent()) return;
+        if (settings.interactionOptimization) await current.chatHistoryBatch?.start();
+        if (!isCurrent()) {
+            current.chatHistoryBatch?.stop();
+            return;
+        }
         if (settings.chatOptimization) {
             current.streamingRender.start();
             const refreshReady = await current.regexRefresh.start();
@@ -187,6 +193,7 @@ async function stopOptimizationModules({ stopCache = false } = {}) {
     runtime.generation += 1;
     runtime.chatStart = null;
     runtime.startupOptimizer.stop();
+    runtime.chatHistoryBatch?.stop();
     runtime.regexUiAdapter?.stop();
     runtime.regexRefresh?.stop();
     runtime.streamingRender?.stop();
@@ -232,8 +239,16 @@ async function changeChatOptimization(enabled, current) {
 }
 
 async function changeInteractionOptimization(enabled, current) {
-    if (enabled && appReady) await current.interactionOptimizer.start();
-    else current.interactionOptimizer.stop();
+    if (enabled && appReady) {
+        const generation = current.generation;
+        await current.interactionOptimizer.start();
+        if (!activated || runtime !== current || current.generation !== generation || !settings.interactionOptimization) return;
+        await current.chatHistoryBatch?.start();
+        if (!activated || runtime !== current || current.generation !== generation || !settings.interactionOptimization) current.chatHistoryBatch?.stop();
+    } else {
+        current.interactionOptimizer.stop();
+        current.chatHistoryBatch?.stop();
+    }
 }
 
 async function changeChatPageSize(value, current) {
