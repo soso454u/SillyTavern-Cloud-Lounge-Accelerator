@@ -8,10 +8,12 @@ function fixture(t, { touch = true, cost = 0 } = {}) {
     const inputs = new Map();
     const renders = [];
     const chatClasses = new Set();
-    const timers = new Map();
-    let timerId = 0;
+    const themeWrites = [];
     const documentRef = {
-        querySelector:()=>({classList:{add:name=>chatClasses.add(name),remove:name=>chatClasses.delete(name)}}),
+        querySelector:()=>({classList:{
+            add(name) { themeWrites.push(['add', name]); chatClasses.add(name); },
+            remove(name) { themeWrites.push(['remove', name]); chatClasses.delete(name); },
+        }}),
         addEventListener(name, fn, options) {
             assert.deepEqual(options, { passive: true, capture: true });
             inputs.set(name, fn);
@@ -42,17 +44,11 @@ function fixture(t, { touch = true, cost = 0 } = {}) {
         navigatorRef: touch ? { userAgent: 'iPhone', maxTouchPoints: 5 } : {},
         matchMedia: () => ({ matches: false }),
         documentRef,
-        setTimeoutRef(fn, delay) { const id = ++timerId; timers.set(id, {fn, at: time + delay}); return id; },
-        clearTimeoutRef(id) { timers.delete(id); },
     });
     optimizer.start();
     t.after(() => optimizer.stop());
     return {
-        optimizer, renders, inputs, callbacks, original, Processor, chatClasses, documentRef, timers,
-        advance(at) {
-            time = at;
-            for (const [id, timer] of [...timers]) if (timer.at <= time) { timers.delete(id); timer.fn(); }
-        },
+        optimizer, renders, inputs, callbacks, original, Processor, chatClasses, documentRef, themeWrites,
         get processor() { return processor; }, set processor(value) { processor = value; },
         set time(value) { time = value; },
         input(name, data = {}) { inputs.get(name)?.(data); },
@@ -186,17 +182,17 @@ test('pointer interaction reserves time for controls while finalization remains 
     assert.equal(f.renders.at(-1)[1],'resumed');
 });
 
-test('touch-only glass reduction is temporary and removed on stop or chat change',t=>{
-    const touch=fixture(t);
-    assert.equal(touch.chatClasses.has('cla-streaming-light'),true);
-    touch.emit('chat');
-    assert.equal(touch.chatClasses.size,0);
-    touch.emit('token');
-    assert.equal(touch.chatClasses.size,1);
-    touch.optimizer.stop();
-    assert.equal(touch.chatClasses.size,0);
-    const desktop=fixture(t,{touch:false});
-    assert.equal(desktop.chatClasses.size,0);
+test('streaming keeps theme classes untouched on touch and desktop throughout its lifecycle', async t => {
+    for (const touch of [true, false]) {
+        const f = fixture(t, { touch });
+        await f.token('preview', 0);
+        await f.token('coalesced', 10);
+        assert.equal(f.renders.length, 1, 'preview throttling stays active');
+        for (const event of ['chat', 'token', 'stop', 'token', 'end']) f.emit(event);
+        f.optimizer.stop();
+        assert.deepEqual(f.themeWrites, [], 'never adds even a temporary glass override');
+        assert.equal(f.chatClasses.size, 0);
+    }
 });
 
 test('stop, end and chat switch restore native ownership without delayed DOM work', async t => {
@@ -265,75 +261,50 @@ test('native rejections and non-preview arguments pass through unchanged', async
     assert.deepEqual(f.renders.at(-1), [-1, null, false]);
 });
 
-const scrollRoot = () => {
-    const classes = new Set();
-    return { id: 'chat', classes, classList: { add: name => classes.add(name), remove: name => classes.delete(name) } };
-};
-
-test('ordinary touch scrolling reduces paint without a generation and restores after inertia settles', t => {
-    const f = fixture(t);
-    f.processor = null;
-    f.emit('end');
-    const chat = scrollRoot();
-    f.input('scroll', { target: chat });
-    assert.equal(f.optimizer.current, null);
-    assert.equal(chat.classes.has('cla-chat-scrolling'), true);
-    f.advance(180);
-    f.input('scroll', { target: chat });
-    assert.equal(f.timers.size, 1);
-    f.advance(201);
-    assert.equal(chat.classes.has('cla-chat-scrolling'), true);
-    f.advance(380);
-    assert.equal(chat.classes.size, 0);
-    assert.equal(f.timers.size, 0);
-    assert.equal(f.renders.length, 0);
+const scrollRoot = () => ({
+    id: 'chat',
+    classList: {
+        add() { assert.fail('scrolling must not add theme overrides'); },
+        remove() { assert.fail('scrolling must not modify theme classes'); },
+    },
 });
 
-test('normal taps and scrolling outside chat leave theme unchanged; touch movement starts relief', t => {
-    const f = fixture(t);
-    const chat = scrollRoot();
-    f.input('scroll', { target: {id:'other'} });
-    f.input('wheel', { target: {closest:()=>null} });
-    f.input('touchstart', { target: {closest:()=>chat}, touches:[finger(0)] });
-    f.input('touchmove', { touches:[finger(4)] });
-    assert.equal(chat.classes.size, 0);
-    f.input('touchmove', { touches:[finger(12)] });
-    assert.equal(chat.classes.has('cla-chat-scrolling'), true);
-    f.input('touchcancel');
-    f.advance(200);
-    assert.equal(chat.classes.size, 0);
+test('ordinary scrolling without generation never changes the theme or renders messages', t => {
+    for (const touch of [true, false]) {
+        const f = fixture(t, { touch });
+        f.processor = null;
+        f.emit('end');
+        const chat = scrollRoot();
+        f.input('scroll', { target: chat });
+        f.time = 180;
+        f.input('scroll', { target: chat });
+        f.input('wheel', { target: { closest: () => chat } });
+        f.emit('chat');
+        f.optimizer.stop();
+        assert.equal(f.optimizer.current, null);
+        assert.equal(f.renders.length, 0);
+        assert.deepEqual(f.themeWrites, []);
+        assert.equal(f.inputs.size, 0);
+    }
 });
 
-test('scroll relief follows chat replacements and clears on chat change, backgrounding and stop', t => {
-    const f = fixture(t);
-    const first = scrollRoot(), next = scrollRoot();
-    f.input('scroll', { target:first });
-    f.input('scroll', { target:next });
-    assert.equal(first.classes.size, 0);
-    f.emit('chat');
-    assert.equal(next.classes.size, 0);
-    f.input('scroll', { target:next });
-    f.documentRef.hidden = true;
-    f.input('visibilitychange');
-    assert.equal(next.classes.size, 0);
-    f.input('scroll', { target:next });
-    assert.equal(next.classes.size, 0);
-    f.documentRef.hidden = false;
-    f.input('scroll', { target:next });
-    f.optimizer.stop();
-    assert.equal(next.classes.size, 0);
-    assert.equal(f.timers.size, 0);
-    assert.equal(f.inputs.size, 0);
-});
-
-test('desktop scrolling preserves theme and generation end does not end an ongoing touch scroll', t => {
-    const desktop = fixture(t, {touch:false}), mobile = fixture(t);
-    const chat = scrollRoot();
-    desktop.input('scroll', {target:chat});
-    assert.equal(chat.classes.size, 0);
-    mobile.input('scroll', {target:chat});
-    mobile.emit('end');
-    assert.equal(chat.classes.has('cla-chat-scrolling'), true);
-    mobile.advance(200);
-    assert.equal(chat.classes.size, 0);
+test('touch drag and wheel retain scroll throttling without changing glass appearance', async t => {
+    for (const input of ['touch', 'wheel']) {
+        const f = fixture(t);
+        const chat = scrollRoot();
+        const target = { closest: () => chat };
+        if (input === 'touch') {
+            f.input('touchstart', { target, touches: [finger(0)] });
+            f.input('touchmove', { touches: [finger(12)] });
+        } else f.input('wheel', { target });
+        await f.token('first', 0);
+        f.input('scroll', { target: chat });
+        await f.token('skipped during scroll', 100);
+        await f.token('scroll preview', 250);
+        await f.processor.finalizeIntermediaryMessage(7, 'full final message');
+        assert.deepEqual(f.renders.map(args => args[1]), ['first', 'scroll preview', 'full final message']);
+        f.input('touchend');
+        f.optimizer.stop();
+        assert.deepEqual(f.themeWrites, []);
+    }
 });

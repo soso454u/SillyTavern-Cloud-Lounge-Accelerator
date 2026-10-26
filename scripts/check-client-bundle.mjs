@@ -136,12 +136,12 @@ try {
                 height, duringHeight, afterHeight:bubble.getBoundingClientRect().height,
                 top:chat.scrollTop,text:bubble.textContent};
         });
-        assert.equal(idleScroll.generating,false,'scroll relief works without a generation');
-        assert.equal(idleScroll.during,options.hasTouch?'none':'blur(8px)');
+        assert.equal(idleScroll.generating,false,'exercise ordinary scrolling without a generation');
+        assert.equal(idleScroll.during,'blur(8px)');
         assert.equal(idleScroll.after,'blur(8px)');
         assert.equal(idleScroll.height,idleScroll.duringHeight);
         assert.equal(idleScroll.height,idleScroll.afterHeight);
-        assert.equal(idleScroll.top,600,'relief never moves the reading position');
+        assert.equal(idleScroll.top,600,'scrolling preserves the reading position');
         assert.equal(idleScroll.text,'Existing unchanged message');
         const streaming = await page.evaluate(async () => {
             const native = await import('/script.js');
@@ -172,8 +172,8 @@ try {
         assert.ok(streaming.renders>1 && streaming.renders<30,'native full-message previews are coalesced');
         assert.equal(streaming.hooked,true,'production runtime hooks the live native binding');
         assert.equal(streaming.restored,true);
-        assert.equal(streaming.glassDuring,options.hasTouch?'none':'blur(8px)');
-        assert.equal(streaming.glassAfter,'blur(8px)','original glass style is restored at generation end');
+        assert.equal(streaming.glassDuring,'blur(8px)');
+        assert.equal(streaming.glassAfter,'blur(8px)','glass remains unchanged at generation end');
         assert.deepEqual(streaming.last,{id:0,text:'Complete final text',final:true});
         assert.equal(streaming.message,streaming.text);
         assert.equal(streaming.message,'Complete final text');
@@ -184,7 +184,8 @@ try {
         if (themeStyles && options.hasTouch) {
             const theme = await page.addStyleTag({content:themeStyles});
             const styledScroll = await page.evaluate(async () => {
-                const chat = document.querySelector('#chat'), bubble = chat.querySelector('.mes_block');
+                const chat = document.querySelector('#chat');
+                let bubble = chat.querySelector('.mes_block');
                 const snapshot = () => {
                     const style = getComputedStyle(bubble,'::before'), bounds = bubble.getBoundingClientRect();
                     return {filter:style.backdropFilter,mask:style.maskImage,background:style.backgroundColor,
@@ -199,12 +200,32 @@ try {
                 chat.dispatchEvent(new Event('scroll'));
                 const during=snapshot();
                 await new Promise(resolve=>setTimeout(resolve,260));
-                return {before,during,after:snapshot()};
+                const after = snapshot();
+                const native = await import('/script.js');
+                const processor = native.beginStream();
+                bubble = chat.querySelector('.mes_block');
+                const text = bubble.querySelector('.mes_text');
+                text.style.height = '3000px';
+                text.textContent = 'Theme preview';
+                chat.scrollTop = 600;
+                const beforeGeneration = snapshot();
+                await native.eventSource.emit('token', 'Theme preview');
+                await processor.onProgressStreaming(0, 'Theme preview');
+                const duringGeneration = snapshot();
+                text.dispatchEvent(new WheelEvent('wheel', {bubbles:true,deltaY:-100}));
+                chat.dispatchEvent(new Event('scroll'));
+                const scrollingGeneration = snapshot();
+                await processor.finalizeIntermediaryMessage(0, 'Theme preview');
+                processor.running = false;
+                await native.eventSource.emit('end');
+                return {before,during,after,beforeGeneration,duringGeneration,scrollingGeneration,afterGeneration:snapshot()};
             });
             assert.match(styledScroll.before.filter,/blur\(/,'exercise actual theme glass, including its stronger selectors');
-            assert.equal(styledScroll.during.filter,'none');
-            assert.deepEqual({...styledScroll.during,filter:styledScroll.before.filter},styledScroll.before,'theme mask, fill, geometry, text and reading position stay unchanged');
-            assert.deepEqual(styledScroll.after,styledScroll.before,'restore every sampled theme property');
+            assert.deepEqual(styledScroll.during,styledScroll.before,'glass, mask, fill, geometry, text and reading position stay unchanged during scrolling');
+            assert.deepEqual(styledScroll.after,styledScroll.before,'every sampled theme property stays unchanged after scrolling');
+            assert.deepEqual(styledScroll.duringGeneration,styledScroll.beforeGeneration,'actual theme glass stays unchanged during streaming');
+            assert.deepEqual(styledScroll.scrollingGeneration,styledScroll.beforeGeneration,'actual theme glass stays unchanged when scrolling during streaming');
+            assert.deepEqual(styledScroll.afterGeneration,styledScroll.beforeGeneration,'actual theme glass stays unchanged at generation end');
             await theme.evaluate(element=>element.remove());
         }
         await page.locator('.cla-regex-organizer-toggle').click();
@@ -286,7 +307,7 @@ try {
     await page.waitForTimeout(450);
     assert.equal(await page.locator('#cloud-lounge-accelerator-settings').count(), 0);
     assert.deepEqual(errors, []);
-    console.log('PASS production bundle on desktop/mobile: unified grip and native order saving in collection view, recognition, empty groups, startup budget, scroll/theme restoration, streaming/finalization, disable and delayed startup');
+    console.log('PASS production bundle on desktop/mobile: unified grip and native order saving in collection view, recognition, empty groups, startup budget, scroll/stream glass preservation, streaming/finalization, disable and delayed startup');
 } finally {
     await browser?.close();
     await new Promise(resolve => server.close(resolve));

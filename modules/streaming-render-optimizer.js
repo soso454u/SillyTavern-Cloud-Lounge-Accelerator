@@ -12,15 +12,11 @@ export class StreamingRenderOptimizer {
         eventSource, eventTypes = {}, getStreamingProcessor = () => null,
         documentRef = globalThis.document, navigatorRef = globalThis.navigator,
         matchMedia = globalThis.matchMedia, now = () => performance.now(),
-        setTimeoutRef = (callback, delay) => globalThis.setTimeout(callback, delay),
-        clearTimeoutRef = id => globalThis.clearTimeout(id),
     } = {}) {
         Object.assign(this, { eventSource, eventTypes, getStreamingProcessor, now });
         this.document = documentRef;
         this.navigator = navigatorRef;
         this.matchMedia = matchMedia;
-        this.setTimeout = setTimeoutRef;
-        this.clearTimeout = clearTimeoutRef;
         this.started = false;
         this.handlers = [];
         this.current = null;
@@ -31,10 +27,7 @@ export class StreamingRenderOptimizer {
         this.report = { observedPreviews: 0, skippedPreviews: 0, maxPreviewMs: 0, lastPreviewMs: 0, maxRecoveryMs: 0 };
         this.onToken = () => this.attach();
         this.onEnd = () => this.detach();
-        this.onChatChange = () => { this.detach(); this.clearScrollPaint(); };
-        this.onVisibility = () => {
-            if (this.document?.hidden) this.clearScrollPaint();
-        };
+        this.onChatChange = () => this.detach();
         this.onPointerInput = () => {
             if (this.current) this.interactingUntil = this.now() + 180;
         };
@@ -42,7 +35,7 @@ export class StreamingRenderOptimizer {
             const touch = event.touches?.length === 1 && event.touches[0];
             const chat = event.target?.closest?.('#chat');
             this.touch = touch && chat
-                ? { id: touch.identifier, x: touch.clientX, y: touch.clientY, chat } : null;
+                ? { id: touch.identifier, x: touch.clientX, y: touch.clientY } : null;
         };
         this.onTouchMove = event => {
             const touch = event.touches?.length === 1 && event.touches[0];
@@ -50,13 +43,12 @@ export class StreamingRenderOptimizer {
             if (!this.touch || !touch || touch.identifier !== this.touch.id) return;
             if (Math.hypot(touch.clientX - this.touch.x, touch.clientY - this.touch.y) >= 10) {
                 this.noteScrollInput();
-                this.noteScrollPaint(this.touch.chat);
             }
         };
         this.onTouchEnd = () => { this.touch = null; };
         this.onWheel = event => {
             const chat = event.target?.closest?.('#chat');
-            if (chat) { this.noteScrollInput(); this.noteScrollPaint(chat); }
+            if (chat) this.noteScrollInput();
         };
         this.onScroll = event => {
             // Native autoscroll must not put an idle preview in the scroll tier.
@@ -64,28 +56,7 @@ export class StreamingRenderOptimizer {
             if (event.target?.id === 'chat' && now < this.scrollingUntil) {
                 this.scrollingUntil = Math.min(this.scrollDeadline, now + SCROLL_SETTLE_MS);
             }
-            if (event.target?.id === 'chat') this.noteScrollPaint(event.target);
         };
-    }
-
-    noteScrollPaint(chat) {
-        // Share the existing passive input listeners. This also works when no
-        // generation is running; no message scan, layout read or scroll write.
-        if (!this.started || this.profile === 'desktop' || !chat?.classList || this.document?.hidden) return;
-        if (this.scrollChat !== chat) {
-            this.clearScrollPaint();
-            this.scrollChat = chat;
-            chat.classList.add('cla-chat-scrolling');
-        }
-        this.clearTimeout(this.scrollTimer);
-        this.scrollTimer = this.setTimeout(() => this.clearScrollPaint(), SCROLL_SETTLE_MS);
-    }
-
-    clearScrollPaint() {
-        this.clearTimeout(this.scrollTimer);
-        this.scrollTimer = null;
-        this.scrollChat?.classList.remove('cla-chat-scrolling');
-        this.scrollChat = null;
     }
 
     noteScrollInput() {
@@ -127,7 +98,6 @@ export class StreamingRenderOptimizer {
             ['touchend', this.onTouchEnd], ['touchcancel', this.onTouchEnd],
             ['wheel', this.onWheel], ['scroll', this.onScroll],
             ['pointerdown', this.onPointerInput], ['pointerup', this.onPointerInput],
-            ['visibilitychange', this.onVisibility],
         ];
     }
 
@@ -187,15 +157,9 @@ export class StreamingRenderOptimizer {
             return;
         }
         this.current = state;
-        if (this.profile !== 'desktop') {
-            this.lightChat = this.document?.querySelector?.('#chat');
-            this.lightChat?.classList?.add?.('cla-streaming-light');
-        }
     }
 
     detach() {
-        this.lightChat?.classList?.remove?.('cla-streaming-light');
-        this.lightChat = null;
         const state = this.current;
         if (state && state.processor.onProgressStreaming === state.wrapper) {
             if (state.ownDescriptor) Object.defineProperty(state.processor, 'onProgressStreaming', state.ownDescriptor);
@@ -205,14 +169,13 @@ export class StreamingRenderOptimizer {
     }
 
     getReport() {
-        return { ...this.report, attached: Boolean(this.current), scrollReliefActive: Boolean(this.scrollChat),
+        return { ...this.report, attached: Boolean(this.current),
             timing: 'native-preview-including-awaited-work', version: 2 };
     }
 
     stop() {
         this.started = false;
         this.detach();
-        this.clearScrollPaint();
         for (const [name, handler] of this.handlers) this.eventSource?.removeListener(name, handler);
         this.handlers = [];
         for (const [type, handler] of this.inputHandlers()) this.document?.removeEventListener(type, handler, true);

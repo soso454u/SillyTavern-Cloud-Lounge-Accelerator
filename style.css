@@ -463,22 +463,6 @@
     opacity: 0.55;
 }
 
-/* Avoid repeatedly repainting a tall iMessage glass layer on touch devices.
-   Restore the theme when generation ends and normal scrolling has settled. */
-#chat:is(.cla-streaming-light, .cla-chat-scrolling) {
-    --im-bubble-filter: none;
-}
-
-#chat.cla-streaming-light .mes:last-child > .mes_block,
-#chat.cla-streaming-light .mes:last-child > .mes_block::before,
-#chat.cla-streaming-light .mes:last-child > .mes_block::after,
-#chat.cla-chat-scrolling .mes > .mes_block,
-#chat.cla-chat-scrolling .mes > .mes_block::before,
-#chat.cla-chat-scrolling .mes > .mes_block::after {
-    -webkit-backdrop-filter: none !important;
-    backdrop-filter: none !important;
-}
-
 .cla-performance {
     display: grid;
     gap: 0.65rem;
