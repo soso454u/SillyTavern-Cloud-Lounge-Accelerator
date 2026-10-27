@@ -102,8 +102,12 @@ export class PresetEntryActions {
             if (!button) {
                 const controls = row.querySelector('.prompt_manager_prompt_controls');
                 if (!controls) continue;
-                button = this.button('⋯', 'menu');
-                button.classList.add('cla-preset-entry-more');
+                // Match the native pencil/toggle span controls rather than
+                // inheriting the theme's framed .menu_button appearance.
+                button = this.document.createElement('span');
+                button.className = 'cla-preset-entry-more fa-solid fa-ellipsis fa-xs';
+                button.dataset.claPresetAction = 'menu';
+                button.setAttribute('role', 'button');
                 button.title = '条目操作：插入、复制、移出或删除';
                 button.setAttribute('aria-label', button.title);
                 button.setAttribute('aria-haspopup', 'menu');
@@ -112,6 +116,8 @@ export class PresetEntryActions {
                 this.nodes.add(button);
             }
             button.disabled = !context || this.busy;
+            button.setAttribute('aria-disabled', String(button.disabled));
+            button.tabIndex = button.disabled ? -1 : 0;
             button.claContext = context;
         }
     }
@@ -157,6 +163,13 @@ export class PresetEntryActions {
     }
 
     onKey(event) {
+        const trigger = event.target?.closest?.('.cla-preset-entry-more');
+        if (trigger && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            if (!trigger.disabled) trigger.click();
+            return;
+        }
         if (event.key === 'Escape' && this.menu) {
             const button = this.menuButton;
             this.closeMenu();

@@ -37,7 +37,7 @@ const formFields = {
 const fields = Object.entries(formFields).map(([name, html]) => html.replace('>', ` id="completion_prompt_manager_popup_entry_form_${name}">`)).join('');
 const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/native.css"><link rel="stylesheet" href="/style.css"><style>${referenceMenuStyles}\n${theme}
 *{box-sizing:border-box}body{margin:8px;font:16px sans-serif;background:#b6a19a;color:#252525;--SmartThemeBodyColor:#252525;--SmartThemeBlurTintColor:#ded0c8;--SmartThemeBorderColor:#777;--mainFontSize:16px}
-#completion_prompt_manager{width:100%;max-width:550px}ul{padding:0;list-style:none}button{cursor:pointer}#completion_prompt_manager_popup{display:none;padding:12px;background:#ddd}textarea,input,select{max-width:100%}textarea{display:block;width:100%;height:100px}.menu_button{border:1px solid #888;border-radius:5px;padding:5px}
+#completion_prompt_manager{width:100%;max-width:550px}ul{padding:0;list-style:none}button{cursor:pointer}#completion_prompt_manager_popup{display:none;padding:12px;background:#ddd}textarea,input,select{max-width:100%}textarea{display:block;width:100%;height:100px}.menu_button{border:1px solid #888;border-radius:5px;padding:5px}.fa-ellipsis::before{content:'⋯'}
 </style><body class="cla-preset-drag-guard"><div id="completion_prompt_manager"></div><div id="completion_prompt_manager_popup"><div id="completion_prompt_manager_popup_edit">${fields}
 <div id="completion_prompt_manager_depth_block"></div><div id="completion_prompt_manager_order_block"></div><div id="completion_prompt_manager_forbid_overrides_block"></div>
 <div id="completion_prompt_manager_popup_entry_source_block"><span id="completion_prompt_manager_popup_entry_source"></span></div>
@@ -73,6 +73,20 @@ try {
         const menu=async id=>click(`[data-pm-identifier="${id}"] [data-cla-preset-action="menu"]`);
         const save='#completion_prompt_manager_popup_entry_form_save';
         const name='#completion_prompt_manager_popup_entry_form_name';
+        const trigger=page.locator('[data-pm-identifier="custom"] .cla-preset-entry-more');
+        assert.equal(await trigger.evaluate(element=>element.tagName),'SPAN');
+        assert.equal(await trigger.getAttribute('role'),'button');
+        assert.equal(await trigger.evaluate(element=>element.classList.contains('menu_button')),false);
+        // The trigger must follow native icon themes, while framed buttons
+        // can independently change appearance without affecting it.
+        for (const color of ['rgb(25, 35, 45)','rgb(225, 230, 235)']) {
+            const themed=await page.addStyleTag({content:`.prompt_manager_prompt_controls>.fa-solid{color:${color}!important}.menu_button{background:purple!important;border:3px solid red!important;box-shadow:0 0 5px red!important}`});
+            const icons=await page.evaluate(()=>{const row=document.querySelector('[data-pm-identifier="custom"]');const pick=element=>{const css=getComputedStyle(element);return Object.fromEntries(['color','backgroundColor','borderStyle','borderWidth','boxShadow','fontSize'].map(key=>[key,css[key]]));};return {more:pick(row.querySelector('.cla-preset-entry-more')),edit:pick(row.querySelector('.prompt-manager-edit-action'))};});
+            assert.deepEqual(icons.more,icons.edit);await themed.evaluate(element=>element.remove());
+        }
+        await trigger.focus();await page.keyboard.press('Enter');assert.equal(await page.locator('.cla-preset-entry-menu').count(),1);
+        await page.keyboard.press('Escape');assert.equal(await trigger.evaluate(element=>element===document.activeElement),true);
+        await page.keyboard.press('Space');assert.equal(await page.locator('.cla-preset-entry-menu').count(),1);await page.keyboard.press('Escape');
         assert.equal(await page.locator('.cla-preset-entry-toolbar, [data-cla-preset-action="new"]').count(),0);
         await click('#native-new-prompt');await page.fill(name,'原生新建入口');await click('#completion_prompt_manager_popup_entry_form_close');
         assert.equal(await page.evaluate(()=>window.saves),0);
