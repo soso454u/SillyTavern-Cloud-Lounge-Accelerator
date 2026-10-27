@@ -97,21 +97,6 @@ export class PresetEntryActions {
         const list = this.manager?.listElement;
         if (!list?.isConnected) return;
         const context = this.context();
-        let toolbar = list.previousElementSibling;
-        if (!toolbar?.classList.contains('cla-preset-entry-toolbar')) {
-            toolbar = this.document.createElement('div');
-            toolbar.className = 'cla-preset-entry-toolbar';
-            toolbar.append(this.button('＋ 新建条目', 'new'));
-            const hint = this.document.createElement('small');
-            hint.textContent = '行内 ⋯ 可插入、复制或删除；新条目默认关闭';
-            toolbar.append(hint);
-            list.before(toolbar);
-            this.nodes.add(toolbar);
-        }
-        for (const button of toolbar.querySelectorAll(OWN)) {
-            button.disabled = !context || this.busy;
-            button.claContext = context;
-        }
         for (const row of list.querySelectorAll(ROW)) {
             let button = row.querySelector(OWN);
             if (!button) {
