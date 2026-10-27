@@ -773,13 +773,18 @@ body .cla-preset-entry-menu {
     max-height: calc(100dvh - 16px);
     overflow: auto;
     padding: 4px;
+    border: 1px solid var(--SmartThemeBorderColor, #888);
+    border-radius: 8px;
+    background: var(--SmartThemeBlurTintColor, #252525);
+    backdrop-filter: blur(20px);
+    color: var(--SmartThemeBodyColor, #eee);
+    box-shadow: 0 4px 18px #0004;
 }
 
-/* Native list-group/menu_button classes own the appearance. Only compact
-   geometry and the requested small black text are scoped to this menu. */
+/* Preserve the 2.1.45 surface and theme buttons, with compact geometry and
+   the requested small, centered black text. */
 body .cla-preset-entry-menu button.menu_button[data-cla-preset-action] {
     box-sizing: border-box;
-    display: block !important;
     flex: 0 0 auto;
     width: 100% !important;
     min-width: 0 !important;
@@ -788,11 +793,12 @@ body .cla-preset-entry-menu button.menu_button[data-cla-preset-action] {
     margin: 0 !important;
     padding: 4px 8px !important;
     white-space: nowrap;
+    font: inherit;
     font-size: 12px !important;
     line-height: 18px !important;
     color: #000 !important;
     -webkit-text-fill-color: #000 !important;
-    text-align: left !important;
+    text-align: center !important;
 }
 
 .cla-preset-entry-menu button:disabled {
