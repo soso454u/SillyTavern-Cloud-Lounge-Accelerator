@@ -8,6 +8,11 @@ import { createRequire } from 'node:module';
 const { chromium } = createRequire(import.meta.url)('playwright');
 const native = await readFile(process.env.CLA_NATIVE_PROMPT_MANAGER, 'utf8');
 const nativeCss = await readFile(process.env.CLA_NATIVE_PROMPT_CSS, 'utf8');
+// Load standalone native menu-container rules without importing unrelated
+// selector groups or nested button rules that would change the fixture page.
+const nativeMenus = process.env.CLA_NATIVE_STYLE
+    ? [...(await readFile(process.env.CLA_NATIVE_STYLE, 'utf8')).matchAll(/^\.list-group\s*\{[^}]*\}/gm)].map(match => match[0]).join('\n')
+    : '';
 const source = await readFile(new URL('../modules/preset-entry-actions.js', import.meta.url), 'utf8');
 const style = await readFile(new URL('../style.css', import.meta.url), 'utf8');
 const theme = process.env.CLA_REGEX_THEME_CSS ? await readFile(process.env.CLA_REGEX_THEME_CSS, 'utf8') : '';
@@ -31,7 +36,7 @@ const formFields = {
     injection_order: '<input type="number">', injection_trigger: '<select multiple><option value="normal">normal</option></select>', forbid_overrides: '<input type="checkbox">',
 };
 const fields = Object.entries(formFields).map(([name, html]) => html.replace('>', ` id="completion_prompt_manager_popup_entry_form_${name}">`)).join('');
-const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/native.css"><link rel="stylesheet" href="/style.css"><style>${theme}
+const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/native.css"><link rel="stylesheet" href="/style.css"><style>${nativeMenus}\n${theme}
 *{box-sizing:border-box}body{margin:8px;font:16px sans-serif;background:#b6a19a;color:#252525;--SmartThemeBodyColor:#252525;--SmartThemeBlurTintColor:#ded0c8;--SmartThemeBorderColor:#777;--mainFontSize:16px}
 #completion_prompt_manager{width:100%;max-width:550px}ul{padding:0;list-style:none}button{cursor:pointer}#completion_prompt_manager_popup{display:none;padding:12px;background:#ddd}textarea,input,select{max-width:100%}textarea{display:block;width:100%;height:100px}.menu_button{border:1px solid #888;border-radius:5px;padding:5px}
 </style><body class="cla-preset-drag-guard"><div id="completion_prompt_manager"></div><div id="completion_prompt_manager_popup"><div id="completion_prompt_manager_popup_edit">${fields}
@@ -102,7 +107,7 @@ try {
         await page.evaluate(()=>window.failSave=false);await click(save);await page.waitForFunction(()=>manager.serviceSettings.prompts.some(p=>p.name==='失败保留草稿'));
         await page.waitForSelector('[data-pm-identifier="main"] .cla-preset-entry-more');
         // Reproduce a theme that enlarges all buttons and gives them iOS blue text.
-        await page.addStyleTag({content:'.menu_button:not(.cla-preset-entry-more){font:28px/40px sans-serif!important;min-height:60px!important;padding:12px!important;border-radius:22px!important;color:royalblue!important;-webkit-text-fill-color:royalblue!important}'});
+        await page.addStyleTag({content:'.menu_button:not(.cla-preset-entry-more){font:28px/40px sans-serif!important;min-height:60px!important;padding:12px!important;border-radius:22px!important;color:royalblue!important;-webkit-text-fill-color:royalblue!important;background:rgba(180,150,130,.23)!important;box-shadow:inset 0 0 0 1px #8884!important}'});
         for(const width of mobile ? [260,320,374] : [260,320,390,550]) {
             await page.evaluate(width=>manager.containerElement.style.width=width+'px',width);
             await menu('main');
@@ -114,6 +119,25 @@ try {
             await page.keyboard.press('Escape');
         }
         await page.evaluate(()=>manager.containerElement.style.width='100%');await menu('main');
+        if (nativeMenus) {
+            for (const tint of ['rgba(70, 55, 50, 0.35)', 'rgba(25, 35, 45, 0.6)']) {
+                const appearance=await page.evaluate(tint=>{
+                    document.body.style.setProperty('--SmartThemeBlurTintColor',tint);
+                    document.body.style.setProperty('--SmartThemeBlurStrength','11px');
+                    const reference=document.createElement('div');reference.className='list-group';
+                    const button=document.createElement('button');button.className='menu_button';button.style.setProperty('color','#000','important');reference.append(button);document.body.append(reference);
+                    const pick=element=>{const css=getComputedStyle(element);return Object.fromEntries(['backgroundColor','backgroundImage','backdropFilter','borderRadius','borderColor','boxShadow','textShadow'].map(key=>[key,css[key]]));};
+                    const menu=document.querySelector('.cla-preset-entry-menu');
+                    const result={menu:pick(menu),native:pick(reference),button:pick(menu.querySelector('button')),nativeButton:pick(button)};
+                    reference.remove();return result;
+                },tint);
+                assert.deepEqual(appearance.menu,appearance.native,'menu appearance must match the native list-group');
+                assert.deepEqual(appearance.button,appearance.nativeButton,'buttons must retain the active theme appearance');
+                assert.equal(appearance.menu.backgroundColor,tint);
+                assert.match(appearance.menu.backdropFilter,/blur\(/);
+            }
+            await page.evaluate(()=>document.body.style.removeProperty('--SmartThemeBlurTintColor'));
+        }
         await page.screenshot({path:`/private/tmp/cla-preset-entries-${mobile?'390':'1100'}.png`});
         await page.evaluate(()=>adapter.stop());assert.equal(await page.locator('[data-cla-preset-action]').count(),0);
         await page.locator('[data-pm-identifier="main"] .prompt-manager-edit-action').click();

@@ -773,19 +773,11 @@ body .cla-preset-entry-menu {
     max-height: calc(100dvh - 16px);
     overflow: auto;
     padding: 4px;
-    border: 1px solid #0003;
-    border-radius: 6px;
-    background: rgba(245, 242, 237, 0.96);
-    backdrop-filter: blur(20px);
-    color: #000;
-    font: 12px/18px sans-serif;
-    box-shadow: 0 3px 12px #0003;
 }
 
-/* Keep this compact menu independent of theme-wide button sizes and iOS blue text. */
+/* Native list-group/menu_button classes own the appearance. Only compact
+   geometry and the requested small black text are scoped to this menu. */
 body .cla-preset-entry-menu button.menu_button[data-cla-preset-action] {
-    appearance: none;
-    -webkit-appearance: none;
     box-sizing: border-box;
     display: block !important;
     flex: 0 0 auto;
@@ -795,20 +787,12 @@ body .cla-preset-entry-menu button.menu_button[data-cla-preset-action] {
     min-height: 26px !important;
     margin: 0 !important;
     padding: 4px 8px !important;
-    border: 0 !important;
-    border-radius: 4px !important;
-    background: transparent !important;
     white-space: nowrap;
-    font: 12px/18px sans-serif !important;
+    font-size: 12px !important;
+    line-height: 18px !important;
     color: #000 !important;
     -webkit-text-fill-color: #000 !important;
-    text-shadow: none !important;
-    box-shadow: none !important;
     text-align: left !important;
-}
-
-body .cla-preset-entry-menu button.menu_button[data-cla-preset-action]:is(:hover, :focus-visible):not(:disabled) {
-    background: #0001 !important;
 }
 
 .cla-preset-entry-menu button:disabled {

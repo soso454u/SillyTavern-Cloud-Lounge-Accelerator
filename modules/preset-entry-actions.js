@@ -122,7 +122,7 @@ export class PresetEntryActions {
         const prompt = this.manager.getPromptById(id);
         if (!prompt) return;
         const menu = this.document.createElement('div');
-        menu.className = 'cla-preset-entry-menu';
+        menu.className = 'list-group cla-preset-entry-menu';
         menu.setAttribute('role', 'menu');
         for (const [action, label] of [['before', '在上方新建'], ['after', '在下方新建'], ['copy', '复制到下方'], ['remove', '移出当前列表'], ['delete', '永久删除条目']]) {
             const item = this.button(label, action);
