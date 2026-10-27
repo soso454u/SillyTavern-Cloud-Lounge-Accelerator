@@ -761,35 +761,54 @@ body.cla-fast-ui :is(.drawer-content, dialog.popup, .inline-drawer-content, #Wor
     cursor: pointer;
 }
 
-.cla-preset-entry-menu {
+body .cla-preset-entry-menu {
     position: fixed;
     z-index: 40000;
     display: flex;
     flex-direction: column;
-    gap: 0.25em;
+    gap: 2px;
     box-sizing: border-box;
-    width: 180px;
+    width: 132px;
     max-width: calc(100vw - 16px);
     max-height: calc(100dvh - 16px);
     overflow: auto;
-    padding: 0.4em;
-    border: 1px solid var(--SmartThemeBorderColor, #888);
-    border-radius: 8px;
-    background: var(--SmartThemeBlurTintColor, #252525);
+    padding: 4px;
+    border: 1px solid #0003;
+    border-radius: 6px;
+    background: rgba(245, 242, 237, 0.96);
     backdrop-filter: blur(20px);
-    color: var(--SmartThemeBodyColor, #eee);
-    box-shadow: 0 4px 18px #0004;
+    color: #000;
+    font: 12px/18px sans-serif;
+    box-shadow: 0 3px 12px #0003;
 }
 
-.cla-preset-entry-menu .menu_button {
+/* Keep this compact menu independent of theme-wide button sizes and iOS blue text. */
+body .cla-preset-entry-menu button.menu_button[data-cla-preset-action] {
+    appearance: none;
+    -webkit-appearance: none;
     box-sizing: border-box;
-    width: 100%;
-    min-height: 36px;
-    margin: 0;
-    white-space: normal;
-    font: inherit;
-    color: inherit;
-    text-align: left;
+    display: block !important;
+    flex: 0 0 auto;
+    width: 100% !important;
+    min-width: 0 !important;
+    height: 26px !important;
+    min-height: 26px !important;
+    margin: 0 !important;
+    padding: 4px 8px !important;
+    border: 0 !important;
+    border-radius: 4px !important;
+    background: transparent !important;
+    white-space: nowrap;
+    font: 12px/18px sans-serif !important;
+    color: #000 !important;
+    -webkit-text-fill-color: #000 !important;
+    text-shadow: none !important;
+    box-shadow: none !important;
+    text-align: left !important;
+}
+
+body .cla-preset-entry-menu button.menu_button[data-cla-preset-action]:is(:hover, :focus-visible):not(:disabled) {
+    background: #0001 !important;
 }
 
 .cla-preset-entry-menu button:disabled {

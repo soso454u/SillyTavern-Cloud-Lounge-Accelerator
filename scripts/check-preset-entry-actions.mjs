@@ -101,11 +101,16 @@ try {
         assert.equal(await page.inputValue(name),'失败保留草稿');assert.equal(await page.evaluate(()=>manager.serviceSettings.prompts.some(p=>p.name==='失败保留草稿')),false);
         await page.evaluate(()=>window.failSave=false);await click(save);await page.waitForFunction(()=>manager.serviceSettings.prompts.some(p=>p.name==='失败保留草稿'));
         await page.waitForSelector('[data-pm-identifier="main"] .cla-preset-entry-more');
+        // Reproduce a theme that enlarges all buttons and gives them iOS blue text.
+        await page.addStyleTag({content:'.menu_button:not(.cla-preset-entry-more){font:28px/40px sans-serif!important;min-height:60px!important;padding:12px!important;border-radius:22px!important;color:royalblue!important;-webkit-text-fill-color:royalblue!important}'});
         for(const width of mobile ? [260,320,374] : [260,320,390,550]) {
             await page.evaluate(width=>manager.containerElement.style.width=width+'px',width);
             await menu('main');
             const bounds=await page.evaluate(()=>{const menu=document.querySelector('.cla-preset-entry-menu').getBoundingClientRect();const row=document.querySelector('[data-pm-identifier="main"]');const controls=row.querySelector('.prompt_manager_prompt_controls').getBoundingClientRect();const token=row.querySelector('.prompt_manager_prompt_tokens').getBoundingClientRect();const name=row.querySelector('.completion_prompt_manager_prompt_name').getBoundingClientRect();return {menuLeft:menu.left,menuRight:menu.right,viewport:innerWidth,overlap:controls.right>token.left+1||name.right>controls.left+1}});
             assert.ok(bounds.menuLeft>=0&&bounds.menuRight<=bounds.viewport);assert.equal(bounds.overlap,false,JSON.stringify({width,...bounds}));
+            const compact=await page.evaluate(()=>{const menu=document.querySelector('.cla-preset-entry-menu');const button=menu.querySelector('button');const rect=menu.getBoundingClientRect();const css=getComputedStyle(button);return {width:rect.width,height:rect.height,font:parseFloat(css.fontSize),color:css.color,fill:css.webkitTextFillColor};});
+            assert.ok(compact.width<=140&&compact.height<=165&&compact.font<=13,JSON.stringify(compact));
+            assert.equal(compact.color,'rgb(0, 0, 0)');assert.equal(compact.fill,'rgb(0, 0, 0)');
             await page.keyboard.press('Escape');
         }
         await page.evaluate(()=>manager.containerElement.style.width='100%');await menu('main');
