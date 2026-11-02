@@ -52,7 +52,8 @@ assets.set('/scripts/extensions.js', `export const extension_settings = {cloud_l
 assets.set('/scripts/power-user.js', 'export const power_user = {chat_truncation:100,streaming_fps:30,stream_fade_in:true};');
 assets.set('/lib.js', 'export const hljs = {highlightElement() {}, highlightBlock() {}, highlightAll() {}};');
 assets.set('/scripts/openai.js', 'export const promptManager = null;');
-assets.set('/scripts/popup.js', 'export const Popup = {util:{popups:[]}};');
+assets.set('/scripts/popup.js', 'export const Popup = {util:{popups:[]},show:{confirm:async()=>0}};');
+assets.set('/scripts/secrets.js', 'export const SECRET_KEYS={CUSTOM:"api_key_custom"}; export const secret_state={}; export async function deleteSecret() {}');
 assets.set('/scripts/group-chats.js', 'export const selected_group=null; export const groups=[];');
 assets.set('/scripts/utils.js', 'export const regexFromString = input => new RegExp(input);');
 assets.set('/scripts/extensions/regex/engine.js', `
@@ -275,6 +276,16 @@ try {
         await page.waitForFunction(()=>window.ruleOrderWrites===1);
         assert.deepEqual(await page.evaluate(()=>fixtureScripts.map(script=>script.id)),['bundle-numbered-2','bundle-numbered']);
         assert.equal(await page.locator('.cla-regex-reorder-toggle').textContent(),'查看原始顺序','sorting remains in collection view');
+        await page.evaluate(() => {
+            const root = document.createElement('div');
+            root.className = 'secretKeyManager';
+            root.innerHTML = '<div class="secretKeyManagerHeader"><div class="secretKeyManagerInfo"><code>api_key_custom</code></div></div><div class="secretKeyManagerList"><div class="secretKeyManagerItem"><div class="secretKeyManagerItemInfo">测试密钥</div><button data-action="delete-secret" data-id="bundle-key">删除</button></div></div>';
+            document.body.append(root);
+        });
+        await page.locator('[data-cla-secret-action="toggle"]').waitFor();
+        await page.locator('[data-cla-secret-action="toggle"]').click();
+        await page.locator('[data-cla-secret-select]').check();
+        assert.match(await page.locator('[data-cla-secret-action="delete"]').textContent(), /1/);
         await page.evaluate(async()=>{
             const native=await import('/script.js');
             window.streamingFixture=native.beginStream();window.originalProgress=streamingFixture.onProgressStreaming;
@@ -286,6 +297,8 @@ try {
         assert.equal(await page.evaluate(async () => (await import('/scripts/power-user.js')).power_user.chat_truncation), 100);
         assert.equal(await page.locator('.cla-regex-organizer-toggle').count(), 0);
         assert.equal(await page.locator('[data-cla-regex-scope-actions]').count(), 0);
+        assert.equal(await page.locator('.cla-secret-batch-toolbar, .cla-secret-batch-choice').count(), 0);
+        assert.equal(await page.locator('.cla-secret-batch-mode').count(), 0);
         assert.deepEqual(errors, []);
         await page.close();
     }

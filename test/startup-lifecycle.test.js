@@ -7,7 +7,7 @@ const dataUrl = source => `data:text/javascript,${encodeURIComponent(source)}`;
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 async function fixture(t, previous) {
-    const state = { saves: 0, chatStarts: 0, deferredLoads: 0, interactionStarts: 0, batchStarts: 0, batchStops: 0, cacheStarts: 0, panels: 0 };
+    const state = { saves: 0, chatStarts: 0, deferredLoads: 0, interactionStarts: 0, batchStarts: 0, batchStops: 0, secretStarts: 0, secretStops: 0, cacheStarts: 0, panels: 0 };
     const handlers = new Map();
     const events = {
         once(name, callback) { this.on(name, callback); },
@@ -48,6 +48,7 @@ async function fixture(t, previous) {
                 return {
                     interactionOptimizer: {async start() { state.interactionStarts++; await state.interactionGate; }, stop() {}},
                     chatHistoryBatch: {async start() { state.batchStarts++; await state.batchGate; }, stop() {state.batchStops++;}},
+                    secretKeyBatch: {async start() { state.secretStarts++; await state.secretGate; }, stop() {state.secretStops++;}},
                     regexRefresh: {async start() { return true; }, stop() {}},
                     streamingRender: {start() {}, stop() {}},
                     regexUiAdapter: {async start() {}, stop() {}},
@@ -94,6 +95,7 @@ test('activation and SETTINGS_LOADED leave optional downloads and settings uploa
     assert.equal(state.cacheStarts, 1);
     assert.equal(state.panels, 1);
     assert.equal(state.batchStarts, 1);
+    assert.equal(state.secretStarts, 1);
     assert.equal(state.saves, 1);
 });
 
@@ -177,6 +179,7 @@ test('batch history actions follow the interaction optimization switch', async t
     events.emit('ready');
     await tick();
     assert.equal(state.batchStarts, 0);
+    assert.equal(state.secretStarts, 0);
     assert.equal(state.interactionStarts, 0);
     assert.equal(state.panels, 1);
 });
@@ -200,4 +203,21 @@ test('entry dependency graph keeps optional UI and interaction modules off the a
     for (const url of visited) {
         assert.doesNotMatch(url, /deferred-runtime|interaction-|regex-|cache-controller|ui\/panel/);
     }
+});
+
+
+test('disable during secret batch initialization stops it and prevents cache/panel startup', async t => {
+    const {plugin, state, events} = await fixture(t, oldSettings);
+    let release;
+    state.secretGate = new Promise(resolve => { release = resolve; });
+    plugin.onActivate();
+    events.emit('ready');
+    await tick();
+    assert.equal(state.secretStarts, 1);
+    await plugin.onDisable();
+    release();
+    await tick();
+    assert.ok(state.secretStops >= 1);
+    assert.equal(state.cacheStarts, 0);
+    assert.equal(state.panels, 0);
 });

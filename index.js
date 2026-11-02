@@ -149,6 +149,11 @@ async function startEnabledModules({ skipCache = false, forceCache = false } = {
             current.chatHistoryBatch?.stop();
             return;
         }
+        if (settings.interactionOptimization) await current.secretKeyBatch?.start();
+        if (!isCurrent()) {
+            current.secretKeyBatch?.stop();
+            return;
+        }
         if (settings.chatOptimization) {
             current.streamingRender.start();
             const refreshReady = await current.regexRefresh.start();
@@ -194,6 +199,7 @@ async function stopOptimizationModules({ stopCache = false } = {}) {
     runtime.chatStart = null;
     runtime.startupOptimizer.stop();
     runtime.chatHistoryBatch?.stop();
+    runtime.secretKeyBatch?.stop();
     runtime.regexUiAdapter?.stop();
     runtime.regexRefresh?.stop();
     runtime.streamingRender?.stop();
@@ -244,10 +250,16 @@ async function changeInteractionOptimization(enabled, current) {
         await current.interactionOptimizer.start();
         if (!activated || runtime !== current || current.generation !== generation || !settings.interactionOptimization) return;
         await current.chatHistoryBatch?.start();
-        if (!activated || runtime !== current || current.generation !== generation || !settings.interactionOptimization) current.chatHistoryBatch?.stop();
+        if (!activated || runtime !== current || current.generation !== generation || !settings.interactionOptimization) {
+            current.chatHistoryBatch?.stop();
+            return;
+        }
+        await current.secretKeyBatch?.start();
+        if (!activated || runtime !== current || current.generation !== generation || !settings.interactionOptimization) current.secretKeyBatch?.stop();
     } else {
         current.interactionOptimizer.stop();
         current.chatHistoryBatch?.stop();
+        current.secretKeyBatch?.stop();
     }
 }
 

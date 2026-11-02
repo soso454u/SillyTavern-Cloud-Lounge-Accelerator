@@ -6,6 +6,7 @@ import { RegexRefreshController } from './regex-refresh.js';
 import { RegexUiAdapter } from './regex-ui-adapter.js';
 import { StreamingRenderOptimizer } from './streaming-render-optimizer.js';
 import { ChatHistoryBatchActions } from './chat-history-batch.js';
+import { SecretKeyBatchActions } from './secret-key-batch.js';
 export { copyDiagnosticText } from './interaction-diagnostics.js';
 export { repairAccelerator } from './repair.js';
 export { SettingsPanel } from '../ui/panel.js';
@@ -28,5 +29,6 @@ export function createDeferredRuntime({
         streamingRender: new StreamingRenderOptimizer({ eventSource, eventTypes, getStreamingProcessor }),
         regexUiAdapter: new RegexUiAdapter({ onSaved: () => regexRefresh.noteChange(), extensionSettings }),
         chatHistoryBatch: new ChatHistoryBatchActions({ scriptApi }),
+        secretKeyBatch: new SecretKeyBatchActions(),
     };
 }
