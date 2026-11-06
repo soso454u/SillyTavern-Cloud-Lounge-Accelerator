@@ -124,10 +124,10 @@ test('transfer groups use the same numbered/bracket rules and honor per-endpoint
 
 test('world settings edits validate bounds, preserve other fields and synchronize original export metadata',()=>{
  const source={entries:{0:{uid:0,content:'body',unknown:{keep:true},disable:false}},originalData:{entries:[{uid:0,extensions:{unknown:42}}]}};
- const next=editTransferEntry('world',source,'0',{strategy:'constant',position:'4',depth:'12',role:'2',order:'7777',probability:'65',disable:true,key:['甲,乙','丙'],outletName:'out'});
- assert.equal(next.entries[0].constant,true);assert.equal(next.entries[0].vectorized,false);assert.equal(next.entries[0].depth,12);assert.equal(next.entries[0].role,2);assert.deepEqual(next.entries[0].unknown,{keep:true});
+ const next=editTransferEntry('world',source,'0',{strategy:'constant',selectiveLogic:'3',position:'4',depth:'12',role:'2',order:'7777',probability:'65',disable:true,key:['甲,乙','丙'],outletName:'out'});
+ assert.equal(next.entries[0].selectiveLogic,3);assert.equal(next.originalData.entries[0].selectiveLogic,3);assert.equal(next.entries[0].constant,true);assert.equal(next.entries[0].vectorized,false);assert.equal(next.entries[0].depth,12);assert.equal(next.entries[0].role,2);assert.deepEqual(next.entries[0].unknown,{keep:true});
  assert.equal(next.originalData.entries[0].extensions.depth,12);assert.equal(next.originalData.entries[0].extensions.outlet_name,'out');assert.equal(next.originalData.entries[0].extensions.unknown,42);assert.equal(next.originalData.entries[0].enabled,false);assert.equal(next.originalData.entries[0].insertion_order,7777);assert.deepEqual(next.originalData.entries[0].keys,['甲,乙','丙']);assert.equal(source.entries[0].depth,undefined);
- for(const patch of [{depth:-1},{probability:101},{order:1.5},{role:3},{position:''},{strategy:'bad'}])assert.throws(()=>editTransferEntry('world',source,'0',patch));
+ for(const patch of [{depth:-1},{probability:101},{order:1.5},{role:3},{position:''},{strategy:'bad'},{selectiveLogic:4}])assert.throws(()=>editTransferEntry('world',source,'0',patch));
 });
 test('batch deletion removes exactly selected IDs including export originals without mutating inputs',async()=>{
  const {deleteTransferEntries}=await import('../modules/content-transfer.js');

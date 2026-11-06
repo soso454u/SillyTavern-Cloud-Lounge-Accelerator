@@ -28,7 +28,7 @@ export function editTransferEntry(kind, data, id, patch) {
             changes.constant = patch.strategy === 'constant'; changes.vectorized = patch.strategy === 'vectorized';
         }
         for (const key of ['disable', 'useProbability']) if (patch[key] !== undefined) changes[key] = Boolean(patch[key]);
-        for (const [key, min, max] of [['position',0,7], ['role',0,2], ['depth',0,10000], ['order',0,Number.MAX_SAFE_INTEGER], ['probability',0,100]]) {
+        for (const [key, min, max] of [['selectiveLogic',0,3], ['position',0,7], ['role',0,2], ['depth',0,10000], ['order',0,Number.MAX_SAFE_INTEGER], ['probability',0,100]]) {
             if (patch[key] === undefined) continue;
             const value = Number(patch[key]);
             if (String(patch[key]).trim() === '' || !Number.isInteger(value) || value < min || value > max) throw new Error(`${key} 必须为 ${min}～${max} 的整数`);
@@ -43,7 +43,7 @@ export function editTransferEntry(kind, data, id, patch) {
         const original = Array.isArray(next.originalData?.entries) ? next.originalData.entries.find(item => String(item.uid) === String(id)) : null;
         if (original) {
             Object.assign(original, { comment: entry.comment, content: entry.content });
-            const paths = { disable: 'enabled', key: 'keys', keysecondary: 'secondary_keys', constant: 'constant', order: 'insertion_order', useProbability: 'extensions.useProbability', vectorized: 'extensions.vectorized', position: 'extensions.position', role: 'extensions.role', depth: 'extensions.depth', probability: 'extensions.probability', outletName: 'extensions.outlet_name' };
+            const paths = { selectiveLogic: 'selectiveLogic', disable: 'enabled', key: 'keys', keysecondary: 'secondary_keys', constant: 'constant', order: 'insertion_order', useProbability: 'extensions.useProbability', vectorized: 'extensions.vectorized', position: 'extensions.position', role: 'extensions.role', depth: 'extensions.depth', probability: 'extensions.probability', outletName: 'extensions.outlet_name' };
             for (const [key, value] of Object.entries(changes)) {
                 const path = paths[key].split('.'); let owner = original;
                 for (const part of path.slice(0, -1)) { owner[part] ??= {}; owner = owner[part]; }

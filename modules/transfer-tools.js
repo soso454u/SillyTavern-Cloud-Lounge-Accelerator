@@ -15,6 +15,31 @@ const button = (text, action) => {
     return element;
 };
 
+// Theme tints may be translucent. The expanded editor always uses an opaque
+// surface, including themes that make every native popup transparent.
+function editorSurface(element) {
+    const style = getComputedStyle(element), canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 1;
+    const context = canvas.getContext('2d');
+    const sample = color => {
+        context.clearRect(0, 0, 1, 1); context.fillStyle = color; context.fillRect(0, 0, 1, 1);
+        return context.getImageData(0, 0, 1, 1).data;
+    };
+    const text = sample(style.color), tint = sample(style.getPropertyValue('--SmartThemeBlurTintColor').trim() || 'transparent');
+    if (tint[3] > 0) return `rgb(${tint[0]}, ${tint[1]}, ${tint[2]})`;
+    return text[0] * 0.299 + text[1] * 0.587 + text[2] * 0.114 > 128 ? '#20242c' : '#edf1f5';
+}
+
+const expandIcon = (collapse = false) => {
+    const control = node('button', undefined, 'cla-transfer-expand'); control.type = 'button';
+    control.title = collapse ? '收起编辑' : '放大编辑'; control.setAttribute('aria-label', control.title);
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    for (const [key, value] of Object.entries({ viewBox: '0 0 24 24', width: '16', height: '16', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'aria-hidden': 'true' })) svg.setAttribute(key, value);
+    const path = document.createElementNS(svg.namespaceURI, 'path');
+    path.setAttribute('d', collapse ? 'M3 9h6V3m12 6h-6V3M3 15h6v6m12-6h-6v6' : 'M9 3H3v6m12-6h6v6M3 15v6h6m12-6v6h-6');
+    svg.append(path); control.append(svg); return control;
+};
+
 export class TransferTools {
     constructor({ scriptApi, extensionSettings = {}, isGenerating = () => false, onRegexSaved = () => {}, loadApis = () => Promise.all([
         import('../../../../world-info.js'), import('../../../../preset-manager.js'), import('../../../../popup.js'),
@@ -429,17 +454,13 @@ export class TransferTools {
             const editor = node('div', undefined, 'cla-transfer-editor');
             editor.append(node('h3', '查看 / 编辑内容'), node('small', `${side === 'source' ? '来源' : '目标'}：${ref.label}`));
             const field = (title, name, value, multiline = false) => {
-                const label = node('label', title), input = node(multiline ? 'textarea' : 'input', undefined, 'text_pole');
+                const label = node('label'), heading = node('span', undefined, 'cla-transfer-field-heading'), input = node(multiline ? 'textarea' : 'input', undefined, 'text_pole');
                 input.dataset.claTransferEdit = name; input.value = value ?? '';
                 if (multiline) input.rows = name === 'content' || name === 'replaceString' ? 12 : 4;
-                label.append(input); editor.append(label);
-                if (multiline) {
-                    const expand = button('⛶ 放大编辑', 'expand');
-                    expand.classList.add('cla-transfer-expand'); label.insertBefore(expand, input);
-                    expand.addEventListener('click', () => {
-                        const expanded = label.classList.toggle('cla-transfer-expanded');
-                        expand.textContent = expanded ? '收起编辑' : '⛶ 放大编辑'; expand.setAttribute('aria-expanded', String(expanded)); input.focus();
-                    });
+                heading.append(node('span', title)); label.append(heading, input); editor.append(label);
+                if (multiline && !['key', 'keysecondary'].includes(name)) {
+                    const expand = expandIcon(); heading.append(expand);
+                    expand.addEventListener('click', event => { event.preventDefault(); this.expandEditor(input, title, expand); });
                 }
                 return input;
             };
@@ -464,16 +485,16 @@ export class TransferTools {
                 worldFields.outletName = field('Outlet 名称', 'outletName', entry.outletName ?? '');
                 const syncPosition = () => { role.parentElement.hidden = worldFields.depth.parentElement.hidden = position.value !== '4'; worldFields.outletName.parentElement.hidden = position.value !== '7'; };
                 position.addEventListener('change', syncPosition); syncPosition();
-                for (const [title, key] of [['主要关键词（每行一个）','key'],['辅助关键词（每行一个）','keysecondary']]) worldFields[key] = field(title, key, (entry[key] || []).join('\n'), true);
+                const keywords = node('div', undefined, 'cla-transfer-keywords'); editor.append(keywords);
+                worldFields.key = field('主要关键字', 'key', (entry.key || []).join(', '), true); worldFields.key.rows = 2;
+                worldFields.key.placeholder = '逗号分隔列表';
+                const logic = optionField('逻辑', 'selectiveLogic', entry.selectiveLogic ?? 0, [[0,'与任意'],[1,'非全部'],[2,'非任意'],[3,'与全部']]);
+                worldFields.keysecondary = field('可选过滤器', 'keysecondary', (entry.keysecondary || []).join(', '), true); worldFields.keysecondary.rows = 2;
+                worldFields.keysecondary.placeholder = '逗号分隔列表（如果为空则忽略）';
+                keywords.append(worldFields.key.parentElement, logic.parentElement, worldFields.keysecondary.parentElement);
                 for (const [key, input] of Object.entries(worldFields)) initialWorldValues[key] = input.value;
             }
             const content = ref.kind === 'world' ? field('条目内容', 'content', entry.content, true) : null;
-            if (content) {
-                const keywords = node('details', undefined, 'cla-transfer-keywords');
-                keywords.append(node('summary', '关键词设置'));
-                for (const key of ['key', 'keysecondary']) keywords.append(worldFields[key].parentElement);
-                editor.append(keywords);
-            }
             const find = ref.kind !== 'world' ? field('查找正则', 'findRegex', entry.findRegex, true) : null;
             const replace = ref.kind !== 'world' ? field('替换内容', 'replaceString', entry.replaceString, true) : null;
             const status = node('p', '', 'cla-transfer-status'); status.setAttribute('role', 'status'); editor.append(status);
@@ -494,7 +515,7 @@ export class TransferTools {
                             for (const [key, input] of Object.entries(worldFields)) {
                                 if (input.value === initialWorldValues[key]) continue;
                                 patch[key] = ['disable', 'useProbability'].includes(key) ? input.value === 'true'
-                                    : ['key', 'keysecondary'].includes(key) ? input.value.split('\n').map(value => value.trim()).filter(Boolean) : input.value;
+                                    : ['key', 'keysecondary'].includes(key) ? this.repository.worldApi.splitKeywordsAndRegexes(input.value) : input.value;
                             }
                         } else Object.assign(patch, { findRegex: find.value, replaceString: replace.value });
                         next = editTransferEntry(ref.kind, data, id, patch);
@@ -513,6 +534,7 @@ export class TransferTools {
                     finally { saving = false; }
                 },
                 onClose: async () => {
+                    this.closeExpandedEditor?.();
                     this.editorPopup = null; this.editing = false;
                     if (!valid()) return;
                     if (saved) {
@@ -529,6 +551,28 @@ export class TransferTools {
             this.previewLoading = false;
             if (this.view === view) this.updateControls();
         }
+    }
+
+    expandEditor(input, title, trigger) {
+        if (this.closeExpandedEditor) return;
+        const parent = input.parentElement, next = input.nextSibling;
+        const dialog = node('dialog', undefined, 'cla-transfer-expanded');
+        dialog.setAttribute('aria-label', title);
+        dialog.style.setProperty('--cla-editor-surface', editorSurface(input));
+        dialog.style.color = getComputedStyle(input).color;
+        const heading = node('div', undefined, 'cla-transfer-field-heading');
+        const collapse = expandIcon(true); heading.append(node('span', title), collapse); dialog.append(heading, input);
+        document.body.append(dialog);
+        const close = () => {
+            if (this.closeExpandedEditor !== close) return;
+            this.closeExpandedEditor = null;
+            parent.insertBefore(input, next); dialog.close(); dialog.remove(); trigger.focus();
+        };
+        this.closeExpandedEditor = close;
+        collapse.addEventListener('click', close);
+        dialog.addEventListener('cancel', event => { event.preventDefault(); event.stopPropagation(); close(); });
+        dialog.addEventListener('keydown', event => { if (event.key === 'Escape') event.stopPropagation(); });
+        dialog.showModal(); input.focus();
     }
 
     async deleteSelected() {
@@ -604,6 +648,7 @@ export class TransferTools {
         this.started = false; this.generation++;
         this.nameSelection?.destroy(); this.nameSelection = null;
         this.dragger?.destroy(); this.dragger = null;
+        this.closeExpandedEditor?.();
         void this.editorPopup?.complete?.(0);
         this.observer?.disconnect(); this.observer = null;
         document.removeEventListener('click', this.onClick);

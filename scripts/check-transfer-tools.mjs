@@ -16,6 +16,12 @@ export const world_names=['世界书 A','世界书 B'];export const worldInfoCac
 export async function loadWorldInfo(name){if(worldInfoCache.has(name))return structuredClone(worldInfoCache.get(name));const data=await (await fetch('/api/worldinfo/get',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})})).json();worldInfoCache.set(name,data);return structuredClone(data)}
 export async function saveWorldInfo(name,data){worldInfoCache.set(name,data);await fetch('/api/worldinfo/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,data})})}export function reloadEditor(){}
 `);
+// Simulates the native exported parser, including comma-bearing regex tokens.
+function splitKeywordsAndRegexes(input) {
+ window.keywordParseCalls = (window.keywordParseCalls || 0) + 1;
+ return (input.match(/\s*\/(?:\\.|[^/])*\/[a-z]*|[^,]+/g) || []).map(value => value.trim()).filter(Boolean);
+}
+assets.set('/world-info.js', assets.get('/world-info.js') + '\nexport ' + splitKeywordsAndRegexes.toString());
 assets.set('/preset-manager.js',`
 const settings={extensions:{other:'keep',regex_scripts:[]}};
 const presets={P1:{temperature:0.8,prompts:[{content:'preserve'}],extensions:{other:'A',regex_scripts:[{id:'p1',scriptName:'预设规则',findRegex:'/P/g',replaceString:'PP',placement:[1,2],disabled:true,unknown:42}]}},P2:{temperature:0.2,prompts:[{content:'target'}],extensions:{other:'B',regex_scripts:[]}}};
@@ -37,7 +43,7 @@ const rule=id=>({id,scriptName:id==='r1'?'01 | 社交动态 | 正文':id==='r2'?
 let worlds,cards,savedPresets,writes,fail;
 const reset=()=>{worlds={'世界书 A':{entries:{0:{uid:0,comment:'<img src=x onerror=window.injected=true>',content:'世界条目正文',key:['关键词'],disable:true,position:4,depth:8,unknown:42},1:{uid:1,comment:'第二条',content:'搜索内容',key:['甲']}},extensions:{keep:true}},'世界书 B':{entries:{0:{uid:0,comment:'已有条目',content:'不能覆盖',displayIndex:5}},extensions:{target:true}}};for(let i=2;i<16;i++)worlds['世界书 A'].entries[i]={uid:i,comment:'其他条目 '+i,content:'用于检查正常上下滑动'};cards={'A.png':{avatar:'A.png',data:{extensions:{regex_scripts:[rule('r1'),rule('r2')],other:42}}},'B.png':{avatar:'B.png',data:{extensions:{regex_scripts:[rule('existing')],other:77}}}};savedPresets={};writes=[];fail=null};reset();
 const html=`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/${manifest.css}"><style>
-*{box-sizing:border-box}body{font:15px sans-serif;background:#c8dbea;color:#202c36;--SmartThemeBorderColor:#7895;--SmartThemeBodyColor:#202c36}.menu_button,.text_pole{font:inherit;color:inherit;border:1px solid #9aabb8;border-radius:8px;background:#eff6facc;padding:6px}.fixture-popup{width:680px;max-width:calc(100vw - 20px);max-height:calc(100vh - 24px);overflow:auto;border:1px solid #bccddd;border-radius:18px;background:#e8f1f9;padding:16px}#confirm-transfer{max-width:calc(100vw - 20px);border-radius:12px}dialog::backdrop{background:#1235}.cla-transfer-list{max-height:35vh}.fa-eye::before{content:"◉"}#extensionsMenu{padding:12px}.list-group-item{cursor:pointer;padding:8px}
+*{box-sizing:border-box}body{font:15px sans-serif;background:#c8dbea;color:#202c36;--SmartThemeBorderColor:#7895;--SmartThemeBodyColor:#202c36}.menu_button,.text_pole{font:inherit;color:inherit;border:1px solid #9aabb8;border-radius:8px;background:#eff6facc;padding:6px}.fixture-popup{width:680px;max-width:calc(100vw - 20px);max-height:calc(100vh - 24px);overflow:auto;border:1px solid #bccddd;border-radius:18px;background:#e8f1f9;padding:16px}#confirm-transfer{max-width:calc(100vw - 20px);border-radius:12px}dialog::backdrop{background:#1235}.cla-transfer-list{max-height:35vh}.cla-transfer-editor .menu_button{width:1.5em}.cla-transfer-editor{--SmartThemeBlurTintColor:rgba(151,171,191,.2)}.fa-eye::before{content:"◉"}#extensionsMenu{padding:12px}.list-group-item{cursor:pointer;padding:8px}
 </style><div id="extensionsMenu"></div><input id="custom_api_url_text" value="https://example.invalid/v1"><select id="chat_completion_source"><option value="custom">custom</option></select><button id="api_button_openai" class="api_button">连接</button><button class="api_loading">取消连接</button>
 <script type="module">
 import{TransferTools}from'/modules/transfer-tools.js';import{AutoConnectController}from'/modules/auto-connect.js';import*as secrets from'/secrets.js';import*as worlds from'/world-info.js';
@@ -170,17 +176,28 @@ try{
   await press(eye('source','p1'));await edit('replaceString').fill('放大前');
   await press(edit('replaceString').locator('..').locator('.cla-transfer-expand'));
   assert.equal(await page.locator('.cla-transfer-expanded').count(),1);
+  assert.equal(await page.locator('button.cla-transfer-expand').first().innerText(),'','expander has no visible caption');
+  const surface=await page.locator('dialog.cla-transfer-expanded').evaluate(node=>({background:getComputedStyle(node).backgroundColor,modal:node.matches(':modal')}));
+  assert.equal(surface.modal,true,'expanded textarea owns a separate modal layer');assert.match(surface.background,/^rgb\(/,'theme alpha is removed from expanded editor surface');
+
   const expanded=await page.locator('.cla-transfer-expanded').boundingBox();assert.ok(expanded.width>(mobile?390:1100)*0.9&&expanded.height>(mobile?844:900)*0.9,'expanded editor fills viewport');
   await page.screenshot({path:'/private/tmp/cla-expanded-'+(mobile?'touch':'desktop')+'.png'});
-  await edit('replaceString').fill('放大编辑草稿');await press(page.locator('.cla-transfer-expanded .cla-transfer-expand'));
+  await edit('replaceString').fill('放大编辑草稿');await page.keyboard.press('Escape');
+  assert.equal(await page.locator('dialog.cla-transfer-expanded').count(),0);assert.equal(await page.locator('.cla-transfer-editor').count(),1,'Escape only collapses the enlarged view');
+  await press(edit('replaceString').locator('..').locator('.cla-transfer-expand'));await press(page.locator('.cla-transfer-expanded .cla-transfer-expand'));
   assert.equal(await edit('replaceString').inputValue(),'放大编辑草稿');await cancelEditor();await page.waitForFunction(()=>!tools.previewLoading);
   const targetRow=page.locator('.cla-transfer-target-list [data-cla-transfer-id="'+targetId+'"]');
   await press(targetRow);assert.equal(await targetRow.isChecked(),true);assert.match(await action('execute').innerText(),/到左侧/);
   await field('operation').selectOption('move');await press(action('execute'));await press(page.locator('#approve'));await page.waitForFunction(()=>!tools.busy&&!tools.loading&&!tools.targetLoading);
   s=await state();assert.equal(s.cards['A.png'].data.extensions.regex_scripts.some(rule=>rule.id===targetId),false);assert.equal(s.savedPresets.P1.extensions.regex_scripts.at(-1).replaceString,'右侧编辑后的替换内容');
   await field('kind').selectOption('world');await page.waitForFunction(()=>!tools.loading&&!tools.targetLoading);
-  await press(eye('target','0'));await edit('strategy').selectOption('constant');await edit('position').selectOption('4');await edit('depth').fill('12');await edit('role').selectOption('2');await edit('order').fill('7777');await edit('probability').fill('65');await page.screenshot({path:'/private/tmp/cla-world-editor-'+(mobile?'touch':'desktop')+'.png'});await saveEditor();await page.waitForFunction(()=>!tools.previewLoading);
-  s=await state();assert.equal(s.worlds['世界书 B'].entries[0].constant,true);assert.equal(s.worlds['世界书 B'].entries[0].role,2);assert.equal(s.worlds['世界书 B'].entries[0].depth,12);assert.equal(s.worlds['世界书 B'].entries[0].order,7777);assert.equal(s.worlds['世界书 B'].entries[0].probability,65);
+  await press(eye('target','0'));await edit('strategy').selectOption('constant');await edit('position').selectOption('4');await edit('depth').fill('12');await edit('role').selectOption('2');await edit('order').fill('7777');await edit('probability').fill('65');
+  await edit('key').fill('爸爸, 父亲, /a,b/i');await edit('selectiveLogic').selectOption('3');await edit('keysecondary').fill('妈妈, 母亲');
+  assert.equal(await edit('key').locator('..').locator('.cla-transfer-expand').count(),0,'keyword inputs stay compact without expand controls');
+  const header=await edit('content').locator('..').locator('.cla-transfer-field-heading').evaluate(node=>{const title=node.firstElementChild.getBoundingClientRect(),icon=node.lastElementChild.getBoundingClientRect();return{gap:icon.left-title.right,dy:Math.abs((icon.top+icon.height/2)-(title.top+title.height/2))}});
+  assert.ok(header.gap>=0&&header.gap<=10&&header.dy<2,'content icon is beside its title');
+await page.screenshot({path:'/private/tmp/cla-world-editor-'+(mobile?'touch':'desktop')+'.png'});await saveEditor();await page.waitForFunction(()=>!tools.previewLoading);
+  s=await state();assert.deepEqual(s.worlds['世界书 B'].entries[0].key,['爸爸','父亲','/a,b/i']);assert.deepEqual(s.worlds['世界书 B'].entries[0].keysecondary,['妈妈','母亲']);assert.equal(s.worlds['世界书 B'].entries[0].selectiveLogic,3);assert.equal(s.worlds['世界书 B'].entries[0].constant,true);assert.equal(s.worlds['世界书 B'].entries[0].role,2);assert.equal(s.worlds['世界书 B'].entries[0].depth,12);assert.equal(s.worlds['世界书 B'].entries[0].order,7777);assert.equal(s.worlds['世界书 B'].entries[0].probability,65);
   const reverseHandle=page.locator('.cla-transfer-target-list [data-cla-transfer-drag="0"]');await reverseHandle.scrollIntoViewIfNeeded();
   const rb=await reverseHandle.boundingBox(),lb=await page.locator('.cla-transfer-source-list').boundingBox();
   if(mobile){await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:rb.x+rb.width/2,y:rb.y+rb.height/2,id:3}]});await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:lb.x+lb.width/2,y:lb.y+30,id:3}]});await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});}
