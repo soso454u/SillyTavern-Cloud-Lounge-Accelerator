@@ -75,22 +75,22 @@ try{
   reset();const page=await browser.newPage({viewport:mobile?{width:390,height:844}:{width:1100,height:900},hasTouch:mobile,isMobile:mobile});const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForFunction(()=>window.ready&&connects===1);
   await page.evaluate(()=>rotate('b'));await page.waitForFunction(()=>connects===2);await page.evaluate(()=>{scriptApi.online_status='no_connection';rotate('c');document.querySelector('.api_loading').click()});await page.waitForTimeout(100);assert.equal(await page.evaluate(()=>connects),2,'manual cancel stops queued auto connect');
-  const press=async locator=>mobile?locator.tap():locator.click();const action=name=>page.locator('[data-cla-transfer-action="'+name+'"]');const field=name=>page.locator('[data-cla-transfer-field="'+name+'"]');
-  const selected=id=>page.locator('[data-cla-transfer-select="'+id+'"]');const state=()=>page.evaluate(async()=>await(await fetch('/fixture/state')).json());
+  const press=async locator=>{ if(await locator.getAttribute('role')==='checkbox') locator=locator.locator('.cla-transfer-item-name'); return mobile?locator.tap():locator.click(); };const action=name=>page.locator('[data-cla-transfer-action="'+name+'"]');const field=name=>page.locator('[data-cla-transfer-field="'+name+'"]');
+  const selected=id=>page.locator('.cla-transfer-source-list [data-cla-transfer-id="'+id+'"]');const state=()=>page.evaluate(async()=>await(await fetch('/fixture/state')).json());
   const checkRowLayout=async()=>{
     const layout=await page.locator('.cla-transfer-source-list .cla-transfer-item').first().evaluate(row=>{
       const controls=[...row.children].map(node=>{const r=node.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height}});
       const eye=row.querySelector('.cla-transfer-eye'),style=getComputedStyle(eye);
       return{controls,row:row.getBoundingClientRect().toJSON(),background:style.backgroundColor,border:style.borderTopWidth,radius:getComputedStyle(row).borderRadius};
     });
-    const [checkbox,handle,name,eye]=layout.controls;
-    assert.ok(handle.x>=checkbox.x+checkbox.width&&name.x>=handle.x+handle.width&&eye.x>=name.x+name.width-1,'checkbox, left handle, name and eye stay in a single row');
+    const [handle,name,eye]=layout.controls;
+    assert.ok(name.x>=handle.x+handle.width&&eye.x>=name.x+name.width-1,'checkbox, left handle, name and eye stay in a single row');
     for(const control of layout.controls)assert.ok(Math.abs(control.y+control.height/2-(layout.row.y+layout.row.height/2))<2,'all controls remain vertically aligned');
     assert.equal(layout.background,'rgba(0, 0, 0, 0)','eye has no white button background');assert.equal(layout.border,'0px');assert.ok(parseFloat(layout.radius)>=8,'entry uses a rounded native-style card');
   };
   const cdp=mobile?await page.context().newCDPSession(page):null;
   const drag=async(id,end='drop')=>{
-   const handle=page.locator('[data-cla-transfer-drag="'+id+'"]');await handle.scrollIntoViewIfNeeded();
+   const handle=page.locator('.cla-transfer-source-list [data-cla-transfer-drag="'+id+'"]');await handle.scrollIntoViewIfNeeded();
    await page.waitForFunction(()=>!tools.loading&&!tools.targetLoading);
    const from=await handle.boundingBox(),to=await page.locator('.cla-transfer-dropzone').boundingBox();
    const start={x:from.x+from.width/2,y:from.y+from.height/2},finish=end==='outside'?{x:start.x+12,y:start.y+10}:{x:to.x+to.width/2,y:to.y+45};
@@ -141,21 +141,21 @@ try{
   const group=page.locator('.cla-transfer-source-list [data-cla-transfer-collection="社交动态"]');
   await page.addStyleTag({content:'.cla-transfer-tool{font-size:22px}'});
   await checkRowLayout();
-  await press(group.locator('summary .cla-transfer-group-name'));
+  await press(group.locator('summary .cla-transfer-disclosure'));
   assert.equal(await group.getAttribute('open'),null);
   const folded=await group.evaluate(details=>{
     const summary=details.querySelector('summary'),rect=summary.getBoundingClientRect();
     return{height:details.getBoundingClientRect().height,summary:rect.toJSON(),centers:[...summary.children].map(node=>{const r=node.getBoundingClientRect();return r.y+r.height/2}),marker:getComputedStyle(summary).listStyleType};
   });
   assert.ok(folded.height<65,'collapsed group stays a compact single line even with larger fonts');
-  assert.ok(folded.centers.every(y=>Math.abs(y-(folded.summary.y+folded.summary.height/2))<2),'disclosure, checkbox, group name, count and handle share one baseline');
+  assert.ok(folded.centers.every(y=>Math.abs(y-(folded.summary.y+folded.summary.height/2))<2),'disclosure, group name, count and handle share one baseline');
   assert.equal(folded.marker,'none','only one custom disclosure arrow is shown');
-  await page.screenshot({path:mobile?'/private/tmp/cla-transfer-2.1.53-touch.png':'/private/tmp/cla-transfer-2.1.53-desktop.png'});
-  await press(group.locator('summary .cla-transfer-group-name'));
+  await page.screenshot({path:mobile?'/private/tmp/cla-transfer-2.1.54-touch.png':'/private/tmp/cla-transfer-2.1.54-desktop.png'});
+  await press(group.locator('summary .cla-transfer-disclosure'));
   await page.addStyleTag({content:'.cla-transfer-tool{font-size:15px}'});
   await page.locator('.cla-transfer-columns').screenshot({path:mobile?'/private/tmp/cla-transfer-cards-touch.png':'/private/tmp/cla-transfer-cards-desktop.png'});
   await field('target-kind').selectOption('preset');await page.waitForFunction(()=>!tools.targetLoading);
-  await press(page.locator('[data-cla-transfer-select-group="社交动态"]'));assert.equal(await selected('r1').isChecked(),true);assert.equal(await selected('r2').isChecked(),true);
+  await press(group.locator('summary .cla-transfer-group-name'));assert.equal(await selected('r1').isChecked(),true);assert.equal(await selected('r2').isChecked(),true);
   await drag('');await press(page.locator('#approve'));await page.waitForFunction(()=>!tools.busy);
   s=await state();assert.equal(s.savedPresets.P1.extensions.regex_scripts.length,3,'character rules copy into a preset');assert.equal(s.savedPresets.P1.prompts[0].content,'preserve');
   assert.equal(await page.locator('.cla-transfer-target-list [data-cla-transfer-collection="社交动态"]').count(),1);
@@ -167,6 +167,27 @@ try{
   const targetId=s.cards['A.png'].data.extensions.regex_scripts.find(rule=>rule.scriptName==='预设规则').id;
   await press(eye('target',targetId));await edit('replaceString').fill('右侧编辑后的替换内容');await saveEditor();await page.waitForFunction(()=>!tools.previewLoading);
   s=await state();assert.equal(s.cards['A.png'].data.extensions.regex_scripts.find(rule=>rule.id===targetId).replaceString,'右侧编辑后的替换内容');
+  await press(eye('source','p1'));await edit('replaceString').fill('放大前');
+  await press(edit('replaceString').locator('..').locator('.cla-transfer-expand'));
+  assert.equal(await page.locator('.cla-transfer-expanded').count(),1);
+  const expanded=await page.locator('.cla-transfer-expanded').boundingBox();assert.ok(expanded.width>(mobile?390:1100)*0.9&&expanded.height>(mobile?844:900)*0.9,'expanded editor fills viewport');
+  await page.screenshot({path:'/private/tmp/cla-expanded-'+(mobile?'touch':'desktop')+'.png'});
+  await edit('replaceString').fill('放大编辑草稿');await press(page.locator('.cla-transfer-expanded .cla-transfer-expand'));
+  assert.equal(await edit('replaceString').inputValue(),'放大编辑草稿');await cancelEditor();await page.waitForFunction(()=>!tools.previewLoading);
+  const targetRow=page.locator('.cla-transfer-target-list [data-cla-transfer-id="'+targetId+'"]');
+  await press(targetRow);assert.equal(await targetRow.isChecked(),true);assert.match(await action('execute').innerText(),/到左侧/);
+  await field('operation').selectOption('move');await press(action('execute'));await press(page.locator('#approve'));await page.waitForFunction(()=>!tools.busy&&!tools.loading&&!tools.targetLoading);
+  s=await state();assert.equal(s.cards['A.png'].data.extensions.regex_scripts.some(rule=>rule.id===targetId),false);assert.equal(s.savedPresets.P1.extensions.regex_scripts.at(-1).replaceString,'右侧编辑后的替换内容');
+  await field('kind').selectOption('world');await page.waitForFunction(()=>!tools.loading&&!tools.targetLoading);
+  await press(eye('target','0'));await edit('strategy').selectOption('constant');await edit('position').selectOption('4');await edit('depth').fill('12');await edit('role').selectOption('2');await edit('order').fill('7777');await edit('probability').fill('65');await page.screenshot({path:'/private/tmp/cla-world-editor-'+(mobile?'touch':'desktop')+'.png'});await saveEditor();await page.waitForFunction(()=>!tools.previewLoading);
+  s=await state();assert.equal(s.worlds['世界书 B'].entries[0].constant,true);assert.equal(s.worlds['世界书 B'].entries[0].role,2);assert.equal(s.worlds['世界书 B'].entries[0].depth,12);assert.equal(s.worlds['世界书 B'].entries[0].order,7777);assert.equal(s.worlds['世界书 B'].entries[0].probability,65);
+  const reverseHandle=page.locator('.cla-transfer-target-list [data-cla-transfer-drag="0"]');await reverseHandle.scrollIntoViewIfNeeded();
+  const rb=await reverseHandle.boundingBox(),lb=await page.locator('.cla-transfer-source-list').boundingBox();
+  if(mobile){await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:rb.x+rb.width/2,y:rb.y+rb.height/2,id:3}]});await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:lb.x+lb.width/2,y:lb.y+30,id:3}]});await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});}
+  else{await page.mouse.move(rb.x+rb.width/2,rb.y+rb.height/2);await page.mouse.down();await page.mouse.move(lb.x+lb.width/2,lb.y+30,{steps:8});await page.mouse.up();}
+  await press(page.locator('#approve'));await page.waitForFunction(()=>!tools.busy&&!tools.loading&&!tools.targetLoading);s=await state();assert.equal(s.worlds['世界书 B'].entries[0],undefined);assert.ok(Object.values(s.worlds['世界书 A'].entries).some(entry=>entry.order===7777));
+  const deleteRow=page.locator('.cla-transfer-target-list .cla-transfer-item').first();const deleteId=await deleteRow.getAttribute('data-cla-transfer-id');await press(deleteRow);await press(action('delete'));await press(page.locator('#cancel'));assert.ok((await state()).worlds['世界书 B'].entries[deleteId]);
+  await press(action('delete'));await press(page.locator('#approve'));await page.waitForFunction(()=>!tools.busy&&!tools.targetLoading);assert.equal((await state()).worlds['世界书 B'].entries[deleteId],undefined);
   const panes=await page.locator('.cla-transfer-pane').evaluateAll(nodes=>nodes.map(n=>{const b=n.getBoundingClientRect();return {left:b.left,right:b.right,top:b.top}}));assert.ok(Math.abs(panes[0].top-panes[1].top)<2&&panes[0].right<=panes[1].left,'source and target stay side by side');
   const bounds=await page.locator('.cla-transfer-tool select,.cla-transfer-actions button:visible').evaluateAll(nodes=>nodes.map(n=>{const b=n.getBoundingClientRect();return[b.left,b.right]}));assert.ok(bounds.every(([left,right])=>left>=0&&right<=(mobile?390:1100)),'tool controls fit viewport');
   await page.screenshot({path:'/private/tmp/cla-transfer-'+(mobile?'touch':'desktop')+'.png'});

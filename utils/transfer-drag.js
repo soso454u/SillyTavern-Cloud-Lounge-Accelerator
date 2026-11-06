@@ -21,6 +21,7 @@ export class TransferDrag {
     onDown(event) {
         const handle = event.target.closest?.('[data-cla-transfer-drag]');
         if (!handle || handle.disabled || this.drag || event.button !== 0 || !event.isPrimary || !this.valid()) return;
+        this.activeZone = typeof this.dropzone === 'function' ? this.dropzone(handle) : this.dropzone;
         const ids = this.getIds(handle.dataset.claTransferDrag, handle);
         if (!ids.length) return;
         event.preventDefault(); event.stopPropagation();
@@ -31,7 +32,7 @@ export class TransferDrag {
     }
 
     inside(x, y) {
-        const rect = this.dropzone.getBoundingClientRect();
+        const rect = this.activeZone.getBoundingClientRect();
         return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
     }
 
@@ -44,17 +45,17 @@ export class TransferDrag {
         if (!drag.active) {
             drag.active = true;
             this.ghost = document.createElement('div'); this.ghost.className = 'cla-transfer-drag-ghost';
-            this.ghost.textContent = `${drag.ids.length} 项 → 右侧目标`; this.ghost.setAttribute('aria-hidden', 'true');
+            this.ghost.textContent = `${drag.ids.length} 项 ${drag.handle.dataset.claTransferSide === 'target' ? '← 左侧' : '→ 右侧'}`; this.ghost.setAttribute('aria-hidden', 'true');
             this.root.append(this.ghost); this.root.classList.add('cla-transfer-dragging');
         }
         const origin = this.root.getBoundingClientRect();
         this.ghost.style.left = `${Math.max(0, Math.min(event.clientX - origin.left + 10, this.root.clientWidth - this.ghost.offsetWidth))}px`;
         this.ghost.style.top = `${Math.max(0, Math.min(event.clientY - origin.top + 10, this.root.clientHeight - this.ghost.offsetHeight))}px`;
         const inside = this.inside(event.clientX, event.clientY);
-        this.dropzone.classList.toggle('cla-transfer-drop-active', inside);
-        this.dropzone.setAttribute('data-cla-drag-count', String(drag.ids.length));
-        const list = event.clientX < this.dropzone.getBoundingClientRect().left
-            ? this.root.querySelector('.cla-transfer-source-list') : this.root.querySelector('.cla-transfer-target-list');
+        this.activeZone?.classList.toggle('cla-transfer-drop-active', inside);
+        this.activeZone.setAttribute('data-cla-drag-count', String(drag.ids.length));
+        const pane = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('.cla-transfer-pane');
+        const list = pane?.querySelector('.cla-transfer-list');
         if (list) {
             const rect = list.getBoundingClientRect();
             if (event.clientY < rect.top + 30) list.scrollTop -= 18;
@@ -75,8 +76,8 @@ export class TransferDrag {
         const drag = this.drag; this.drag = null;
         this.ghost?.remove(); this.ghost = null;
         this.root.classList.remove('cla-transfer-dragging');
-        this.dropzone.classList.remove('cla-transfer-drop-active');
-        this.dropzone.removeAttribute('data-cla-drag-count');
+        this.activeZone?.classList.remove('cla-transfer-drop-active');
+        this.activeZone?.removeAttribute('data-cla-drag-count');
         globalThis.removeEventListener?.('blur', this.onBlur);
         for (const [type, fn] of [['pointermove', this.onMove], ['pointerup', this.onUp], ['pointercancel', this.onCancel], ['lostpointercapture', this.onCancel], ['keydown', this.onKey]]) document.removeEventListener(type, fn, true);
         if (drag?.handle.hasPointerCapture?.(drag.pointer)) drag.handle.releasePointerCapture(drag.pointer);

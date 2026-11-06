@@ -22,8 +22,34 @@ export function editTransferEntry(kind, data, id, patch) {
     if (kind === 'world') {
         entry.comment = String(patch.name ?? entry.comment ?? '');
         entry.content = String(patch.content ?? entry.content ?? '');
+        const changes = {};
+        if (patch.strategy !== undefined) {
+            if (!['normal', 'constant', 'vectorized'].includes(patch.strategy)) throw new Error('触发策略无效');
+            changes.constant = patch.strategy === 'constant'; changes.vectorized = patch.strategy === 'vectorized';
+        }
+        for (const key of ['disable', 'useProbability']) if (patch[key] !== undefined) changes[key] = Boolean(patch[key]);
+        for (const [key, min, max] of [['position',0,7], ['role',0,2], ['depth',0,10000], ['order',0,Number.MAX_SAFE_INTEGER], ['probability',0,100]]) {
+            if (patch[key] === undefined) continue;
+            const value = Number(patch[key]);
+            if (String(patch[key]).trim() === '' || !Number.isInteger(value) || value < min || value > max) throw new Error(`${key} 必须为 ${min}～${max} 的整数`);
+            changes[key] = value;
+        }
+        for (const key of ['key', 'keysecondary']) if (patch[key] !== undefined) {
+            if (!Array.isArray(patch[key]) || patch[key].some(value => typeof value !== 'string')) throw new Error('关键词格式无效');
+            changes[key] = clone(patch[key]);
+        }
+        if (patch.outletName !== undefined) changes.outletName = String(patch.outletName);
+        Object.assign(entry, changes);
         const original = Array.isArray(next.originalData?.entries) ? next.originalData.entries.find(item => String(item.uid) === String(id)) : null;
-        if (original) Object.assign(original, { comment: entry.comment, content: entry.content });
+        if (original) {
+            Object.assign(original, { comment: entry.comment, content: entry.content });
+            const paths = { disable: 'enabled', key: 'keys', keysecondary: 'secondary_keys', constant: 'constant', order: 'insertion_order', useProbability: 'extensions.useProbability', vectorized: 'extensions.vectorized', position: 'extensions.position', role: 'extensions.role', depth: 'extensions.depth', probability: 'extensions.probability', outletName: 'extensions.outlet_name' };
+            for (const [key, value] of Object.entries(changes)) {
+                const path = paths[key].split('.'); let owner = original;
+                for (const part of path.slice(0, -1)) { owner[part] ??= {}; owner = owner[part]; }
+                owner[path.at(-1)] = key === 'disable' ? !value : clone(value);
+            }
+        }
     } else {
         const name = String(patch.name ?? entry.scriptName ?? '').trim();
         if (!name) throw new Error('正则名称不能为空');
@@ -31,6 +57,16 @@ export function editTransferEntry(kind, data, id, patch) {
         entry.findRegex = String(patch.findRegex ?? entry.findRegex ?? '');
         entry.replaceString = String(patch.replaceString ?? entry.replaceString ?? '');
     }
+    return next;
+}
+
+export function deleteTransferEntries(kind, data, ids) {
+    const wanted = new Set(ids.map(String));
+    if (!wanted.size || itemsOf(kind, data).filter(item => wanted.has(item.id)).length !== wanted.size) throw new Error('所选条目已改变，请重新加载');
+    const next = clone(data);
+    if (kind !== 'world') return next.filter(item => !wanted.has(String(item.id)));
+    for (const id of wanted) delete next.entries[id];
+    if (Array.isArray(next.originalData?.entries)) next.originalData.entries = next.originalData.entries.filter(item => !wanted.has(String(item.uid)));
     return next;
 }
 

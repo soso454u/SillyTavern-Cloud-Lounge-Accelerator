@@ -121,3 +121,18 @@ test('transfer groups use the same numbered/bracket rules and honor per-endpoint
  const settings={cloud_lounge_accelerator_regex_collections:{'["SCOPED","A.png"]':{assignments:{a:'自定义'}}}};
  assert.equal(transferCollection(ref,{id:'a',scriptName:'01 | 社交动态 | 正文'},settings),'自定义');assert.equal(transferCollection({kind:'character',avatar:'B.png'},{id:'a',scriptName:'01 | 社交动态 | 正文'},settings),'社交动态');
 });
+
+test('world settings edits validate bounds, preserve other fields and synchronize original export metadata',()=>{
+ const source={entries:{0:{uid:0,content:'body',unknown:{keep:true},disable:false}},originalData:{entries:[{uid:0,extensions:{unknown:42}}]}};
+ const next=editTransferEntry('world',source,'0',{strategy:'constant',position:'4',depth:'12',role:'2',order:'7777',probability:'65',disable:true,key:['甲,乙','丙'],outletName:'out'});
+ assert.equal(next.entries[0].constant,true);assert.equal(next.entries[0].vectorized,false);assert.equal(next.entries[0].depth,12);assert.equal(next.entries[0].role,2);assert.deepEqual(next.entries[0].unknown,{keep:true});
+ assert.equal(next.originalData.entries[0].extensions.depth,12);assert.equal(next.originalData.entries[0].extensions.outlet_name,'out');assert.equal(next.originalData.entries[0].extensions.unknown,42);assert.equal(next.originalData.entries[0].enabled,false);assert.equal(next.originalData.entries[0].insertion_order,7777);assert.deepEqual(next.originalData.entries[0].keys,['甲,乙','丙']);assert.equal(source.entries[0].depth,undefined);
+ for(const patch of [{depth:-1},{probability:101},{order:1.5},{role:3},{position:''},{strategy:'bad'}])assert.throws(()=>editTransferEntry('world',source,'0',patch));
+});
+test('batch deletion removes exactly selected IDs including export originals without mutating inputs',async()=>{
+ const {deleteTransferEntries}=await import('../modules/content-transfer.js');
+ const source={entries:{0:{uid:0},1:{uid:1}},originalData:{entries:[{uid:0},{uid:1}]},unknown:42};
+ const next=deleteTransferEntries('world',source,['0']);assert.deepEqual(next,{entries:{1:{uid:1}},originalData:{entries:[{uid:1}]},unknown:42});assert.ok(source.entries[0]);
+ const scripts=[rule('a'),rule('b')];assert.deepEqual(deleteTransferEntries('preset',scripts,['b']),[scripts[0]]);assert.equal(scripts.length,2);
+ for(const ids of [[],['missing']])assert.throws(()=>deleteTransferEntries('world',source,ids));
+});
