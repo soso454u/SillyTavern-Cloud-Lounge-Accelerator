@@ -956,15 +956,15 @@ body.cla-preset-drag-guard [id$="prompt_manager_list"] [data-pm-identifier][clas
 .cla-transfer-dropzone { display: flex; flex-direction: column; min-width: 0; border: 1px dashed var(--SmartThemeBorderColor, #8888); border-radius: 8px; padding: 4px; }
 .cla-transfer-target-list { flex: 1; min-height: 0; }
 .cla-transfer-drop-hint { font-size: 0.8em; text-align: center; padding: 4px; overflow-wrap: anywhere; }
-.cla-transfer-item { display: grid; grid-template-columns: 18px minmax(0, 1fr) 26px 26px; align-items: start; gap: 6px; padding: 9px 2px; border-bottom: 1px solid var(--SmartThemeBorderColor, #8885); cursor: pointer; min-width: 0; }
+.cla-transfer-tool .cla-transfer-item { display: grid; grid-template-columns: 18px 24px minmax(0, 1fr) 28px; align-items: center; gap: 5px; min-height: 42px; padding: 4px 7px; margin: 6px 0; border: 1px solid var(--SmartThemeBorderColor, #8885); border-radius: 10px; background: color-mix(in srgb, var(--SmartThemeBodyColor, #888) 3%, transparent); cursor: default; min-width: 0; }
 .cla-transfer-item-spacer { width: 18px; }
-.cla-transfer-drag-spacer { width: 26px; }
-.cla-transfer-item > input { width: 18px; height: 18px; margin: 3px 0 0; }
+.cla-transfer-drag-spacer { width: 24px; }
+.cla-transfer-tool .cla-transfer-item > input { width: 18px; height: 18px; margin: 0; }
 .cla-transfer-item-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; overflow-wrap: anywhere; }
 .cla-transfer-item small { opacity: 0.75; font-size: 0.75em; }
 .cla-transfer-preview { opacity: 0.8; font-size: 0.85em; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.cla-transfer-drag-handle { width: 28px; min-height: 32px; padding: 0; margin: 0; color: inherit; background: transparent; border: 0; font: inherit; font-size: 23px; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
-.cla-transfer-drag-handle:disabled { opacity: 0.35; cursor: default; }
+.cla-transfer-tool button.cla-transfer-drag-handle { appearance: none; display: inline-flex; align-items: center; justify-content: center; width: 24px; min-width: 0; min-height: 32px; height: 32px; padding: 0; margin: 0; color: inherit; background: transparent; border: 0; border-radius: 5px; box-shadow: none; font: inherit; font-size: 19px; line-height: 1; opacity: 0.7; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
+.cla-transfer-tool button:is(.cla-transfer-eye, .cla-transfer-drag-handle):disabled { opacity: 0.35; cursor: default; }
 .cla-transfer-dragging { user-select: none; -webkit-user-select: none; }
 .cla-transfer-drop-active { outline: 2px solid var(--SmartThemeQuoteColor, #7594df); outline-offset: -2px; }
 .cla-transfer-drop-active .cla-transfer-drop-hint { font-weight: bold; }
@@ -972,33 +972,38 @@ body.cla-preset-drag-guard [id$="prompt_manager_list"] [data-pm-identifier][clas
 @media (max-width: 600px) {
     .cla-transfer-fields, .cla-transfer-columns { gap: 6px; }
     .cla-transfer-pane { padding: 5px; }
-    .cla-transfer-item { grid-template-columns: 16px minmax(0, 1fr) 24px 24px; gap: 4px; font-size: 0.9em; }
-    .cla-transfer-item > input { width: 16px; height: 16px; }
-    .cla-transfer-drag-handle { width: 24px; }
+    .cla-transfer-tool .cla-transfer-item { grid-template-columns: 16px 18px minmax(0, 1fr) 24px; gap: 3px; padding: 3px; font-size: 0.9em; }
+    .cla-transfer-tool .cla-transfer-item > input { width: 16px; height: 16px; }
+    .cla-transfer-tool button.cla-transfer-drag-handle { width: 18px; }
     .cla-transfer-item small { display: none; }
 }
 .cla-preset-token-preview { display: block; min-height: 1.2em; white-space: nowrap; margin: 4px 0; text-align: right; color: inherit; }
 
 .cla-transfer-item-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; align-self: center; }
 .cla-transfer-source-list .cla-transfer-item-name { cursor: pointer; touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
-.cla-transfer-eye { width: 26px; min-height: 32px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.cla-transfer-tool button.cla-transfer-eye { appearance: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; min-width: 0; height: 32px; min-height: 32px; margin: 0; padding: 0; border: 0; border-radius: 5px; background: transparent; box-shadow: none; color: inherit; font: inherit; line-height: 1; opacity: 0.7; cursor: pointer; }
+.cla-transfer-tool button.cla-transfer-eye svg { width: 18px; height: 18px; pointer-events: none; }
+.cla-transfer-tool button:is(.cla-transfer-eye, .cla-transfer-drag-handle):not(:disabled):hover { background: color-mix(in srgb, var(--SmartThemeBodyColor, #888) 8%, transparent); opacity: 1; }
+.cla-transfer-tool button:is(.cla-transfer-eye, .cla-transfer-drag-handle):focus-visible { outline: 2px solid var(--SmartThemeQuoteColor, #7594df); outline-offset: -2px; opacity: 1; }
 .cla-transfer-group { min-width: 0; margin: 3px 0; }
-.cla-transfer-group > summary { display: grid; grid-template-columns: 18px minmax(0, 1fr) 26px; gap: 6px; align-items: center; cursor: pointer; min-height: 36px; border-bottom: 1px solid var(--SmartThemeBorderColor, #8885); }
+.cla-transfer-tool .cla-transfer-group > summary { display: grid; grid-template-columns: 12px 18px minmax(0, 1fr) auto 24px; gap: 5px; align-items: center; cursor: pointer; min-height: 40px; padding: 4px 7px; margin: 6px 0; border: 1px solid var(--SmartThemeBorderColor, #8885); border-radius: 10px; background: color-mix(in srgb, var(--SmartThemeBodyColor, #888) 5%, transparent); list-style: none; }
 .cla-transfer-group > summary::marker, .cla-transfer-group > summary::-webkit-details-marker { display: none; content: ''; }
-.cla-transfer-group-name { font-weight: bold; min-width: 0; overflow-wrap: anywhere; }
-.cla-transfer-group-name::before { content: '▸ '; }
-.cla-transfer-group[open] > summary .cla-transfer-group-name::before { content: '▾ '; }
-.cla-transfer-group > summary input { margin: 0; width: 18px; height: 18px; }
-.cla-transfer-group > summary .cla-transfer-drag-handle { width: 26px; }
+.cla-transfer-group-name { font-weight: 600; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.cla-transfer-disclosure::before { content: '▸'; }
+.cla-transfer-group[open] > summary .cla-transfer-disclosure::before { content: '▾'; }
+.cla-transfer-group-count { opacity: 0.65; font-size: 0.8em; white-space: nowrap; }
+.cla-transfer-tool .cla-transfer-group > summary input { margin: 0; width: 18px; height: 18px; }
 .cla-transfer-editor { text-align: left; min-width: 0; }
 .cla-transfer-editor > label { display: flex; flex-direction: column; gap: 5px; margin: 10px 0; }
 .cla-transfer-editor :is(input, textarea) { width: 100%; min-width: 0; max-width: 100%; }
 .cla-transfer-editor textarea { resize: vertical; min-height: 90px; font-family: var(--monoFontFamily, monospace); }
 @media (max-width: 600px) {
-    .cla-transfer-item { gap: 2px; }
     .cla-transfer-item-spacer { width: 16px; }
-    .cla-transfer-eye, .cla-transfer-drag-spacer { width: 24px; }
-    .cla-transfer-group > summary { grid-template-columns: 16px minmax(0, 1fr) 24px; gap: 3px; }
+    .cla-transfer-drag-spacer { width: 18px; }
+    .cla-transfer-tool button.cla-transfer-eye { width: 24px; }
+    .cla-transfer-tool .cla-transfer-group > summary { grid-template-columns: 9px 16px minmax(0, 1fr) auto 18px; gap: 3px; padding: 3px; font-size: 0.9em; }
+    .cla-transfer-tool .cla-transfer-group > summary input { width: 16px; height: 16px; }
 }
 
-.cla-transfer-item:has([data-cla-transfer-select]:checked) { background: color-mix(in srgb, var(--SmartThemeBodyColor) 6%, transparent); }
+.cla-transfer-tool .cla-transfer-item:has([data-cla-transfer-select]:checked) { background: color-mix(in srgb, var(--SmartThemeBodyColor, #888) 8%, transparent); border-color: var(--SmartThemeQuoteColor, #7594df); }
+#regex_container .cla-regex-cancel-selection[hidden] { display: none !important; }

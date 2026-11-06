@@ -227,6 +227,8 @@ export class RegexUiAdapter {
         document.querySelector('#regex_container')?.classList.remove('cla-regex-collections-enabled');
         this.nameSelection?.destroy(); this.nameSelection = null;
         this.finishPointerGesture(false);
+        this.clearRowSelection();
+        this.cancelSelectionButton?.remove(); this.cancelSelectionButton = null;
         this.reorderButton?.remove(); this.reorderButton = null;
         document.querySelectorAll('[data-cla-regex-scope-actions]').forEach(node => node.remove());
         this.clearCollectionFolds();
@@ -553,6 +555,17 @@ export class RegexUiAdapter {
             this.reorderButton = this.createReorderButton();
             primaryActions.append(this.reorderButton);
         }
+        if (!this.cancelSelectionButton?.isConnected && primaryActions) {
+            const button = document.createElement('button');
+            button.type = 'button'; button.className = 'menu_button menu_button_icon cla-regex-cancel-selection';
+            button.title = '取消所有已选正则'; button.hidden = true;
+            const icon = document.createElement('i'); icon.className = 'fa-solid fa-xmark';
+            const label = document.createElement('small'); label.textContent = '取消选择';
+            button.append(icon, label);
+            const bulkLabel = primaryActions.querySelector('label[for="regex_bulk_edit"]');
+            if (bulkLabel) bulkLabel.after(button); else primaryActions.append(button);
+            this.cancelSelectionButton = button;
+        }
         this.refreshOrganizerRows();
     }
 
@@ -800,7 +813,13 @@ export class RegexUiAdapter {
     }
 
     updateOrganizerCount(visible = this.getVisibleRows().length) {
-        const selected = this.getRows().filter(row => row.querySelector('.regex_bulk_checkbox')?.checked).length;
+        let selected = 0;
+        for (const row of this.getRows()) {
+            const checked = Boolean(row.querySelector('.regex_bulk_checkbox')?.checked);
+            row.classList?.toggle?.('cla-regex-selected', this.collectionsEnabled && checked);
+            if (checked) selected++;
+        }
+        if (this.cancelSelectionButton) this.cancelSelectionButton.hidden = selected === 0;
         const counter = this.organizerRoot?.querySelector('[data-cla-regex-count]');
         if (counter) counter.textContent = `${visible} 条·已选 ${selected} 条`;
     }
@@ -823,9 +842,9 @@ export class RegexUiAdapter {
 
     setRowSelected(row, selected, { notify = true } = {}) {
         const checkbox = row?.querySelector?.('.regex_bulk_checkbox');
+        row?.classList?.toggle?.('cla-regex-selected', selected);
         if (!checkbox || checkbox.checked === selected) return false;
         checkbox.checked = selected;
-        row.classList?.toggle?.('cla-regex-selected', selected);
         if (notify) checkbox.dispatchEvent(new Event('change', { bubbles: true }));
         return true;
     }
@@ -895,6 +914,16 @@ export class RegexUiAdapter {
     onClick(event) {
         if (!this.started || !(event.target instanceof Element)) return;
         const target = event.target;
+        if (target.closest('.cla-regex-cancel-selection')) {
+            event.preventDefault(); event.stopImmediatePropagation();
+            this.nameSelection?.cancel(); this.finishPointerGesture(false);
+            this.clearRowSelection(); return;
+        }
+        // Native select-all changes checkbox properties without firing change.
+        if (target.closest('#bulk_select_all_toggle')) {
+            const generation = this.generation;
+            setTimeout(() => { if (this.started && this.generation === generation) this.updateOrganizerCount(); }, 0);
+        }
         if (target.closest('.cla-regex-organizer-toggle')) {
             event.preventDefault();
             this.toggleOrganizer();
@@ -1030,7 +1059,15 @@ export class RegexUiAdapter {
     }
 
     onChange(event) {
-        if (!this.started || !event.target?.matches?.('.regex_bulk_checkbox')) return;
+        if (!this.started) return;
+        if (event.target?.matches?.('#regex_bulk_edit')) {
+            if (!event.target.checked) {
+                this.nameSelection?.cancel(); this.finishPointerGesture(false);
+                this.clearRowSelection();
+            }
+            return;
+        }
+        if (!event.target?.matches?.('.regex_bulk_checkbox')) return;
         const row = event.target.closest?.('.regex-script-label');
         row?.classList?.toggle?.('cla-regex-selected', event.target.checked);
         this.updateOrganizerCount();
@@ -1438,6 +1475,8 @@ export class RegexUiAdapter {
     stop() {
         if (!this.started) return;
         this.nameSelection?.destroy(); this.nameSelection = null;
+        this.clearRowSelection();
+        this.cancelSelectionButton?.remove(); this.cancelSelectionButton = null;
         this.started = false;
         this.generation += 1;
         this.finishPointerGesture(false);

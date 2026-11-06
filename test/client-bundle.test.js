@@ -33,6 +33,7 @@ test('published client preserves native module locations across bundling', async
 test('manifest loads the published bundle and keeps optional runtime off the initial request path', async () => {
     const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url), 'utf8'));
     assert.equal(manifest.js, 'dist/index.js');
+    assert.equal(manifest.css, `style.css?v=${manifest.version}`, 'upgrades must request the matching layout stylesheet');
     const { own } = await graph(manifest.js, { staticOnly: true });
     assert.equal(own.size, 2, 'activation downloads only entry and shared helpers');
     assert.ok([...own.values()].reduce((sum, source) => sum + Buffer.byteLength(source), 0) < 46000);

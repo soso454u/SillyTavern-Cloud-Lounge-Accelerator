@@ -6,6 +6,11 @@ import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 const {chromium}=createRequire(import.meta.url)('playwright');
 const assets=new Map(await Promise.all(['modules/transfer-tools.js','modules/content-transfer.js','modules/auto-connect.js','utils/transfer-drag.js','utils/press-sweep-selection.js','utils/regex-collections.js','style.css'].map(async path=>['/'+path,await readFile(new URL('../'+path,import.meta.url),'utf8')])));
+const manifest=JSON.parse(await readFile(new URL('../manifest.json',import.meta.url),'utf8'));
+// Emulate a browser with the old unversioned CSS cached. The native manifest
+// loader must request the new versioned URL to get the matching four controls.
+assets.set('/'+manifest.css,assets.get('/style.css'));
+assets.set('/style.css','.cla-transfer-item{display:grid;grid-template-columns:18px minmax(0,1fr) 28px}');
 assets.set('/world-info.js',`
 export const world_names=['世界书 A','世界书 B'];export const worldInfoCache=new Map();
 export async function loadWorldInfo(name){if(worldInfoCache.has(name))return structuredClone(worldInfoCache.get(name));const data=await (await fetch('/api/worldinfo/get',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})})).json();worldInfoCache.set(name,data);return structuredClone(data)}
@@ -31,7 +36,7 @@ assets.set('/secrets.js',`export const SECRET_KEYS={CUSTOM:'custom'};export let 
 const rule=id=>({id,scriptName:id==='r1'?'01 | 社交动态 | 正文':id==='r2'?'02 | 社交动态 | 标题':'同名角色规则',findRegex:'/abc/g',replaceString:'<div>$1</div>',disabled:true,placement:[1,2],unknown:{keep:true}});
 let worlds,cards,savedPresets,writes,fail;
 const reset=()=>{worlds={'世界书 A':{entries:{0:{uid:0,comment:'<img src=x onerror=window.injected=true>',content:'世界条目正文',key:['关键词'],disable:true,position:4,depth:8,unknown:42},1:{uid:1,comment:'第二条',content:'搜索内容',key:['甲']}},extensions:{keep:true}},'世界书 B':{entries:{0:{uid:0,comment:'已有条目',content:'不能覆盖',displayIndex:5}},extensions:{target:true}}};for(let i=2;i<16;i++)worlds['世界书 A'].entries[i]={uid:i,comment:'其他条目 '+i,content:'用于检查正常上下滑动'};cards={'A.png':{avatar:'A.png',data:{extensions:{regex_scripts:[rule('r1'),rule('r2')],other:42}}},'B.png':{avatar:'B.png',data:{extensions:{regex_scripts:[rule('existing')],other:77}}}};savedPresets={};writes=[];fail=null};reset();
-const html=`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"><style>
+const html=`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/${manifest.css}"><style>
 *{box-sizing:border-box}body{font:15px sans-serif;background:#c8dbea;color:#202c36;--SmartThemeBorderColor:#7895;--SmartThemeBodyColor:#202c36}.menu_button,.text_pole{font:inherit;color:inherit;border:1px solid #9aabb8;border-radius:8px;background:#eff6facc;padding:6px}.fixture-popup{width:680px;max-width:calc(100vw - 20px);max-height:calc(100vh - 24px);overflow:auto;border:1px solid #bccddd;border-radius:18px;background:#e8f1f9;padding:16px}#confirm-transfer{max-width:calc(100vw - 20px);border-radius:12px}dialog::backdrop{background:#1235}.cla-transfer-list{max-height:35vh}.fa-eye::before{content:"◉"}#extensionsMenu{padding:12px}.list-group-item{cursor:pointer;padding:8px}
 </style><div id="extensionsMenu"></div><input id="custom_api_url_text" value="https://example.invalid/v1"><select id="chat_completion_source"><option value="custom">custom</option></select><button id="api_button_openai" class="api_button">连接</button><button class="api_loading">取消连接</button>
 <script type="module">
@@ -60,7 +65,8 @@ const server=createServer(async(req,res)=>{
   else if(req.url==='/api/presets/save'){savedPresets[body.name]=body.preset;res.end(JSON.stringify({name:body.name}))}
   else{res.writeHead(404);res.end('{}')};return;
  }
- res.setHeader('Content-Type',req.url.endsWith('.js')?'text/javascript':req.url.endsWith('.css')?'text/css':'text/html');res.end(assets.get(req.url)??html);
+ const pathname=new URL(req.url,'http://localhost').pathname;
+ res.setHeader('Content-Type',pathname.endsWith('.js')?'text/javascript':pathname.endsWith('.css')?'text/css':'text/html');res.end(assets.get(req.url)??html);
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));let browser;
 try{
@@ -71,6 +77,17 @@ try{
   await page.evaluate(()=>rotate('b'));await page.waitForFunction(()=>connects===2);await page.evaluate(()=>{scriptApi.online_status='no_connection';rotate('c');document.querySelector('.api_loading').click()});await page.waitForTimeout(100);assert.equal(await page.evaluate(()=>connects),2,'manual cancel stops queued auto connect');
   const press=async locator=>mobile?locator.tap():locator.click();const action=name=>page.locator('[data-cla-transfer-action="'+name+'"]');const field=name=>page.locator('[data-cla-transfer-field="'+name+'"]');
   const selected=id=>page.locator('[data-cla-transfer-select="'+id+'"]');const state=()=>page.evaluate(async()=>await(await fetch('/fixture/state')).json());
+  const checkRowLayout=async()=>{
+    const layout=await page.locator('.cla-transfer-source-list .cla-transfer-item').first().evaluate(row=>{
+      const controls=[...row.children].map(node=>{const r=node.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height}});
+      const eye=row.querySelector('.cla-transfer-eye'),style=getComputedStyle(eye);
+      return{controls,row:row.getBoundingClientRect().toJSON(),background:style.backgroundColor,border:style.borderTopWidth,radius:getComputedStyle(row).borderRadius};
+    });
+    const [checkbox,handle,name,eye]=layout.controls;
+    assert.ok(handle.x>=checkbox.x+checkbox.width&&name.x>=handle.x+handle.width&&eye.x>=name.x+name.width-1,'checkbox, left handle, name and eye stay in a single row');
+    for(const control of layout.controls)assert.ok(Math.abs(control.y+control.height/2-(layout.row.y+layout.row.height/2))<2,'all controls remain vertically aligned');
+    assert.equal(layout.background,'rgba(0, 0, 0, 0)','eye has no white button background');assert.equal(layout.border,'0px');assert.ok(parseFloat(layout.radius)>=8,'entry uses a rounded native-style card');
+  };
   const cdp=mobile?await page.context().newCDPSession(page):null;
   const drag=async(id,end='drop')=>{
    const handle=page.locator('[data-cla-transfer-drag="'+id+'"]');await handle.scrollIntoViewIfNeeded();
@@ -88,6 +105,7 @@ try{
     else{await page.mouse.move(start.x,start.y);await page.mouse.down();await page.mouse.move(end.x,end.y,{steps:6});await page.mouse.up();}
   };
   await press(page.locator('#cla-transfer-menu'));await selected('0').waitFor();assert.equal(await page.locator('.cla-transfer-item img').count(),0);
+  await checkRowLayout();
   assert.equal(await field('source').inputValue(),'世界书 A');assert.equal(await field('target').inputValue(),'世界书 B');
   if(mobile){const box=await page.locator('.cla-transfer-source-list').boundingBox();const x=box.x+70;const start=box.y+box.height-15,finish=box.y+15;
    await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y:start,id:2}]});
@@ -120,6 +138,22 @@ try{
   await field('kind').selectOption('character');await selected('r1').waitFor();await sweep('r1','r2');assert.equal(await selected('r1').isChecked(),true);assert.equal(await selected('r2').isChecked(),true);await field('operation').selectOption('copy');await drag('r1');await page.locator('#confirm-transfer').waitFor();assert.match(await page.locator('#confirm-transfer').innerText(),/选中的 2 项/);await press(page.locator('#approve'));await page.waitForFunction(()=>!tools.busy);s=await state();assert.equal(s.cards['A.png'].data.extensions.regex_scripts.length,2);assert.equal(s.cards['B.png'].data.extensions.regex_scripts.length,3);const copied=s.cards['B.png'].data.extensions.regex_scripts[1];assert.notEqual(copied.id,'r1');assert.deepEqual(copied.unknown,{keep:true});assert.equal(copied.disabled,true);assert.equal(s.cards['B.png'].data.extensions.other,77);
   assert.deepEqual(await page.evaluate(()=>scriptApi.characters[1].data.extensions.regex_scripts.map(s=>s.id)),s.cards['B.png'].data.extensions.regex_scripts.map(s=>s.id));
   assert.equal(await page.locator('.cla-transfer-source-list [data-cla-transfer-collection="社交动态"]').count(),1);
+  const group=page.locator('.cla-transfer-source-list [data-cla-transfer-collection="社交动态"]');
+  await page.addStyleTag({content:'.cla-transfer-tool{font-size:22px}'});
+  await checkRowLayout();
+  await press(group.locator('summary .cla-transfer-group-name'));
+  assert.equal(await group.getAttribute('open'),null);
+  const folded=await group.evaluate(details=>{
+    const summary=details.querySelector('summary'),rect=summary.getBoundingClientRect();
+    return{height:details.getBoundingClientRect().height,summary:rect.toJSON(),centers:[...summary.children].map(node=>{const r=node.getBoundingClientRect();return r.y+r.height/2}),marker:getComputedStyle(summary).listStyleType};
+  });
+  assert.ok(folded.height<65,'collapsed group stays a compact single line even with larger fonts');
+  assert.ok(folded.centers.every(y=>Math.abs(y-(folded.summary.y+folded.summary.height/2))<2),'disclosure, checkbox, group name, count and handle share one baseline');
+  assert.equal(folded.marker,'none','only one custom disclosure arrow is shown');
+  await page.screenshot({path:mobile?'/private/tmp/cla-transfer-2.1.53-touch.png':'/private/tmp/cla-transfer-2.1.53-desktop.png'});
+  await press(group.locator('summary .cla-transfer-group-name'));
+  await page.addStyleTag({content:'.cla-transfer-tool{font-size:15px}'});
+  await page.locator('.cla-transfer-columns').screenshot({path:mobile?'/private/tmp/cla-transfer-cards-touch.png':'/private/tmp/cla-transfer-cards-desktop.png'});
   await field('target-kind').selectOption('preset');await page.waitForFunction(()=>!tools.targetLoading);
   await press(page.locator('[data-cla-transfer-select-group="社交动态"]'));assert.equal(await selected('r1').isChecked(),true);assert.equal(await selected('r2').isChecked(),true);
   await drag('');await press(page.locator('#approve'));await page.waitForFunction(()=>!tools.busy);

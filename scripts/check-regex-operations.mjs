@@ -49,7 +49,11 @@ try {
             const {RegexUiAdapter}=await import('/adapter.js');const {Popup}=await import('/popup.js');
             Object.assign(window,{data:{},writes:[],permissions:0,settingsSaves:0,confirms:0,confirmNext:true,holdWrites:false,failType:null,nativeDeletes:0,nativeSaves:0,changes:0,refreshes:0,toasts:[]});
             window.toastr={error:text=>toasts.push(text),info:text=>toasts.push(text)};
-            document.body.innerHTML='<div id="viewport"><div id="regex_container"><div class="regex_settings"><div class="inline-drawer-content"><div class="flex-container"><input id="regex_bulk_edit" type="checkbox"><button id="bulk_delete_regex">批量删除</button></div><div id="saved_regex_scripts"></div><div id="saved_preset_scripts"></div><div id="saved_scoped_scripts"></div></div></div></div></div>';
+            document.body.innerHTML='<div id="viewport"><div id="regex_container"><div class="regex_settings"><div class="inline-drawer-content"><div class="flex-container"><label for="regex_bulk_edit"><input id="regex_bulk_edit" type="checkbox">批量编辑</label><button id="bulk_select_all_toggle">全选</button><button id="bulk_delete_regex">批量删除</button></div><div id="saved_regex_scripts"></div><div id="saved_preset_scripts"></div><div id="saved_scoped_scripts"></div></div></div></div></div>';
+            document.querySelector('#bulk_select_all_toggle').addEventListener('click',()=>{
+                const boxes=[...document.querySelectorAll('.regex_bulk_checkbox')],checked=!boxes.every(box=>box.checked);
+                boxes.forEach(box=>box.checked=checked);
+            });
             for(const [scope,type,list]of[['GLOBAL',0,'saved_regex_scripts'],['PRESET',2,'saved_preset_scripts'],['SCOPED',1,'saved_scoped_scripts']]) {
                 data[type]=Array.from({length:20},(_,i)=>({id:scope+'-'+i,scriptName:'[A] '+scope+' '+i,findRegex:'a',replaceString:'b',trimStrings:[],placement:[2],disabled:false,markdownOnly:true,promptOnly:false,runOnEdit:true,substituteRegex:0,minDepth:null,maxDepth:null}));
                 for(const script of data[type]) {
@@ -82,6 +86,27 @@ try {
         assert.equal(await page.evaluate(()=>changes),1,'bulk selection notifies native toolbar only once');
         await page.evaluate(()=>{changes=0;adapter.clearRowSelection();});
         assert.equal(await page.evaluate(()=>changes),1,'clear selection shares the same batched path');
+        const cancelSelection=page.locator('.cla-regex-cancel-selection');
+        assert.equal(await cancelSelection.isVisible(),false);
+        const beforeSelection=await page.evaluate(()=>JSON.stringify({data,writes,settingsSaves}));
+        await page.evaluate(()=>adapter.selectVisibleRows(true));
+        await cancelSelection.click();
+        assert.equal(await page.locator('.regex_bulk_checkbox:checked,.cla-regex-selected').count(),0,'cancel clears checks and all row highlights');
+        assert.equal(await page.locator('#regex_bulk_edit').isChecked(),true,'cancel selection keeps the current bulk editing mode');
+        assert.equal(await cancelSelection.isVisible(),false);
+        await page.evaluate(()=>adapter.selectVisibleRows(true));
+        await page.locator('label[for="regex_bulk_edit"]').click();
+        assert.equal(await page.locator('#regex_bulk_edit').isChecked(),false);
+        assert.equal(await page.locator('.regex_bulk_checkbox:checked,.cla-regex-selected').count(),0,'exiting native bulk edit clears hidden checks and highlights');
+        await page.locator('label[for="regex_bulk_edit"]').click();
+        assert.equal(await page.locator('.regex_bulk_checkbox:checked,.cla-regex-selected').count(),0,'reentering bulk edit does not restore old selections');
+        await page.locator('#bulk_select_all_toggle').click();
+        await page.waitForFunction(()=>document.querySelectorAll('.cla-regex-selected').length===60);
+        assert.equal(await page.locator('.cla-regex-selected').count(),60,'native property-only select-all synchronizes highlights');
+        await cancelSelection.click();
+        await page.evaluate(()=>{document.getElementById('GLOBAL-0').classList.add('cla-regex-selected');adapter.clearRowSelection();});
+        assert.equal(await page.locator('.cla-regex-selected').count(),0,'clear also removes stale highlights from already unchecked rows');
+        assert.equal(await page.evaluate(()=>JSON.stringify({data,writes,settingsSaves})),beforeSelection,'selection never saves or changes regex definitions');
         const session=touch?await page.context().newCDPSession(page):null;
         async function pointer(type,x,y) {
             if(touch)await session.send('Input.dispatchTouchEvent',{type:{down:'touchStart',move:'touchMove',up:'touchEnd',cancel:'touchCancel'}[type],touchPoints:type==='up'||type==='cancel'?[]:[{x,y,id:1}]});
@@ -232,7 +257,7 @@ try {
         assert.equal(await page.evaluate(()=>data[2].find(script=>script.id==='PRESET-12').replaceString),'recover this draft');
         assert.equal(await page.locator('.cla-regex-operation-status').count(),0);
         await page.evaluate(()=>adapter.stop());
-        assert.equal(await page.locator('.cla-regex-group-handle,.cla-regex-drop-tray,.cla-regex-operation-status').count(),0);
+        assert.equal(await page.locator('.cla-regex-group-handle,.cla-regex-drop-tray,.cla-regex-operation-status,.cla-regex-cancel-selection').count(),0);
         assert.deepEqual(errors,[]);
         console.log(`PASS ${touch?'touch':'mouse'}: instant repeated sorting during slow writes, immediate editor close and confirmed deletion, no status labels, failed row/draft recovery, grouping and cleanup`);
         await page.close();

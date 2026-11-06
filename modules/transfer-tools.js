@@ -250,16 +250,23 @@ export class TransferTools {
             input.setAttribute('aria-label', `选择：${value.comment || value.scriptName || id}`); row.append(input);
         } else row.append(node('span', '', 'cla-transfer-item-spacer'));
         const name = node('span', value.comment || value.scriptName || `条目 ${id}`, 'cla-transfer-item-name');
-        name.title = name.textContent; row.append(name);
-        const eye = button('', undefined); delete eye.dataset.claTransferAction;
-        eye.className = 'cla-transfer-eye'; eye.dataset.claTransferView = id; eye.dataset.claTransferSide = side;
-        eye.title = '查看 / 编辑内容'; eye.setAttribute('aria-label', `${eye.title}：${name.textContent}`);
-        eye.append(node('i', undefined, 'fa-solid fa-eye')); row.append(eye);
+        name.title = name.textContent;
         if (side === 'source') {
             const handle = button('⠿'); delete handle.dataset.claTransferAction;
             handle.className = 'cla-transfer-drag-handle'; handle.dataset.claTransferDrag = id;
             handle.setAttribute('aria-label', `拖动${name.textContent}或已选多项到右侧`); row.append(handle);
         } else row.append(node('span', '', 'cla-transfer-drag-spacer'));
+        row.append(name);
+        const eye = button('', undefined); delete eye.dataset.claTransferAction;
+        eye.className = 'cla-transfer-eye'; eye.dataset.claTransferView = id; eye.dataset.claTransferSide = side;
+        eye.title = '查看 / 编辑内容'; eye.setAttribute('aria-label', `${eye.title}：${name.textContent}`);
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        for (const [key, value] of Object.entries({ viewBox: '0 0 24 24', width: '18', height: '18', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.7', 'aria-hidden': 'true' })) svg.setAttribute(key, value);
+        const outline = document.createElementNS(svg.namespaceURI, 'path');
+        outline.setAttribute('d', 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z');
+        const pupil = document.createElementNS(svg.namespaceURI, 'circle');
+        pupil.setAttribute('cx', '12'); pupil.setAttribute('cy', '12'); pupil.setAttribute('r', '3');
+        svg.append(outline, pupil); eye.append(svg); row.append(eye);
         return row;
     }
     renderList(list, items, side) {
@@ -277,12 +284,15 @@ export class TransferTools {
                 input.setAttribute('aria-label', `选择整个分组：${name}`);
                 input.addEventListener('click', event => event.stopPropagation()); summary.append(input);
             } else summary.append(node('span', '', 'cla-transfer-item-spacer'));
-            summary.append(node('span', `${name}（${members.length}）`, 'cla-transfer-group-name'));
+            const disclosure = node('span', '', 'cla-transfer-disclosure'); disclosure.setAttribute('aria-hidden', 'true');
+            summary.prepend(disclosure);
+            const groupName = node('span', name, 'cla-transfer-group-name'); groupName.title = name;
+            summary.append(groupName, node('small', `${members.length} 条`, 'cla-transfer-group-count'));
             if (side === 'source') {
                 const handle = button('⠿'); delete handle.dataset.claTransferAction; handle.className = 'cla-transfer-drag-handle';
                 handle.dataset.claTransferDrag = ''; handle.dataset.claTransferGroup = name;
                 handle.setAttribute('aria-label', `拖动整个分组：${name}`); summary.append(handle);
-            }
+            } else summary.append(node('span', '', 'cla-transfer-drag-spacer'));
             details.append(summary); for (const item of members) details.append(this.renderItem(item, side)); list.append(details);
         }
     }
