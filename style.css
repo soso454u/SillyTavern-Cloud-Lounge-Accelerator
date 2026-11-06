@@ -993,10 +993,6 @@ body.cla-preset-drag-guard [id$="prompt_manager_list"] [data-pm-identifier][clas
 .cla-transfer-group[open] > summary .cla-transfer-disclosure::before { content: '▾'; }
 .cla-transfer-group-count { opacity: 0.65; font-size: 0.8em; white-space: nowrap; }
 .cla-transfer-tool .cla-transfer-group > summary input { margin: 0; width: 18px; height: 18px; }
-.cla-transfer-editor { text-align: left; min-width: 0; }
-.cla-transfer-editor > label { display: flex; flex-direction: column; gap: 5px; margin: 10px 0; }
-.cla-transfer-editor :is(input, textarea) { width: 100%; min-width: 0; max-width: 100%; }
-.cla-transfer-editor textarea { resize: vertical; min-height: 90px; font-family: var(--monoFontFamily, monospace); }
 @media (max-width: 600px) {
     .cla-transfer-item-spacer { width: 16px; }
     .cla-transfer-drag-spacer { width: 18px; }
@@ -1016,33 +1012,9 @@ body.cla-preset-drag-guard [id$="prompt_manager_list"] [data-pm-identifier][clas
 .cla-transfer-item-name { cursor: pointer; touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .cla-transfer-pane-active { border-color: var(--SmartThemeQuoteColor, #7594df); }
 .cla-transfer-pane > button { margin: 0; width: 100%; white-space: normal; }
-.cla-transfer-world-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 10px 0; }
-.cla-transfer-world-fields label { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.cla-transfer-world-fields select { width: 100%; min-width: 0; }
-.cla-transfer-editor [hidden] { display: none !important; }
-
-/* These controls intentionally avoid menu_button theme sizing. */
-.cla-transfer-field-heading { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 6px; min-width: 0; }
-:is(.cla-transfer-editor, dialog.cla-transfer-expanded) button.cla-transfer-expand { appearance: none; display: inline-flex; flex: 0 0 28px; align-items: center; justify-content: center; width: 28px; min-width: 28px; max-width: 28px; height: 28px; min-height: 28px; margin: 0; padding: 3px; border: 0; border-radius: 4px; box-shadow: none; background: transparent; color: inherit; cursor: pointer; line-height: 1; }
-.cla-transfer-expand svg { display: block; width: 16px; height: 16px; pointer-events: none; }
-.cla-transfer-expand:focus-visible { outline: 2px solid var(--SmartThemeQuoteColor, #7594df); }
-dialog.cla-transfer-expanded[open] { display: flex; flex-direction: column; position: fixed; inset: 10px; width: calc(100% - 20px); max-width: none; height: calc(100% - 20px); max-height: none; box-sizing: border-box; gap: 8px; margin: 0; padding: 16px; overflow: hidden; border: 1px solid var(--SmartThemeBorderColor, #888); border-radius: 12px; background: var(--cla-editor-surface, #20242c); opacity: 1; backdrop-filter: none; }
-dialog.cla-transfer-expanded::backdrop { background: #0008; backdrop-filter: none; }
-dialog.cla-transfer-expanded > textarea { display: block; flex: 1 1 0; width: 100%; max-width: 100%; height: 0; min-height: 0; margin: 0; resize: none; box-sizing: border-box; background: var(--cla-editor-surface, #20242c); color: inherit; font-family: var(--monoFontFamily, monospace); }
 @media (max-width: 600px) {
     .cla-transfer-tool .cla-transfer-item { grid-template-columns: 18px minmax(0, 1fr) 24px; }
     .cla-transfer-tool .cla-transfer-group > summary { grid-template-columns: 24px minmax(0, 1fr) auto 18px; }
-    .cla-transfer-world-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 .cla-transfer-disclosure { display: inline-flex; align-items: center; justify-content: center; width: 24px; min-height: 32px; }
-
-.cla-transfer-keywords { display: grid; grid-template-columns: minmax(0, 1fr) minmax(90px, auto) minmax(0, 1fr); align-items: start; gap: 8px; margin: 10px 0; }
-.cla-transfer-keywords > label { display: flex; flex-direction: column; gap: 5px; min-width: 0; margin: 0; }
-.cla-transfer-keywords :is(textarea, select) { width: 100%; min-width: 0; max-width: 100%; margin: 0; box-sizing: border-box; font: inherit; }
-.cla-transfer-editor .cla-transfer-keywords textarea { min-height: 64px; }
-@media (max-width: 600px) {
-    .cla-transfer-keywords { grid-template-columns: 100px minmax(0, 1fr); }
-    .cla-transfer-keywords > label:first-child { grid-column: 1 / -1; }
-    dialog.cla-transfer-expanded[open] { padding: 10px; }
-}

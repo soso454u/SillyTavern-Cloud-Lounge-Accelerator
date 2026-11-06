@@ -1,3 +1,4 @@
+import { ensureTransferEditorStyles } from '../utils/transfer-editor-style.js';
 import { PressSweepSelection } from '../utils/press-sweep-selection.js';
 import { TransferDrag } from '../utils/transfer-drag.js';
 import { ContentTransferService, NativeTransferRepository, fingerprint, editTransferEntry, deleteTransferEntries, transferCollection, transferScopeKey } from './content-transfer.js';
@@ -451,7 +452,8 @@ export class TransferTools {
             if (!valid()) return;
             const entry = ref.kind === 'world' ? data.entries[id] : data.find(item => String(item.id) === id);
             if (!entry) throw new Error('条目已不存在，请重新加载两侧');
-            const editor = node('div', undefined, 'cla-transfer-editor');
+            ensureTransferEditorStyles();
+            const editor = node('div', undefined, 'cla-transfer-editor'); editor.id = 'cla-transfer-editor';
             editor.append(node('h3', '查看 / 编辑内容'), node('small', `${side === 'source' ? '来源' : '目标'}：${ref.label}`));
             const field = (title, name, value, multiline = false) => {
                 const label = node('label'), heading = node('span', undefined, 'cla-transfer-field-heading'), input = node(multiline ? 'textarea' : 'input', undefined, 'text_pole');
@@ -477,6 +479,7 @@ export class TransferTools {
                 optionField('状态', 'disable', !!entry.disable, [['false','启用'],['true','停用']]);
                 optionField('触发策略', 'strategy', entry.constant ? 'constant' : entry.vectorized ? 'vectorized' : 'normal', [['normal','🟢 关键词触发'],['constant','🔵 常驻'],['vectorized','🔗 向量触发']]);
                 const position = optionField('插入位置', 'position', entry.position ?? 0, [[0,'角色定义之前'],[1,'角色定义之后'],[2,'作者注释之前'],[3,'作者注释之后'],[4,'插入深度 @D'],[5,'示例消息之前'],[6,'示例消息之后'],[7,'Outlet']]);
+                position.parentElement.classList.add('cla-transfer-position');
                 const role = optionField('消息角色', 'role', entry.role ?? 0, [[0,'系统'],[1,'用户'],[2,'助手']]);
                 for (const [title, key, value, max] of [['深度','depth',entry.depth ?? 4,10000],['顺序','order',entry.order ?? 100,Number.MAX_SAFE_INTEGER],['触发概率 %','probability',entry.probability ?? 100,100]]) {
                     const input = field(title, key, value); input.type = 'number'; input.min = 0; input.max = max; input.step = 1; grid.append(input.parentElement); worldFields[key] = input;
@@ -555,24 +558,27 @@ export class TransferTools {
 
     expandEditor(input, title, trigger) {
         if (this.closeExpandedEditor) return;
-        const parent = input.parentElement, next = input.nextSibling;
+        ensureTransferEditorStyles();
+        const expandedInput = input.cloneNode(true), name = input.dataset.claTransferEdit;
+        expandedInput.value = input.value; delete input.dataset.claTransferEdit;
         const dialog = node('dialog', undefined, 'cla-transfer-expanded');
-        dialog.setAttribute('aria-label', title);
+        dialog.id = 'cla-transfer-expanded-editor'; dialog.setAttribute('aria-label', title);
         dialog.style.setProperty('--cla-editor-surface', editorSurface(input));
-        dialog.style.color = getComputedStyle(input).color;
+        dialog.style.setProperty('--cla-editor-text', getComputedStyle(input).color);
         const heading = node('div', undefined, 'cla-transfer-field-heading');
-        const collapse = expandIcon(true); heading.append(node('span', title), collapse); dialog.append(heading, input);
+        const collapse = expandIcon(true); heading.append(node('span', title), collapse); dialog.append(heading, expandedInput);
         document.body.append(dialog);
         const close = () => {
             if (this.closeExpandedEditor !== close) return;
             this.closeExpandedEditor = null;
-            parent.insertBefore(input, next); dialog.close(); dialog.remove(); trigger.focus();
+            input.value = expandedInput.value; input.dataset.claTransferEdit = name;
+            dialog.close(); dialog.remove(); trigger.focus();
         };
         this.closeExpandedEditor = close;
         collapse.addEventListener('click', close);
         dialog.addEventListener('cancel', event => { event.preventDefault(); event.stopPropagation(); close(); });
         dialog.addEventListener('keydown', event => { if (event.key === 'Escape') event.stopPropagation(); });
-        dialog.showModal(); input.focus();
+        dialog.showModal(); expandedInput.focus(); expandedInput.scrollTop = input.scrollTop;
     }
 
     async deleteSelected() {
