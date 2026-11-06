@@ -7,6 +7,8 @@ import { RegexUiAdapter } from './regex-ui-adapter.js';
 import { StreamingRenderOptimizer } from './streaming-render-optimizer.js';
 import { ChatHistoryBatchActions } from './chat-history-batch.js';
 import { SecretKeyBatchActions } from './secret-key-batch.js';
+import { TransferTools } from './transfer-tools.js';
+import { AutoConnectController } from './auto-connect.js';
 export { copyDiagnosticText } from './interaction-diagnostics.js';
 export { repairAccelerator } from './repair.js';
 export { SettingsPanel } from '../ui/panel.js';
@@ -21,6 +23,7 @@ export function createDeferredRuntime({
     const regexRefresh = new RegexRefreshController({
         chat, eventSource, eventTypes, getCurrentChatId, isGenerating, scheduler, onStatus,
     });
+    const secretKeyBatch = new SecretKeyBatchActions();
     return {
         cacheController: new CacheController({ onStatus }),
         interactionOptimizer: new InteractionOptimizer({ isGenerating, eventSource, eventTypes, onStatus }),
@@ -29,6 +32,8 @@ export function createDeferredRuntime({
         streamingRender: new StreamingRenderOptimizer({ eventSource, eventTypes, getStreamingProcessor }),
         regexUiAdapter: new RegexUiAdapter({ onSaved: () => regexRefresh.noteChange(), extensionSettings }),
         chatHistoryBatch: new ChatHistoryBatchActions({ scriptApi }),
-        secretKeyBatch: new SecretKeyBatchActions(),
+        secretKeyBatch,
+        transferTools: new TransferTools({ scriptApi, isGenerating, onRegexSaved: () => regexRefresh.noteChange() }),
+        autoConnect: new AutoConnectController({ scriptApi, isGenerating, isSecretBusy: () => secretKeyBatch.busy }),
     };
 }

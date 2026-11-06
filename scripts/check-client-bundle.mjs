@@ -14,6 +14,8 @@ const assets = new Map(await Promise.all((await readdir(new URL('../dist/', impo
 assets.set('/style.css',await readFile(new URL('../style.css',import.meta.url),'utf8'));
 assets.set('/script.js', `
     export const chat = [];
+    export const main_api='openai'; export let online_status='no_connection';
+    export const markConnected=()=>{online_status='online'};
     export const event_types = {SETTINGS_LOADED:'settings', APP_INITIALIZED:'initialized', APP_READY:'ready', CHAT_CHANGED:'chat',
         STREAM_TOKEN_RECEIVED:'token', GENERATION_STARTED:'start', GENERATION_ENDED:'end', GENERATION_STOPPED:'stop'};
     export let streamingProcessor = null;
@@ -47,13 +49,14 @@ assets.set('/script.js', `
     }
 `);
 assets.set('/scripts/extensions.js', `export const extension_settings = {cloud_lounge_accelerator:{
-    pageAcceleration:true, chatOptimization:true, interactionOptimization:true, chatPageSize:5, settingsVersion:'2.1.32',
+    pageAcceleration:true, chatOptimization:true, interactionOptimization:true, autoConnect:true, chatPageSize:5, settingsVersion:'2.1.32',
 }};`);
 assets.set('/scripts/power-user.js', 'export const power_user = {chat_truncation:100,streaming_fps:30,stream_fade_in:true};');
 assets.set('/lib.js', 'export const hljs = {highlightElement() {}, highlightBlock() {}, highlightAll() {}};');
 assets.set('/scripts/openai.js', 'export const promptManager = null;');
 assets.set('/scripts/popup.js', 'export const Popup = {util:{popups:[]},show:{confirm:async()=>0}};');
-assets.set('/scripts/secrets.js', 'export const SECRET_KEYS={CUSTOM:"api_key_custom"}; export const secret_state={}; export async function deleteSecret() {}');
+assets.set('/scripts/secrets.js', 'export const SECRET_KEYS={CUSTOM:"api_key_custom"}; export const resolveSecretKey=()=>"api_key_custom";export const secret_state={}; export async function deleteSecret() {}');
+assets.set('/scripts/tokenizers.js','export const countTokensOpenAIAsync=async()=>0;export const getTokenizerModel=()=>"fixture";');
 assets.set('/scripts/group-chats.js', 'export const selected_group=null; export const groups=[];');
 assets.set('/scripts/utils.js', 'export const regexFromString = input => new RegExp(input);');
 assets.set('/scripts/extensions/regex/engine.js', `
@@ -78,7 +81,7 @@ const server = createServer((request, response) => {
         response.end('{"ok":false}');
     } else if (request.url === '/') {
         response.setHeader('Content-Type', 'text/html');
-        response.end('<!doctype html><html><head><link rel="stylesheet" href="/style.css"><style>:root{--im-bubble-filter:blur(8px)}#chat .mes_block::before{content:"";backdrop-filter:var(--im-bubble-filter)}</style></head><body><div id="chat"></div><div id="extensions_settings2"></div><div id="regex_container"><div class="regex_settings"><div class="inline-drawer-content"><div class="flex-container"></div><div id="saved_regex_scripts"></div><div id="saved_preset_scripts"></div><div id="saved_scoped_scripts"></div></div></div></div></body></html>');
+        response.end('<!doctype html><html><head><link rel="stylesheet" href="/style.css"><style>:root{--im-bubble-filter:blur(8px)}#chat .mes_block::before{content:"";backdrop-filter:var(--im-bubble-filter)}</style></head><body><div id="extensionsMenu"></div><input id="custom_api_url_text" hidden value="https://example.invalid/v1"><button id="api_button_openai" class="api_button" hidden>连接</button><script>window.apiConnections=0;document.querySelector("#api_button_openai").onclick=async()=>{window.apiConnections++;(await import("/script.js")).markConnected()};</script><div id="chat"></div><div id="extensions_settings2"></div><div id="regex_container"><div class="regex_settings"><div class="inline-drawer-content"><div class="flex-container"></div><div id="saved_regex_scripts"></div><div id="saved_preset_scripts"></div><div id="saved_scoped_scripts"></div></div></div></div></body></html>');
     } else {
         response.writeHead(404);
         response.end('missing fixture');
@@ -121,6 +124,10 @@ try {
         await page.waitForFunction(() => document.querySelector('.cla-regex-organizer-toggle'));
         assert.equal(requests.filter(url => url.includes('/dist/')).length, 3);
         assert.equal(await page.evaluate(() => window.settingsSaves || 0), 0);
+        assert.equal(await page.locator('#cla-transfer-menu').count(),1);
+        assert.equal(await page.locator('[data-cla-setting="autoConnect"]').isChecked(),true);
+        assert.equal(requests.some(url=>/world-info|preset-manager/.test(url)),false,'transfer repositories stay lazy');
+        await page.waitForFunction(()=>window.apiConnections===1);
         const idleScroll = await page.evaluate(async () => {
             const native = await import('/script.js');
             const chat = document.querySelector('#chat');
@@ -299,6 +306,7 @@ try {
         assert.equal(await page.locator('[data-cla-regex-scope-actions]').count(), 0);
         assert.equal(await page.locator('.cla-secret-batch-toolbar, .cla-secret-batch-choice').count(), 0);
         assert.equal(await page.locator('.cla-secret-batch-mode').count(), 0);
+        assert.equal(await page.locator('#cla-transfer-menu').count(), 0);
         assert.deepEqual(errors, []);
         await page.close();
     }

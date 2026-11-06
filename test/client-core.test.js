@@ -28,7 +28,7 @@ test('keeps every published version source in sync', async () => {
         import('../manifest.json', { with: { type: 'json' } }),
         import('../package.json', { with: { type: 'json' } }),
     ]);
-    assert.equal(CLIENT_VERSION, '2.1.50');
+    assert.equal(CLIENT_VERSION, '2.1.51');
     assert.equal(manifest.version, CLIENT_VERSION);
     assert.equal(packageJson.version, CLIENT_VERSION);
     assert.equal(ACCELERATOR_VERSION, CLIENT_VERSION);
@@ -46,6 +46,7 @@ test('migrates legacy expert settings into three user-facing switches', () => {
         pageAcceleration: false,
         chatOptimization: true,
         interactionOptimization: false,
+        autoConnect: true,
         chatPageSize: CHAT_PAGE_SIZE,
         settingsVersion: CLIENT_VERSION,
     });

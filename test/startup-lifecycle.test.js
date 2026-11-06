@@ -7,7 +7,7 @@ const dataUrl = source => `data:text/javascript,${encodeURIComponent(source)}`;
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 async function fixture(t, previous) {
-    const state = { saves: 0, chatStarts: 0, deferredLoads: 0, interactionStarts: 0, batchStarts: 0, batchStops: 0, secretStarts: 0, secretStops: 0, cacheStarts: 0, panels: 0 };
+    const state = { saves: 0, chatStarts: 0, deferredLoads: 0, interactionStarts: 0, batchStarts: 0, batchStops: 0, secretStarts: 0, secretStops: 0, autoStarts: 0, autoStops: 0, transferStarts: 0, transferStops: 0, cacheStarts: 0, panels: 0 };
     const handlers = new Map();
     const events = {
         once(name, callback) { this.on(name, callback); },
@@ -49,6 +49,8 @@ async function fixture(t, previous) {
                     interactionOptimizer: {async start() { state.interactionStarts++; await state.interactionGate; }, stop() {}},
                     chatHistoryBatch: {async start() { state.batchStarts++; await state.batchGate; }, stop() {state.batchStops++;}},
                     secretKeyBatch: {async start() { state.secretStarts++; await state.secretGate; }, stop() {state.secretStops++;}},
+                    autoConnect: {async start() {state.autoStarts++;await state.autoGate;}, stop() {state.autoStops++;}},
+                    transferTools: {start() {state.transferStarts++;}, stop() {state.transferStops++;}},
                     regexRefresh: {async start() { return true; }, stop() {}},
                     streamingRender: {start() {}, stop() {}},
                     regexUiAdapter: {async start() {}, stop() {}},
@@ -73,7 +75,7 @@ async function fixture(t, previous) {
 
 const oldSettings = {
     pageAcceleration: true, chatOptimization: true, interactionOptimization: true,
-    chatPageSize: 5, settingsVersion: '2.1.30',
+    autoConnect: true, chatPageSize: 5, settingsVersion: '2.1.30',
 };
 
 test('activation and SETTINGS_LOADED leave optional downloads and settings uploads until APP_READY', async t => {
@@ -220,4 +222,27 @@ test('disable during secret batch initialization stops it and prevents cache/pan
     assert.ok(state.secretStops >= 1);
     assert.equal(state.cacheStarts, 0);
     assert.equal(state.panels, 0);
+});
+
+
+test('auto connect and transfer tools start only after APP_READY and follow their respective switches', async t => {
+    const {plugin,state,events}=await fixture(t,{...oldSettings,autoConnect:false,interactionOptimization:false});
+    plugin.onActivate();events.emit('settings');await tick();
+    assert.equal(state.autoStarts,0);assert.equal(state.transferStarts,0);
+    events.emit('ready');await tick();
+    assert.equal(state.autoStarts,0);assert.equal(state.transferStarts,0);
+});
+
+test('auto connect remains independent of interface optimization', async t => {
+    const {plugin,state,events}=await fixture(t,{...oldSettings,interactionOptimization:false});
+    plugin.onActivate();events.emit('ready');await tick();
+    assert.equal(state.autoStarts,1);assert.equal(state.transferStarts,0);
+});
+
+test('disable during automatic connection imports prevents interaction/transfer revival', async t => {
+    const {plugin,state,events}=await fixture(t,oldSettings);
+    let release;state.autoGate=new Promise(resolve=>{release=resolve});
+    plugin.onActivate();events.emit('ready');await tick();
+    assert.equal(state.autoStarts,1);await plugin.onDisable();release();await tick();
+    assert.ok(state.autoStops>=1);assert.equal(state.transferStarts,0);assert.equal(state.interactionStarts,0);
 });

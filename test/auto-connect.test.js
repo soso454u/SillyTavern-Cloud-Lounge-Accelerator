@@ -1,0 +1,22 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { AutoConnectController } from '../modules/auto-connect.js';
+function fixture(t){
+ const handlers=new Map(),elements=new Map();let clicks=0,generating=false,busy=false;
+ const button={id:'api_button_openai',disabled:false,classList:{contains:()=>false},click:()=>clicks++};
+ elements.set(button.id,button);elements.set('custom_api_url_text',{value:'https://example.invalid/v1'});elements.set('chat_completion_source',{value:'custom'});
+ const documentRef={getElementById:id=>elements.get(id),addEventListener(){},removeEventListener(){}};
+ const scriptApi={main_api:'openai',online_status:'no_connection',event_types:{SECRET_ROTATED:'rotate',SECRET_WRITTEN:'write',SECRET_DELETED:'delete',GENERATION_ENDED:'end',GENERATION_STOPPED:'stop'},eventSource:{on:(e,f)=>handlers.set(e,f),removeListener:e=>handlers.delete(e)}};
+ const secretApi={SECRET_KEYS:{CUSTOM:'custom'},resolveSecretKey:()=> 'custom',secret_state:{custom:[{id:'a',active:true}]}};
+ const controller=new AutoConnectController({scriptApi,documentRef,delay:100000,loadApi:async()=>secretApi,isGenerating:()=>generating,isSecretBusy:()=>busy});t.after(()=>controller.stop());
+ return {controller,scriptApi,secretApi,handlers,elements,button,clicks:()=>clicks,setGenerating:value=>generating=value,setBusy:value=>busy=value};
+}
+test('one startup click; same-key events do not repeatedly connect',async t=>{const f=fixture(t);await f.controller.start();f.controller.run();assert.equal(f.clicks(),1);f.handlers.get('rotate')('custom');f.controller.run();assert.equal(f.clicks(),1)});
+test('rotating current key schedules one native click; unrelated keys do nothing',async t=>{const f=fixture(t);await f.controller.start();f.controller.run();f.secretApi.secret_state.custom=[{id:'b',active:true}];f.handlers.get('rotate')('unrelated');assert.equal(f.controller.pending,null);f.handlers.get('rotate')('custom');f.controller.run();assert.equal(f.clicks(),2)});
+for(const state of ['connected','loading','disabled','invalid-url','missing-button'])test(`${state} prevents startup click`,async t=>{const f=fixture(t);if(state==='connected')f.scriptApi.online_status='online';if(state==='loading')f.button.classList.contains=()=>true;if(state==='disabled')f.button.disabled=true;if(state==='invalid-url')f.elements.get('custom_api_url_text').value='';if(state==='missing-button')f.elements.delete('api_button_openai');await f.controller.start();f.controller.run();assert.equal(f.clicks(),0)});
+for(const active of ['generating','batch'])test(`defers during ${active}, then connects once`,async t=>{const f=fixture(t);await f.controller.start();if(active==='generating')f.setGenerating(true);else f.setBusy(true);f.controller.run();assert.equal(f.clicks(),0);f.setGenerating(false);f.setBusy(false);f.controller.run();assert.equal(f.clicks(),1)});
+test('manual cancel clears pending attempt; a new key can explicitly rearm',async t=>{const f=fixture(t);await f.controller.start();f.controller.onClick({target:{closest:selector=>selector==='.api_loading'?{}:null}});f.controller.run();assert.equal(f.clicks(),0);f.secretApi.secret_state.custom=[{id:'b',active:true}];f.handlers.get('rotate')('custom');f.controller.run();assert.equal(f.clicks(),1)});
+test('native/manual connect covers pending attempt without duplicate auto click',async t=>{const f=fixture(t);await f.controller.start();f.controller.onClick({target:{closest:selector=>selector==='.api_button'?f.button:null}});f.controller.run();assert.equal(f.clicks(),0)});
+test('endpoint change or stop invalidates pending startup',async t=>{const f=fixture(t);await f.controller.start();f.elements.get('custom_api_url_text').value='https://other.invalid';f.controller.run();assert.equal(f.clicks(),0);f.controller.stop();assert.equal(f.handlers.size,0)});
+test('stop while secrets import is pending does not attach listeners',async t=>{const f=fixture(t);let release;f.controller.loadApi=()=>new Promise(resolve=>release=resolve);const pending=f.controller.start();f.controller.stop();release(f.secretApi);await pending;assert.equal(f.controller.started,false);assert.equal(f.handlers.size,0)});
+test('explicitly turning auto-connect off and back on can make a fresh attempt',async t=>{const f=fixture(t);await f.controller.start();f.controller.run();f.controller.stop();await f.controller.start();f.controller.run();assert.equal(f.clicks(),2)});

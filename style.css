@@ -940,3 +940,42 @@ body.cla-preset-drag-guard [id$="prompt_manager_list"] [data-pm-identifier][clas
 #regex_container :is(.regex-script-label, .cla-regex-collection-header).cla-regex-sort-after {
     box-shadow: inset 0 -3px 0 var(--SmartThemeQuoteColor, #5b98e5) !important;
 }
+
+/* Wand transfer: two panes stay side by side on mouse and touch screens. */
+.cla-transfer-tool { position: relative; text-align: left; min-width: 0; }
+.cla-transfer-tool h3 { margin: 0 0 10px; }
+.cla-transfer-fields, .cla-transfer-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.cla-transfer-fields label, .cla-transfer-pane > label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.cla-transfer-tool select, .cla-transfer-tool input[type="search"] { width: 100%; min-width: 0; max-width: 100%; }
+.cla-transfer-hint, .cla-transfer-status { font-size: 0.85em; overflow-wrap: anywhere; }
+.cla-transfer-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.cla-transfer-actions button { width: auto; min-height: 34px; max-width: 100%; margin: 0; white-space: normal; }
+.cla-transfer-actions [hidden] { display: none !important; }
+.cla-transfer-pane { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 8px; border: 1px solid var(--SmartThemeBorderColor, #8885); border-radius: 10px; }
+.cla-transfer-count { opacity: 0.8; font-size: 0.8em; }
+.cla-transfer-list { overflow: auto; min-width: 0; overscroll-behavior: contain; }
+.cla-transfer-source-list, .cla-transfer-dropzone { height: clamp(180px, 36vh, 360px); }
+.cla-transfer-dropzone { display: flex; flex-direction: column; min-width: 0; border: 1px dashed var(--SmartThemeBorderColor, #8888); border-radius: 8px; padding: 4px; }
+.cla-transfer-target-list { flex: 1; min-height: 0; }
+.cla-transfer-drop-hint { font-size: 0.8em; text-align: center; padding: 4px; overflow-wrap: anywhere; }
+.cla-transfer-item { display: grid; grid-template-columns: 18px minmax(0, 1fr) 28px; align-items: start; gap: 6px; padding: 9px 2px; border-bottom: 1px solid var(--SmartThemeBorderColor, #8885); cursor: pointer; min-width: 0; }
+.cla-transfer-target-item { display: block; cursor: default; }
+.cla-transfer-item > input { width: 18px; height: 18px; margin: 3px 0 0; }
+.cla-transfer-item-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; overflow-wrap: anywhere; }
+.cla-transfer-item small { opacity: 0.75; font-size: 0.75em; }
+.cla-transfer-preview { opacity: 0.8; font-size: 0.85em; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.cla-transfer-drag-handle { width: 28px; min-height: 32px; padding: 0; margin: 0; color: inherit; background: transparent; border: 0; font: inherit; font-size: 23px; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
+.cla-transfer-drag-handle:disabled { opacity: 0.35; cursor: default; }
+.cla-transfer-dragging { user-select: none; -webkit-user-select: none; }
+.cla-transfer-drop-active { outline: 2px solid var(--SmartThemeQuoteColor, #7594df); outline-offset: -2px; }
+.cla-transfer-drop-active .cla-transfer-drop-hint { font-weight: bold; }
+.cla-transfer-drag-ghost { position: absolute; z-index: 3; pointer-events: none; max-width: 150px; padding: 6px 9px; border-radius: 8px; border: 1px solid var(--SmartThemeBorderColor, #888); background: var(--SmartThemeBlurTintColor, #dbe8f4); color: inherit; font-size: 13px; box-shadow: 0 2px 8px #0003; }
+@media (max-width: 600px) {
+    .cla-transfer-fields, .cla-transfer-columns { gap: 6px; }
+    .cla-transfer-pane { padding: 5px; }
+    .cla-transfer-item { grid-template-columns: 16px minmax(0, 1fr) 24px; gap: 4px; font-size: 0.9em; }
+    .cla-transfer-item > input { width: 16px; height: 16px; }
+    .cla-transfer-drag-handle { width: 24px; }
+    .cla-transfer-item small { display: none; }
+}
+.cla-preset-token-preview { display: block; min-height: 1.2em; white-space: nowrap; margin: 4px 0; text-align: right; color: inherit; }

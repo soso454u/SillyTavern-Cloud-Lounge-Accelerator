@@ -142,17 +142,13 @@ async function startEnabledModules({ skipCache = false, forceCache = false } = {
         if (!forceCache || !isCurrent()) return;
     }
     const pending = (async () => {
+        if (settings.autoConnect) await current.autoConnect?.start();
+        if (!isCurrent()) { current.autoConnect?.stop(); return; }
         if (settings.interactionOptimization) await current.interactionOptimizer.start();
         if (!isCurrent()) return;
-        if (settings.interactionOptimization) await current.chatHistoryBatch?.start();
-        if (!isCurrent()) {
-            current.chatHistoryBatch?.stop();
-            return;
-        }
-        if (settings.interactionOptimization) await current.secretKeyBatch?.start();
-        if (!isCurrent()) {
-            current.secretKeyBatch?.stop();
-            return;
+        for (const tool of [current.chatHistoryBatch, current.secretKeyBatch, current.transferTools]) {
+            if (settings.interactionOptimization) await tool?.start();
+            if (!isCurrent()) { tool?.stop(); return; }
         }
         if (settings.chatOptimization) {
             current.streamingRender.start();
@@ -200,6 +196,8 @@ async function stopOptimizationModules({ stopCache = false } = {}) {
     runtime.startupOptimizer.stop();
     runtime.chatHistoryBatch?.stop();
     runtime.secretKeyBatch?.stop();
+    runtime.transferTools?.stop();
+    runtime.autoConnect?.stop();
     runtime.regexUiAdapter?.stop();
     runtime.regexRefresh?.stop();
     runtime.streamingRender?.stop();
@@ -249,18 +247,23 @@ async function changeInteractionOptimization(enabled, current) {
         const generation = current.generation;
         await current.interactionOptimizer.start();
         if (!activated || runtime !== current || current.generation !== generation || !settings.interactionOptimization) return;
-        await current.chatHistoryBatch?.start();
-        if (!activated || runtime !== current || current.generation !== generation || !settings.interactionOptimization) {
-            current.chatHistoryBatch?.stop();
-            return;
+        for (const tool of [current.chatHistoryBatch, current.secretKeyBatch, current.transferTools]) {
+            await tool?.start();
+            if (!activated || runtime !== current || current.generation !== generation || !settings.interactionOptimization) {
+                tool?.stop(); return;
+            }
         }
-        await current.secretKeyBatch?.start();
-        if (!activated || runtime !== current || current.generation !== generation || !settings.interactionOptimization) current.secretKeyBatch?.stop();
     } else {
         current.interactionOptimizer.stop();
         current.chatHistoryBatch?.stop();
         current.secretKeyBatch?.stop();
+        current.transferTools?.stop();
     }
+}
+
+async function changeAutoConnect(enabled, current) {
+    if (!enabled) { current.autoConnect?.stop(); return; }
+    if (appReady) await current.autoConnect?.start();
 }
 
 async function changeChatPageSize(value, current) {
@@ -272,6 +275,7 @@ const settingHandlers = Object.freeze({
     pageAcceleration: changePageAcceleration,
     chatOptimization: changeChatOptimization,
     interactionOptimization: changeInteractionOptimization,
+    autoConnect: changeAutoConnect,
     chatPageSize: changeChatPageSize,
 });
 

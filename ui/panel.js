@@ -184,6 +184,7 @@ export class SettingsPanel {
             createSwitch('pageAcceleration', '页面加载加速', '让酒馆第二次打开更快', this.settings.pageAcceleration, this.onSettingChange),
             createSwitch('chatOptimization', '聊天与重美化优化', '减少长聊天、人物面板和复杂正则造成的卡顿', this.settings.chatOptimization, this.onSettingChange),
             createSwitch('interactionOptimization', '界面操作优化', '让抽屉、弹窗、输入与拖动保持流畅可用', this.settings.interactionOptimization, this.onSettingChange),
+            createSwitch('autoConnect', '自动连接 API', '进入酒馆或切换密钥后连接一次；手动取消后不自动重试', this.settings.autoConnect, this.onSettingChange),
         );
 
         const actions = document.createElement('div');

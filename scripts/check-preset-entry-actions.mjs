@@ -19,7 +19,7 @@ const stub = `
 export const DOMPurify={sanitize:x=>x};
 export const event_types={}; export const eventSource={on(){}};
 export const is_send_press=false, main_api='openai', is_group_generating=false, power_user={};
-export const substituteParams=x=>x;
+export const substituteParams=x=>{if(String(x).includes('{{setvar'))window.macroEffects=(window.macroEffects||0)+1;return x};
 export class Message{} export class MessageCollection{} export class TokenHandler {getCounts(){return {}}}
 export const debounce=f=>f; export const waitUntilCondition=async()=>{};
 export const escapeHtml=x=>String(x).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
@@ -45,7 +45,7 @@ const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content
 <div id="completion_prompt_manager_popup_inspect"><div id="completion_prompt_manager_popup_entry_form_inspect_list"></div></div><button id="completion_prompt_manager_popup_close_button">关闭</button></div>
 <input id="openai_max_context" hidden><input id="openai_max_tokens" hidden>
 <script type="module">
-import {PromptManager} from '/native.js'; import {PresetEntryActions} from '/actions.js';
+import {PromptManager} from '/native.js'; import {PresetEntryActions} from '/actions.js'; import {PresetTokenPreview} from '/tokens.js';
 window.$=selector=>{const element=typeof selector==='string'?document.querySelector(selector):selector;const result={first:()=>result,slideDown:()=>{element.style.display='block';return result},slideUp:()=>{element.style.display='none';return result},addClass:c=>{element.classList.add(c);return result},removeClass:c=>{element.classList.remove(c);return result},sortable:()=>result};return result};
 window.confirmChoice=true;window.saves=0;window.confirmations=[];
 window.manager=new PromptManager();
@@ -55,10 +55,12 @@ manager.activeCharacter={id:1};
 manager.renderPromptManager=async()=>{manager.containerElement.innerHTML='<button id="native-new-prompt" title="新提示词">＋</button><ul id="completion_prompt_manager_list"></ul>';manager.listElement=document.querySelector('ul');document.getElementById('native-new-prompt').addEventListener('click',manager.handleNewPrompt)};
 manager.saveServiceSettings=async()=>{window.saves++;if(window.failSave)throw Error('offline');localStorage.setItem('preset',JSON.stringify(manager.serviceSettings))};
 window.adapter=new PresetEntryActions();
-await manager.renderPromptManager();await manager.renderPromptManagerListItems();await adapter.start();window.ready=true;
+await manager.renderPromptManager();await manager.renderPromptManagerListItems();await adapter.start();window.tokenCalls=[];window.model='model-A';window.tokens=new PresetTokenPreview({delay:40});await tokens.start();window.ready=true;
 </script>`;
 const assets = new Map([['/native.js', native.replace(/from ['"][^'"]+['"]/g, "from '/stub.js'")], ['/stub.js', stub], ['/actions.js', source], ['/style.css', style], ['/native.css', nativeCss]]);
-assets.set('/openai.js', 'export const promptManager=window.manager;');
+assets.set('/tokens.js', await readFile(new URL('../modules/preset-token-preview.js', import.meta.url), 'utf8'));
+assets.set('/tokenizers.js', `export const getTokenizerModel=()=>window.model;export const countTokensOpenAIAsync=async message=>{window.tokenCalls.push(message);await window.tokenGate;if(window.tokenFail)throw Error('offline');return message.content.length+message.role.length};`);
+assets.set('/openai.js', 'export const promptManager=window.manager;export const oai_settings={};export const getChatCompletionModel=()=>window.model;');
 assets.set('/popup.js', `export const Popup={show:{confirm:async(header,text)=>{const content=header?'<h3>'+header+'</h3>'+text:text;window.confirmations.push(content instanceof HTMLElement?content.textContent:content);return window.confirmChoice?1:0}}};`);
 const server = createServer((req, res) => {res.setHeader('Content-Type',req.url.endsWith('.js')?'text/javascript':req.url.endsWith('.css')?'text/css':'text/html');res.end(assets.get(req.url)??html)});
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -73,6 +75,35 @@ try {
         const menu=async id=>click(`[data-pm-identifier="${id}"] [data-cla-preset-action="menu"]`);
         const save='#completion_prompt_manager_popup_entry_form_save';
         const name='#completion_prompt_manager_popup_entry_form_name';
+        const promptField='#completion_prompt_manager_popup_entry_form_prompt';
+        const customTokens=()=>page.locator('[data-pm-identifier="custom"] .prompt_manager_prompt_tokens');
+        await click('[data-pm-identifier="custom"] .prompt-manager-edit-action');
+        await page.fill(promptField,'{{setvar::x::y}}');
+        await page.waitForFunction(()=>document.querySelector('.cla-preset-token-preview')?.textContent==='草稿：25 tokens');
+        assert.equal(await page.evaluate(()=>window.macroEffects||0),0,'counting must not execute macros');
+        await page.fill(promptField,'实时编辑正文测试');
+        await page.waitForFunction(()=>document.querySelector('.cla-preset-token-preview')?.textContent==='草稿：17 tokens');
+        assert.equal(await customTokens().textContent(),'17');
+        assert.equal(await page.evaluate(()=>manager.getPromptById('custom').content),'原始正文','typing cannot save draft content');
+        await click('#completion_prompt_manager_popup_entry_form_close');
+        await page.waitForFunction(()=>document.querySelector('[data-pm-identifier="custom"] .prompt_manager_prompt_tokens').textContent==='13');
+        assert.equal(await page.locator('.cla-preset-token-preview').count(),0);
+        await click('[data-pm-identifier="custom"] .prompt-manager-edit-action');
+        await page.fill(promptField,'保存后的内容');await click(save);
+        await page.waitForFunction(()=>document.querySelector('[data-pm-identifier="custom"] .prompt_manager_prompt_tokens').textContent==='15');
+        assert.equal(await page.evaluate(()=>manager.getPromptById('custom').content),'保存后的内容');
+        await click('[data-pm-identifier="custom"] .prompt-manager-edit-action');
+        await page.evaluate(()=>{window.tokenGate=new Promise(resolve=>window.releaseToken=resolve)});
+        await page.fill(promptField,'旧草稿');
+        await page.waitForFunction(()=>tokenCalls.at(-1)?.content==='旧草稿');
+        await page.fill(promptField,'最新草稿');
+        await page.evaluate(()=>releaseToken());
+        await page.waitForFunction(()=>document.querySelector('.cla-preset-token-preview')?.textContent==='草稿：13 tokens');
+        assert.equal(await customTokens().textContent(),'13','late response cannot overwrite newer input');
+        await page.selectOption('#completion_prompt_manager_popup_entry_form_role','user');
+        await page.waitForFunction(()=>document.querySelector('.cla-preset-token-preview')?.textContent==='草稿：8 tokens');
+        await click('#completion_prompt_manager_popup_entry_form_close');
+        await page.evaluate(()=>window.saves=0);
         const trigger=page.locator('[data-pm-identifier="custom"] .cla-preset-entry-more');
         assert.equal(await trigger.evaluate(element=>element.tagName),'SPAN');
         assert.equal(await trigger.getAttribute('role'),'button');
@@ -96,7 +127,7 @@ try {
         await page.waitForSelector('[data-pm-identifier]:nth-last-child(1) .cla-preset-entry-more');
         assert.equal(await page.evaluate(()=>manager.serviceSettings.prompt_order[0].order.at(-1).enabled),false);
         await menu('custom');await click('[data-cla-preset-action="copy"]');
-        assert.equal(await page.inputValue('#completion_prompt_manager_popup_entry_form_prompt'),'原始正文');
+        assert.equal(await page.inputValue('#completion_prompt_manager_popup_entry_form_prompt'),'保存后的内容');
         assert.equal(await page.inputValue('#completion_prompt_manager_popup_entry_form_injection_depth'),'3');
         await page.fill(name,'副本');await click(save);await page.waitForFunction(()=>manager.serviceSettings.prompts.some(p=>p.name==='副本'));
         const copyId=await page.evaluate(()=>manager.serviceSettings.prompts.find(p=>p.name==='副本').identifier);
@@ -152,7 +183,7 @@ try {
             await page.evaluate(()=>document.body.style.removeProperty('--SmartThemeBlurTintColor'));
         }
         await page.screenshot({path:`/private/tmp/cla-preset-entries-${mobile?'390':'1100'}.png`});
-        await page.evaluate(()=>adapter.stop());assert.equal(await page.locator('[data-cla-preset-action]').count(),0);
+        await page.evaluate(()=>{tokens.stop();adapter.stop()});assert.equal(await page.locator('[data-cla-preset-action]').count(),0);
         await page.locator('[data-pm-identifier="main"] .prompt-manager-edit-action').click();
         assert.equal(await page.inputValue(name),'主提示词');
         assert.deepEqual(errors,[]);console.log(`${mobile?'Touch':'Desktop'}: native editor/list create, cancel, copy, insertion, remove/delete, confirmation, persistence, failure retry, protected prompts, layout and cleanup passed`);
