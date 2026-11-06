@@ -49,7 +49,7 @@ assets.set('/script.js', `
     }
 `);
 assets.set('/scripts/extensions.js', `export const extension_settings = {cloud_lounge_accelerator:{
-    pageAcceleration:true, chatOptimization:true, interactionOptimization:true, autoConnect:true, chatPageSize:5, settingsVersion:'2.1.32',
+    pageAcceleration:true, chatOptimization:true, interactionOptimization:true, autoConnect:true,regexCollections:true,transferTools:true,presetEntryActions:true,presetTokenPreview:true,secretKeyBatch:true,chatHistoryBatch:true, chatPageSize:5, settingsVersion:'2.1.32',
 }};`);
 assets.set('/scripts/power-user.js', 'export const power_user = {chat_truncation:100,streaming_fps:30,stream_fade_in:true};');
 assets.set('/lib.js', 'export const hljs = {highlightElement() {}, highlightBlock() {}, highlightAll() {}};');
@@ -121,7 +121,7 @@ try {
             await eventSource.emit('ready');
         });
         await page.locator('#cloud-lounge-accelerator-settings').waitFor({state:'attached'});
-        await page.waitForFunction(() => document.querySelector('.cla-regex-organizer-toggle'));
+        await page.waitForFunction(() => document.querySelector('.cla-regex-reorder-toggle'));
         assert.equal(requests.filter(url => url.includes('/dist/')).length, 3);
         assert.equal(await page.evaluate(() => window.settingsSaves || 0), 0);
         assert.equal(await page.locator('#cla-transfer-menu').count(),1);
@@ -236,15 +236,15 @@ try {
             assert.deepEqual(styledScroll.afterGeneration,styledScroll.beforeGeneration,'actual theme glass stays unchanged at generation end');
             await theme.evaluate(element=>element.remove());
         }
-        await page.locator('.cla-regex-organizer-toggle').click();
-        await page.locator('.cla-regex-group-manager summary').click();
-        await page.locator('[data-cla-regex-new-name]').fill('发布包分组');
-        await page.locator('[data-cla-regex-action="create-collection"]').click();
+        assert.equal(await page.locator('.cla-regex-organizer-toggle').count(),0);
+        await page.locator('[data-cla-regex-create-scope="GLOBAL"]').click();
+        await page.locator('.cla-regex-rename-form:not([hidden]) input').fill('发布包分组');
+        await page.locator('.cla-regex-rename-form:not([hidden]) input').press('Enter');
         assert.deepEqual(await page.evaluate(async()=>{
             const {extension_settings}=await import('/scripts/extensions.js');
             return {groups:extension_settings.cloud_lounge_accelerator_regex_collections?.['["GLOBAL"]']?.groups,
                 saves:window.settingsSaves||0};
-        }),{groups:['发布包分组'],saves:1},'custom group catalog uses the live native settings object and save callback');
+        }),{groups:['发布包分组'],saves:2},'custom group catalog uses the live native settings object and save callback');
         await page.evaluate(() => {
             window.fixtureScripts = [{id:'bundle-numbered',scriptName:'00b | iMessage | 会话视角'}];
             const row = document.createElement('div');
@@ -262,7 +262,7 @@ try {
             const {extension_settings} = await import('/scripts/extensions.js');
             return {groups:extension_settings.cloud_lounge_accelerator_regex_collections?.['["GLOBAL"]']?.groups,
                 saves:window.settingsSaves||0};
-        }), {groups:['发布包分组','新分组'],saves:2}, 'quick empty groups persist through the published runtime');
+        }), {groups:['发布包分组','新分组'],saves:3}, 'quick empty groups persist through the published runtime');
         await page.evaluate(() => {
             fixtureScripts.push({id:'bundle-numbered-2',scriptName:'01 | iMessage | 正文'});
             const row=document.createElement('div');row.id='bundle-numbered-2';row.className='regex-script-label';
@@ -293,6 +293,22 @@ try {
         await page.locator('[data-cla-secret-action="toggle"]').click();
         await page.locator('[data-cla-secret-select]').check();
         assert.match(await page.locator('[data-cla-secret-action="delete"]').textContent(), /1/);
+        await page.getByRole('tab',{name:'小功能',exact:true}).click();
+        const mini=page.locator('[data-cla-page="mini-features"]');
+        assert.equal(await mini.locator('input[type="checkbox"]').count(),7);
+        await page.screenshot({path:'/private/tmp/cla-mini-features-'+(options.isMobile?'touch':'desktop')+'.png'});
+        assert.ok(await mini.locator('input[type="checkbox"]').evaluateAll(inputs=>inputs.every(input=>input.checked)),'every mini feature defaults on');
+        await mini.locator('[data-cla-setting="transferTools"]').uncheck();
+        await page.waitForFunction(()=>!document.querySelector('#cla-transfer-menu'));
+        assert.ok(await page.locator('.cla-regex-group-handle').count()>0,'turning transfer off leaves regex classification on');
+        await mini.locator('[data-cla-setting="transferTools"]').check();await page.locator('#cla-transfer-menu').waitFor();
+        await mini.locator('[data-cla-setting="regexCollections"]').uncheck();
+        await page.waitForFunction(()=>!document.querySelector('[data-cla-regex-fold]'));
+        assert.equal(await page.locator('.cla-regex-group-handle').count(),0);
+        assert.equal(await page.locator('#cla-transfer-menu').count(),1);
+        await mini.locator('[data-cla-setting="regexCollections"]').check();
+        await page.waitForFunction(()=>document.querySelector('[data-cla-regex-fold]'));
+        await page.getByRole('tab',{name:'常用',exact:true}).click();
         await page.evaluate(async()=>{
             const native=await import('/script.js');
             window.streamingFixture=native.beginStream();window.originalProgress=streamingFixture.onProgressStreaming;

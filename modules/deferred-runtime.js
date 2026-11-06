@@ -1,3 +1,6 @@
+import { MiniFeatures } from './mini-features.js';
+import { PresetEntryActions } from './preset-entry-actions.js';
+import { PresetTokenPreview } from './preset-token-preview.js';
 // Loaded after APP_READY so these dependencies cannot hold up extension activation.
 import { CacheController } from './cache-controller.js';
 import { InteractionOptimizer } from './interaction-optimizer.js';
@@ -24,16 +27,25 @@ export function createDeferredRuntime({
         chat, eventSource, eventTypes, getCurrentChatId, isGenerating, scheduler, onStatus,
     });
     const secretKeyBatch = new SecretKeyBatchActions();
+    const regexUiAdapter = new RegexUiAdapter({ onSaved: () => regexRefresh.noteChange(), extensionSettings });
+    const transferTools = new TransferTools({ scriptApi, extensionSettings, isGenerating, onRegexSaved: () => regexRefresh.noteChange() });
+    const chatHistoryBatch = new ChatHistoryBatchActions({ scriptApi });
+    const autoConnect = new AutoConnectController({ scriptApi, isGenerating, isSecretBusy: () => secretKeyBatch.busy });
+    const miniFeatures = new MiniFeatures({ regexUiAdapter, modules: {
+        presetEntryActions: new PresetEntryActions({ isGenerating }), presetTokenPreview: new PresetTokenPreview(),
+        chatHistoryBatch, secretKeyBatch, transferTools, autoConnect,
+    } });
     return {
+        miniFeatures,
         cacheController: new CacheController({ onStatus }),
         interactionOptimizer: new InteractionOptimizer({ isGenerating, eventSource, eventTypes, onStatus }),
         performanceConfig: new PerformanceConfigController({ getRequestHeaders }),
         regexRefresh,
         streamingRender: new StreamingRenderOptimizer({ eventSource, eventTypes, getStreamingProcessor }),
-        regexUiAdapter: new RegexUiAdapter({ onSaved: () => regexRefresh.noteChange(), extensionSettings }),
-        chatHistoryBatch: new ChatHistoryBatchActions({ scriptApi }),
+        regexUiAdapter,
+        chatHistoryBatch,
         secretKeyBatch,
-        transferTools: new TransferTools({ scriptApi, isGenerating, onRegexSaved: () => regexRefresh.noteChange() }),
-        autoConnect: new AutoConnectController({ scriptApi, isGenerating, isSecretBusy: () => secretKeyBatch.busy }),
+        transferTools,
+        autoConnect,
     };
 }

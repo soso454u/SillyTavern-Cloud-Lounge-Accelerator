@@ -5,8 +5,6 @@ import { InputRevealGuard, restoreNativeInputLayout } from './native-input.js';
 import { MobileInteractionGuard } from './mobile-interaction-guard.js';
 import { UiRenderOptimizer } from './ui-render-optimizer.js';
 import { PresetDragGuard } from './preset-drag-guard.js';
-import { PresetEntryActions } from './preset-entry-actions.js';
-import { PresetTokenPreview } from './preset-token-preview.js';
 
 const RENDER_PROFILE_LABELS = Object.freeze({
     desktop: '桌面流畅',
@@ -20,8 +18,6 @@ export class InteractionOptimizer {
         this.diagnostics = new InteractionDiagnostics();
         this.promptToggle = new PromptToggleAdapter({ isGenerating, eventSource, eventTypes });
         this.presetDragGuard = new PresetDragGuard();
-        this.presetEntryActions = new PresetEntryActions({ isGenerating });
-        this.presetTokenPreview = new PresetTokenPreview();
         this.mobileGuard = new MobileInteractionGuard({
             onRecovered: diagnostic => this.reportRecovery(diagnostic),
         });
@@ -42,21 +38,18 @@ export class InteractionOptimizer {
         this.diagnostics.start();
         const presetDragGuardActive = this.presetDragGuard.start();
         restoreNativeInputLayout();
-        const [promptToggleActive, recoveryGuardActive, mobileGuardActive, inputRevealActive, renderProfile, presetEntryActionsActive] = await Promise.all([
+        const [promptToggleActive, recoveryGuardActive, mobileGuardActive, inputRevealActive, renderProfile] = await Promise.all([
             this.promptToggle.start(),
             this.recoveryGuard.start(),
             this.mobileGuard.start(),
             this.inputReveal.start(),
             this.uiRender.start(),
-            this.presetEntryActions.start(),
         ]);
         if (!this.started) {
             this.stopFeatures();
             return;
         }
-        const presetTokenActive = await this.presetTokenPreview.start();
-        if (!this.started) { this.stopFeatures(); return; }
-        this.features = { promptToggleActive, presetDragGuardActive, recoveryGuardActive, mobileGuardActive, inputRevealActive, renderProfile, presetEntryActionsActive, presetTokenActive };
+        this.features = { promptToggleActive, presetDragGuardActive, recoveryGuardActive, mobileGuardActive, inputRevealActive, renderProfile };
         this.emitStatus();
     }
 
@@ -74,8 +67,6 @@ export class InteractionOptimizer {
         const {
             promptToggleActive,
             presetDragGuardActive,
-            presetEntryActionsActive,
-            presetTokenActive,
             recoveryGuardActive,
             mobileGuardActive,
             inputRevealActive,
@@ -84,8 +75,6 @@ export class InteractionOptimizer {
         const status = [
             promptToggleActive ? '预设即时切换' : null,
             presetDragGuardActive ? '预设防误拖' : null,
-            presetEntryActionsActive ? '预设条目工具' : null,
-            presetTokenActive ? '条目实时 token' : null,
             RENDER_PROFILE_LABELS[renderProfile],
             recoveryGuardActive ? '全平台自愈' : null,
             mobileGuardActive ? '触控保护' : null,
@@ -99,11 +88,9 @@ export class InteractionOptimizer {
     }
 
     stopFeatures() {
-        this.presetTokenPreview.stop();
         this.diagnostics.stop();
         this.promptToggle.stop();
         this.presetDragGuard.stop();
-        this.presetEntryActions.stop();
         this.recoveryGuard.stop();
         this.mobileGuard.stop();
         this.inputReveal.stop();

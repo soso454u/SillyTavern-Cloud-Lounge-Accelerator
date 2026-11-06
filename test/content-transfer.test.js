@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ContentTransferService, NativeTransferRepository, planTransfer } from '../modules/content-transfer.js';
+import { ContentTransferService, NativeTransferRepository, planTransfer, editTransferEntry, transferCollection } from '../modules/content-transfer.js';
 const clone = value => structuredClone(value);
 const rule = (id, extra = {}) => ({ id, scriptName: '同名规则', findRegex: '/abc/g', replaceString: '<div>$1</div>', disabled: true, placement: [1,2], trimStrings:['x'], minDepth:2, maxDepth:8, runOnEdit:true, markdownOnly:true, unknown:{future:true}, ...extra });
 
@@ -98,4 +98,26 @@ test('preset failure rolls back only our regex field, retains other extensions a
     const repo=new NativeTransferRepository({scriptApi:{saveSettingsDebounced(){}},worldApi:{},presetApi:{getPresetManager:id=>id==='openai'?manager:null}});
     await assert.rejects(repo.write({kind:'preset',id:'["openai","P"]',apiId:'openai',name:'P'},[],[rule('a')]));
     assert.deepEqual(preset.extensions,{other:true,regex_scripts:[rule('a')]});assert.equal(settings.extensions.unrelated,3);
+});
+
+test('character-to-preset and preset-to-character moves save the correct destination then the fixed source',async()=>{
+ for(const [from,to] of [['character','preset'],['preset','character']]){
+  const f=fixture();f.source.kind=from;f.target.kind=to;const kinds=[];
+  f.repository.write=async(ref,data)=>{kinds.push(ref.kind);f.store[ref.id]=clone(data)};
+  const job=await f.service.prepare(from,f.source,f.target,['a']);await f.service.execute(job,{move:true});
+  assert.deepEqual(kinds,[to,from]);assert.equal(f.store.B.length,2);assert.deepEqual(f.store.A.map(rule=>rule.id),['b']);
+ }
+});
+test('world books cannot be accidentally mixed with regex endpoints',async()=>{const f=fixture();f.target.kind='world';await assert.rejects(f.service.prepare('character',f.source,f.target,['a']),/不能混合/)});
+
+test('editing changes only name/body fields and preserves identity, options and original metadata',()=>{
+ const world={entries:{0:{uid:0,comment:'old',content:'old body',disable:true,depth:9,unknown:{x:1}}},originalData:{entries:[{uid:0,content:'old body',unknown:42}]}};
+ const edited=editTransferEntry('world',world,'0',{name:'new',content:'new body'});assert.equal(world.entries[0].content,'old body');assert.equal(edited.entries[0].uid,0);assert.equal(edited.entries[0].depth,9);assert.equal(edited.originalData.entries[0].content,'new body');assert.equal(edited.originalData.entries[0].unknown,42);
+ const source=[rule('a')];const next=editTransferEntry('preset',source,'a',{name:'new',findRegex:'/new/g',replaceString:'replacement'});
+ assert.deepEqual(next[0],{...source[0],scriptName:'new',findRegex:'/new/g',replaceString:'replacement'});assert.throws(()=>editTransferEntry('preset',source,'a',{name:' '}),/不能为空/);assert.throws(()=>editTransferEntry('world',world,'missing',{}),/不存在/);
+});
+test('transfer groups use the same numbered/bracket rules and honor per-endpoint manual assignment',()=>{
+ const ref={kind:'character',avatar:'A.png'};assert.equal(transferCollection(ref,{id:'a',scriptName:'01 | 社交动态 | 正文'}),'社交动态');assert.equal(transferCollection(ref,{id:'b',scriptName:'[月下] 正文'}),'月下');
+ const settings={cloud_lounge_accelerator_regex_collections:{'["SCOPED","A.png"]':{assignments:{a:'自定义'}}}};
+ assert.equal(transferCollection(ref,{id:'a',scriptName:'01 | 社交动态 | 正文'},settings),'自定义');assert.equal(transferCollection({kind:'character',avatar:'B.png'},{id:'a',scriptName:'01 | 社交动态 | 正文'},settings),'社交动态');
 });

@@ -184,7 +184,6 @@ export class SettingsPanel {
             createSwitch('pageAcceleration', '页面加载加速', '让酒馆第二次打开更快', this.settings.pageAcceleration, this.onSettingChange),
             createSwitch('chatOptimization', '聊天与重美化优化', '减少长聊天、人物面板和复杂正则造成的卡顿', this.settings.chatOptimization, this.onSettingChange),
             createSwitch('interactionOptimization', '界面操作优化', '让抽屉、弹窗、输入与拖动保持流畅可用', this.settings.interactionOptimization, this.onSettingChange),
-            createSwitch('autoConnect', '自动连接 API', '进入酒馆或切换密钥后连接一次；手动取消后不自动重试', this.settings.autoConnect, this.onSettingChange),
         );
 
         const actions = document.createElement('div');
@@ -213,11 +212,23 @@ export class SettingsPanel {
         this.advanced = createAdvancedPanel({ onCopyDiagnostics: this.onCopyDiagnostics });
         mainPage.append(this.performance.element, actions, repairBox, this.advanced.element);
         const chatDisplayPage = createChatDisplayPage(this.settings, this.onSettingChange);
+        const miniPage = document.createElement('section');
+        miniPage.className = 'cla-page'; miniPage.dataset.claPage = 'mini-features';
+        for (const [key, title, description] of [
+            ['regexCollections', '正则分类与多选', '直接在合集里勾选、按住名称划选和拖动归组'],
+            ['transferTools', '世界书 / 正则转移', '魔法棒双栏工具，支持跨角色、跨预设复制与移动'],
+            ['presetEntryActions', '预设条目操作', '行内新建、复制、移出和删除条目'],
+            ['presetTokenPreview', '预设实时 token', '编辑条目时即时统计原文 token'],
+            ['secretKeyBatch', '密钥批量删除', '在密钥管理弹窗里多选删除'],
+            ['chatHistoryBatch', '聊天批量操作', '在聊天记录中多选删除，保护当前聊天'],
+            ['autoConnect', '自动连接 API', '进入酒馆或切换密钥后连接一次；手动取消后不自动重试'],
+        ]) miniPage.append(createSwitch(key, title, description, this.settings[key], this.onSettingChange));
         const pages = [
             { key: 'main', label: '常用', page: mainPage },
             { key: 'chat-display', label: '聊天显示', page: chatDisplayPage },
+            { key: 'mini-features', label: '小功能', page: miniPage },
         ];
-        content.append(status, createTabs(pages), mainPage, chatDisplayPage);
+        content.append(status, createTabs(pages), mainPage, chatDisplayPage, miniPage);
         body.append(content);
         header.append(title, body);
         root.append(header);

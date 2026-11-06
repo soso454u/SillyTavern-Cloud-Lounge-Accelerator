@@ -21,7 +21,7 @@ export class TransferDrag {
     onDown(event) {
         const handle = event.target.closest?.('[data-cla-transfer-drag]');
         if (!handle || handle.disabled || this.drag || event.button !== 0 || !event.isPrimary || !this.valid()) return;
-        const ids = this.getIds(handle.dataset.claTransferDrag);
+        const ids = this.getIds(handle.dataset.claTransferDrag, handle);
         if (!ids.length) return;
         event.preventDefault(); event.stopPropagation();
         this.drag = { handle, ids, pointer: event.pointerId, x: event.clientX, y: event.clientY, active: false };

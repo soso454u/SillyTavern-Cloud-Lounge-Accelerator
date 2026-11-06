@@ -25,6 +25,7 @@ const assets = new Map([
     ['/script.js',`export const characters=[{avatar:'a.png'}];export const this_chid=0;export const saveSettingsDebounced=()=>window.settingsSaves++;`],
     ['/popup.js',`export const Popup={util:{popups:[]},show:{confirm:async()=>{window.confirms++;return window.confirmNext;}}};`],
 ]);
+for(const path of ['utils/press-sweep-selection.js','utils/regex-collections.js'])assets.set('/'+path,await readFile(new URL('../'+path,import.meta.url),'utf8'));
 const server=createServer((req,res)=>{
     res.setHeader('Content-Type',assets.has(req.url)?'text/javascript':'text/html');
     res.end(assets.get(req.url)||'<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><body></body>');
@@ -75,13 +76,12 @@ try {
             adapter.createCollection('GLOBAL','B');adapter.openCollections.add('["GLOBAL","A"]');adapter.applyOrganizerFilters();
             window.originalIds=()=>[...document.querySelector('#saved_regex_scripts').children].map(row=>row.id).filter(Boolean);
         });
-        await page.waitForFunction(()=>document.querySelector('.cla-regex-organizer-toggle'));
-        await page.locator('.cla-regex-organizer-toggle').click();
+        await page.waitForFunction(()=>document.querySelector('.cla-regex-group-handle'));
+        assert.equal(await page.locator('.cla-regex-organizer-toggle').count(),0);
         await page.evaluate(()=>{changes=0;adapter.selectVisibleRows(true);});
         assert.equal(await page.evaluate(()=>changes),1,'bulk selection notifies native toolbar only once');
         await page.evaluate(()=>{changes=0;adapter.clearRowSelection();});
         assert.equal(await page.evaluate(()=>changes),1,'clear selection shares the same batched path');
-        await page.locator('[data-cla-regex-drag]').check();
         const session=touch?await page.context().newCDPSession(page):null;
         async function pointer(type,x,y) {
             if(touch)await session.send('Input.dispatchTouchEvent',{type:{down:'touchStart',move:'touchMove',up:'touchEnd',cancel:'touchCancel'}[type],touchPoints:type==='up'||type==='cancel'?[]:[{x,y,id:1}]});
@@ -92,10 +92,19 @@ try {
         }
         const center=async locator=>{const box=await locator.boundingBox();return{x:box.x+box.width/2,y:box.y+box.height/2};};
         await page.locator('#GLOBAL-0 .regex_script_name').evaluate(element=>element.scrollIntoView({block:'start'}));
-        const from=await center(page.locator('#GLOBAL-0 .regex_script_name'));
-        const to=await center(page.locator('#GLOBAL-7 .regex_script_name'));
+        let from=await center(page.locator('#GLOBAL-0 .regex_script_name'));
+        let to=await center(page.locator('#GLOBAL-7 .regex_script_name'));
+        if(touch){
+            await pointer('down',to.x,to.y);
+            for(let i=1;i<=8;i++)await pointer('move',to.x,to.y+(from.y-to.y)*i/8);
+            await pointer('up',from.x,from.y);await page.waitForTimeout(250);
+            assert.ok(await page.locator('#viewport').evaluate(node=>node.scrollTop)>0,'ordinary swipe scrolls without selecting');
+            assert.equal(await page.locator('.regex_bulk_checkbox:checked').count(),0);
+            await page.locator('#GLOBAL-0 .regex_script_name').evaluate(element=>element.scrollIntoView({block:'start'}));
+            from=await center(page.locator('#GLOBAL-0 .regex_script_name'));to=await center(page.locator('#GLOBAL-7 .regex_script_name'));
+        }
         await page.evaluate(()=>changes=0);
-        await pointer('down',from.x,from.y);await pointer('move',to.x,to.y);await pointer('up',to.x,to.y);
+        await pointer('down',from.x,from.y);if(touch)await page.waitForTimeout(480);await pointer('move',to.x,to.y);await pointer('up',to.x,to.y);
         assert.equal(await page.evaluate(()=>Array.from({length:8},(_,i)=>document.querySelector('#GLOBAL-'+i+' .regex_bulk_checkbox').checked).every(Boolean)),true,'fast pointer jump fills all crossed rows');
         assert.ok(await page.evaluate(()=>changes)<=3,'native selection toolbar is notified per frame instead of per crossed row');
         const definitions=await page.evaluate(()=>JSON.stringify(data)),ids=await page.evaluate(()=>originalIds());

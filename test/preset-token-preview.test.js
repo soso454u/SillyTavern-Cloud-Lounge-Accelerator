@@ -49,3 +49,6 @@ test('a newly saved draft continues counting after its prompt array is replaced'
 test('a later third-party wrapper cannot revive token UI after disable',async t=>{
     const f=await fixture(t);const wrapped=f.manager.loadPromptIntoEditForm;f.manager.loadPromptIntoEditForm=(...args)=>wrapped(...args);f.preview.stop();f.manager.loadPromptIntoEditForm(f.prompt);assert.equal(f.preview.badge,null);assert.equal(f.preview.draft,null);
 });
+test('reenabling beneath a later wrapper leaves older generations dormant',async t=>{
+    const f=await fixture(t);const old=f.manager.loadPromptIntoEditForm;f.manager.loadPromptIntoEditForm=(...args)=>old(...args);f.preview.stop();await f.preview.start();let badges=0;const ensure=f.preview.ensureBadge.bind(f.preview);f.preview.ensureBadge=()=>{badges++;ensure()};f.manager.loadPromptIntoEditForm(f.prompt);assert.equal(badges,1);
+});

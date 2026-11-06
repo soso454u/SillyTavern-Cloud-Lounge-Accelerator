@@ -1,3 +1,5 @@
+import { getRegexCollectionName } from '../utils/regex-collections.js';
+import { PressSweepSelection } from '../utils/press-sweep-selection.js';
 const TYPE_BY_LIST_ID = Object.freeze({
     saved_regex_scripts: 'GLOBAL',
     saved_scoped_scripts: 'SCOPED',
@@ -17,14 +19,7 @@ export function normalizeRegexCollectionName(value) {
     return name;
 }
 
-export function getRegexCollectionName(scriptName) {
-    const name = String(scriptName || '').trim();
-    const bracketed = name.match(/^(?:\[([^\]]+)\]|【([^】]+)】|〔([^〕]+)〕|「([^」]+)」|『([^』]+)』)/u);
-    const collection = bracketed?.slice(1).find(Boolean)?.trim();
-    // Numbered packs use the second field as their collection, e.g. 00b | iMessage | 会话视角.
-    const numbered = name.match(/^[0-9０-９]+[a-z]?\s*[|｜│]\s*([^|｜│]+)[|｜│]\s*\S/iu);
-    return collection || numbered?.[1].trim() || UNGROUPED_COLLECTION;
-}
+export { getRegexCollectionName } from '../utils/regex-collections.js';
 
 export function getRegexCollectionKey(scope = '', collection = UNGROUPED_COLLECTION) {
     return JSON.stringify([scope, collection]);
@@ -126,6 +121,7 @@ export class RegexUiAdapter {
         this.onSaved = onSaved;
         this.extensionSettings = extensionSettings;
         this.started = false;
+        this.collectionsEnabled = true;
         this.engine = null;
         this.popupApi = null;
         this.scriptApi = null;
@@ -176,7 +172,7 @@ export class RegexUiAdapter {
             console.debug('[Cloud Lounge Accelerator] 正则界面最小刷新适配不可用', error);
             return false;
         }
-        this.autoCollapseCollections = this.readAutoCollapseSetting();
+        this.autoCollapseCollections = true;
         this.started = true;
         this.generation += 1;
         document.addEventListener('click', this.onClick, true);
@@ -197,8 +193,48 @@ export class RegexUiAdapter {
             if (records.some(mutationAffectsRegexUi)) this.scheduleOrganizerRefresh();
         });
         this.observer.observe(document.body, { childList: true, subtree: true });
+        if (this.collectionsEnabled) this.startNameSelection();
         this.scheduleOrganizerRefresh();
         return true;
+    }
+
+    startNameSelection() {
+        if (this.nameSelection) return;
+        this.nameSelection = new PressSweepSelection({ root: document,
+            nameSelector: '#regex_container .regex_script_name', rowSelector: '.regex-script-label',
+            getRows: row => this.getVisibleRows().filter(item => getTypeKey(item) === getTypeKey(row)),
+            valid: row => this.started && !this.groupDrag && !!this.getCollectionContext(getTypeKey(row)) && !row.hidden,
+            context: row => this.getCollectionContext(getTypeKey(row)),
+            isSelected: row => !!row.querySelector('.regex_bulk_checkbox')?.checked,
+            setSelected: (row, selected, range) => {
+                if (range) this.selectRow(row, selected, { range: true }); else this.setRowSelected(row, selected, { notify: false });
+                this.lastSelectedRow = row;
+            },
+            onStart: () => this.enableBulkEdit(),
+            onChange: () => { this.updateOrganizerCount();
+                const row = this.nameSelection?.gesture?.row || this.getRows()[0];
+                row?.querySelector('.regex_bulk_checkbox')?.dispatchEvent(new Event('change', { bubbles: true })); },
+        });
+    }
+
+    setCollectionsEnabled(enabled) {
+        this.collectionsEnabled = enabled;
+        if (!enabled) this.clearCollectionUi();
+        else if (this.started) { this.startNameSelection(); this.scheduleOrganizerRefresh(); }
+    }
+
+    clearCollectionUi() {
+        document.querySelector('#regex_container')?.classList.remove('cla-regex-collections-enabled');
+        this.nameSelection?.destroy(); this.nameSelection = null;
+        this.finishPointerGesture(false);
+        this.reorderButton?.remove(); this.reorderButton = null;
+        document.querySelectorAll('[data-cla-regex-scope-actions]').forEach(node => node.remove());
+        this.clearCollectionFolds();
+        for (const row of this.getRows()) {
+            row.querySelector('.cla-regex-group-handle')?.remove(); row.hidden = false;
+            row.classList.remove('cla-regex-selected');
+            delete row.dataset.claRegexCollection; delete row.dataset.claRegexScope;
+        }
     }
 
     scheduleOrganizerRefresh() {
@@ -494,19 +530,6 @@ export class RegexUiAdapter {
         }
     }
 
-    createOrganizerButton() {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'menu_button menu_button_icon cla-regex-organizer-toggle';
-        button.title = '按合集整理、搜索和多选正则';
-        const icon = document.createElement('i');
-        icon.className = 'fa-solid fa-folder-tree';
-        const label = document.createElement('small');
-        label.textContent = '整理正则';
-        button.append(icon, label);
-        return button;
-    }
-
     createReorderButton() {
         const button = document.createElement('button');
         button.type = 'button';
@@ -520,105 +543,15 @@ export class RegexUiAdapter {
         return button;
     }
 
-    createOrganizer() {
-        const root = document.createElement('section');
-        root.className = 'cla-regex-organizer';
-        root.hidden = true;
-        root.innerHTML = `
-            <div class="cla-regex-organizer-heading">
-                <strong>正则整理</strong>
-                <span data-cla-regex-count>0 条·已选 0 条</span>
-            </div>
-            <div class="cla-regex-filters">
-                <input type="search" class="text_pole" data-cla-regex-search placeholder="搜索正则名称" />
-                <select class="text_pole" data-cla-regex-collection aria-label="正则合集"></select>
-                <select class="text_pole" data-cla-regex-scope aria-label="正则范围">
-                    <option value="all">全部范围</option>
-                    <option value="GLOBAL">全局</option>
-                    <option value="PRESET">预设</option>
-                    <option value="SCOPED">角色</option>
-                </select>
-            </div>
-            <div class="cla-regex-organizer-actions">
-                <button type="button" class="menu_button" data-cla-regex-action="select-visible">选择当前结果</button>
-                <button type="button" class="menu_button" data-cla-regex-action="clear">清空选择</button>
-                <label class="checkbox_label cla-regex-collapse-option">
-                    <input type="checkbox" data-cla-regex-auto-collapse />
-                    <span>合集自动折叠</span>
-                </label>
-                <label class="checkbox_label cla-regex-drag-option">
-                    <input type="checkbox" data-cla-regex-drag />
-                    <span>按住名称划选多条</span>
-                </label>
-            </div>
-            <details class="cla-regex-group-manager">
-                <summary>管理分组</summary>
-                <div class="cla-regex-group-create">
-                    <input class="text_pole" data-cla-regex-new-name maxlength="60" placeholder="新分组名称" aria-label="新分组名称" />
-                    <select class="text_pole" data-cla-regex-new-scope aria-label="新分组范围">
-                        <option value="GLOBAL">全局</option><option value="PRESET">当前预设</option><option value="SCOPED">当前角色</option>
-                    </select>
-                    <button type="button" class="menu_button" data-cla-regex-action="create-collection">新建分组</button>
-                </div>
-                <div class="cla-regex-group-move">
-                    <select class="text_pole" data-cla-regex-move-target aria-label="移入的分组"></select>
-                    <button type="button" class="menu_button" data-cla-regex-action="move-selected">将已选正则移入分组</button>
-                </div>
-                <small>分组随酒馆设置保存；不修改正则名称、内容或执行顺序。</small>
-            </details>
-            <small data-cla-regex-feedback role="status" aria-live="polite"></small>
-            <small class="cla-regex-organizer-hint">点分组标题展开，点名称勾选；开启划选后可连续滑过名称。拖动行内 ↪ 可归组，拖动已选行可批量归组；“调整顺序”中的 ☰ 仍调整执行顺序。</small>
-        `;
-        root.querySelector('[data-cla-regex-auto-collapse]').checked = this.autoCollapseCollections;
-        root.addEventListener('input', event => {
-            if (event.target?.matches?.('[data-cla-regex-search]')) {
-                this.applyOrganizerFilters();
-            }
-        });
-        root.addEventListener('change', event => {
-            if (event.target?.matches?.('[data-cla-regex-scope], [data-cla-regex-collection]')) {
-                this.applyOrganizerFilters();
-            }
-            if (event.target?.matches?.('[data-cla-regex-auto-collapse]')) {
-                this.autoCollapseCollections = event.target.checked;
-                this.reorderMode = false;
-                this.saveAutoCollapseSetting();
-                this.refreshCollectionFolds();
-                this.applyOrganizerFilters();
-            }
-            if (event.target?.matches?.('[data-cla-regex-drag]')) {
-                document.querySelector('#regex_container')?.classList?.toggle('cla-regex-drag-selecting', event.target.checked);
-            }
-        });
-        root.addEventListener('click', event => {
-            const action = event.target?.closest?.('[data-cla-regex-action]')?.dataset?.claRegexAction;
-            if (action === 'select-visible') this.selectVisibleRows(true);
-            if (action === 'clear') this.clearRowSelection();
-            if (action === 'create-collection') {
-                const input = root.querySelector('[data-cla-regex-new-name]');
-                if (this.runCollectionAction(() => this.createCollection(root.querySelector('[data-cla-regex-new-scope]').value, input.value))) input.value = '';
-            }
-            if (action === 'move-selected') this.runCollectionAction(() => this.moveSelectedToCollection(root.querySelector('[data-cla-regex-move-target]').value));
-        });
-        return root;
-    }
-
     enhanceRegexUi() {
-        if (!this.started) return;
+        if (!this.started || !this.collectionsEnabled) return;
         const settings = document.querySelector('#regex_container .regex_settings');
         if (!settings) return;
+        settings.closest('#regex_container')?.classList.add('cla-regex-collections-enabled');
         const primaryActions = settings.querySelector('.inline-drawer-content > .flex-container');
-        if (!this.organizerButton?.isConnected && primaryActions) {
-            this.organizerButton = this.createOrganizerButton();
-            primaryActions.append(this.organizerButton);
-        }
         if (!this.reorderButton?.isConnected && primaryActions) {
             this.reorderButton = this.createReorderButton();
             primaryActions.append(this.reorderButton);
-        }
-        if (!this.organizerRoot?.isConnected) {
-            this.organizerRoot = this.createOrganizer();
-            primaryActions?.after(this.organizerRoot);
         }
         this.refreshOrganizerRows();
     }
@@ -643,7 +576,7 @@ export class RegexUiAdapter {
         for (const row of rows) {
             const label = row.querySelector('.regex_script_name');
             const name = String(label?.textContent || '').trim();
-            if (label) label.title = name;
+            if (label) label.title = `${name} · 按住鼠标划选；触屏长按后划选`;
             const collection = this.getAssignedCollection(getTypeKey(row), row.id, name);
             row.dataset.claRegexCollection = collection;
             row.dataset.claRegexScope = getTypeKey(row) || '';
@@ -968,16 +901,6 @@ export class RegexUiAdapter {
             return;
         }
 
-        const rowName = target.closest('.regex_script_name');
-        const row = rowName?.closest?.('.regex-script-label');
-        if (row && this.isRowSelectionEnabled()) {
-            event.preventDefault();
-            event.stopPropagation();
-            if (performance.now() < this.suppressRowClickUntil) return;
-            const checkbox = row.querySelector('.regex_bulk_checkbox');
-            this.selectRow(row, !checkbox?.checked, { range: event.shiftKey });
-            return;
-        }
         const editButton = target.closest('.edit_existing_regex');
         if (editButton) {
             const label = editButton.closest('.regex-script-label[id]');
@@ -1145,22 +1068,7 @@ export class RegexUiAdapter {
             event.stopImmediatePropagation();
             return;
         }
-        if (!this.organizerOpen) return;
-        if (!this.organizerRoot?.querySelector('[data-cla-regex-drag]')?.checked) return;
-        const row = event.target?.closest?.('.regex_script_name')?.closest?.('.regex-script-label');
-        if (!row || row.hidden) return;
-        event.preventDefault();
-        const checkbox = row.querySelector('.regex_bulk_checkbox');
-        const selected = !checkbox?.checked;
-        const visible = this.getVisibleRows();
-        this.enableBulkEdit();
-        this.selectionGesture = { pointerId: event.pointerId, selected, rows: new Set([row]), visible,
-            lastIndex: visible.indexOf(row), source: event.target, x: event.clientX, y: event.clientY, changed: null,
-            scroller: this.findGestureScroller(row) };
-        this.suppressRowClickUntil = performance.now() + 500;
-        if (this.setRowSelected(row, selected, { notify: false })) this.selectionGesture.changed = row;
-        event.target.setPointerCapture?.(event.pointerId);
-        this.queuePointerFrame();
+
     }
 
     onPointerMove(event) {
@@ -1529,6 +1437,7 @@ export class RegexUiAdapter {
 
     stop() {
         if (!this.started) return;
+        this.nameSelection?.destroy(); this.nameSelection = null;
         this.started = false;
         this.generation += 1;
         this.finishPointerGesture(false);
@@ -1561,7 +1470,7 @@ export class RegexUiAdapter {
                 delete row.dataset.claRegexScope;
             }
         });
-        document.querySelector('#regex_container')?.classList?.remove?.('cla-regex-drag-selecting');
+        document.querySelector('#regex_container')?.classList?.remove?.('cla-regex-drag-selecting', 'cla-regex-collections-enabled');
         this.organizerButton?.remove?.();
         document.querySelectorAll('[data-cla-regex-scope-actions]').forEach(actions => actions.remove());
         this.reorderButton?.remove?.();

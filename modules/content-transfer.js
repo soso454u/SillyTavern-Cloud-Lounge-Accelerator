@@ -1,7 +1,38 @@
+import { getRegexCollectionName } from '../utils/regex-collections.js';
 const clone = value => structuredClone(value);
 export const fingerprint = value => JSON.stringify(value);
 const itemsOf = (kind, data) => kind === 'world' ? Object.entries(data.entries).map(([id, value]) => ({ id, value }))
     : data.map(value => ({ id: String(value.id), value }));
+
+export function transferScopeKey(ref) {
+    return ref.kind === 'character' ? JSON.stringify(['SCOPED', ref.avatar])
+        : ref.kind === 'preset' ? JSON.stringify(['PRESET', ref.apiId, ref.name]) : null;
+}
+
+export function transferCollection(ref, value, settings = {}) {
+    const assignments = settings.cloud_lounge_accelerator_regex_collections?.[transferScopeKey(ref)]?.assignments;
+    return assignments && Object.hasOwn(assignments, String(value.id)) && typeof assignments[value.id] === 'string'
+        ? assignments[value.id] : getRegexCollectionName(value.scriptName);
+}
+
+export function editTransferEntry(kind, data, id, patch) {
+    const next = clone(data);
+    const entry = itemsOf(kind, next).find(item => item.id === String(id))?.value;
+    if (!entry) throw new Error('条目已不存在，请重新加载');
+    if (kind === 'world') {
+        entry.comment = String(patch.name ?? entry.comment ?? '');
+        entry.content = String(patch.content ?? entry.content ?? '');
+        const original = Array.isArray(next.originalData?.entries) ? next.originalData.entries.find(item => String(item.uid) === String(id)) : null;
+        if (original) Object.assign(original, { comment: entry.comment, content: entry.content });
+    } else {
+        const name = String(patch.name ?? entry.scriptName ?? '').trim();
+        if (!name) throw new Error('正则名称不能为空');
+        entry.scriptName = name;
+        entry.findRegex = String(patch.findRegex ?? entry.findRegex ?? '');
+        entry.replaceString = String(patch.replaceString ?? entry.replaceString ?? '');
+    }
+    return next;
+}
 
 // Plans detached copies only: source/target objects are never mutated here.
 export function planTransfer(kind, source, target, ids, uuid = () => crypto.randomUUID()) {
@@ -16,7 +47,7 @@ export function planTransfer(kind, source, target, ids, uuid = () => crypto.rand
             while (Object.hasOwn(nextTarget.entries, String(uid))) uid++;
             const copy = { ...clone(value), uid, displayIndex: display++ };
             nextTarget.entries[uid] = copy;
-            const original = source.originalData?.entries?.find(entry => String(entry.uid) === id);
+            const original = Array.isArray(source.originalData?.entries) ? source.originalData.entries.find(entry => String(entry.uid) === id) : null;
             if (original && Array.isArray(nextTarget.originalData?.entries)) nextTarget.originalData.entries.push({ ...clone(original), uid });
             delete nextSource.entries[id];
             created.push(String(uid++));
@@ -40,7 +71,8 @@ export class ContentTransferService {
     constructor(repository) { this.repository = repository; this.busy = false; }
 
     async prepare(kind, source, target, ids) {
-        if (source.id === target.id) throw new Error('来源和目标不能相同');
+        if ((source.kind === 'world') !== (target.kind === 'world')) throw new Error('世界书与正则不能混合转移');
+        if (source.kind === target.kind && source.id === target.id) throw new Error('来源和目标不能相同');
         const sourceData = await this.repository.read(source);
         const targetData = await this.repository.read(target);
         return { kind, source, target, ids: [...ids], sourceData, targetData,

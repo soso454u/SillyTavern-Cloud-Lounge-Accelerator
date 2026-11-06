@@ -142,30 +142,18 @@ async function startEnabledModules({ skipCache = false, forceCache = false } = {
         if (!forceCache || !isCurrent()) return;
     }
     const pending = (async () => {
-        if (settings.autoConnect) await current.autoConnect?.start();
-        if (!isCurrent()) { current.autoConnect?.stop(); return; }
         if (settings.interactionOptimization) await current.interactionOptimizer.start();
         if (!isCurrent()) return;
-        for (const tool of [current.chatHistoryBatch, current.secretKeyBatch, current.transferTools]) {
-            if (settings.interactionOptimization) await tool?.start();
-            if (!isCurrent()) { tool?.stop(); return; }
-        }
         if (settings.chatOptimization) {
             current.streamingRender.start();
-            const refreshReady = await current.regexRefresh.start();
+            await current.regexRefresh.start();
             if (!isCurrent()) {
                 current.regexRefresh.stop();
                 return;
             }
-            if (refreshReady) {
-                await current.regexUiAdapter.start();
-                if (!isCurrent()) {
-                    current.regexUiAdapter.stop();
-                    return;
-                }
-            }
         }
-        if (!isCurrent()) return;
+        await current.miniFeatures?.apply(settings);
+        if (!isCurrent()) { current.miniFeatures?.stop(); return; }
         if (settings.pageAcceleration && !skipCache) {
             try {
                 await current.cacheController.startAfterLogin({ force: forceCache });
@@ -194,11 +182,7 @@ async function stopOptimizationModules({ stopCache = false } = {}) {
     runtime.generation += 1;
     runtime.chatStart = null;
     runtime.startupOptimizer.stop();
-    runtime.chatHistoryBatch?.stop();
-    runtime.secretKeyBatch?.stop();
-    runtime.transferTools?.stop();
-    runtime.autoConnect?.stop();
-    runtime.regexUiAdapter?.stop();
+    runtime.miniFeatures?.stop();
     runtime.regexRefresh?.stop();
     runtime.streamingRender?.stop();
     await runtime.chatOptimizer.stop();
@@ -225,7 +209,6 @@ async function changePageAcceleration(enabled, current) {
 
 async function changeChatOptimization(enabled, current) {
     if (!enabled) {
-        current.regexUiAdapter.stop();
         current.regexRefresh.stop();
         current.streamingRender.stop();
         await current.chatOptimizer.stop();
@@ -238,32 +221,12 @@ async function changeChatOptimization(enabled, current) {
     legacyTruncation = null;
     if (!appReady) return;
     current.streamingRender.start();
-    const refreshReady = await current.regexRefresh.start();
-    if (refreshReady) await current.regexUiAdapter.start();
+    await current.regexRefresh.start();
 }
 
 async function changeInteractionOptimization(enabled, current) {
-    if (enabled && appReady) {
-        const generation = current.generation;
-        await current.interactionOptimizer.start();
-        if (!activated || runtime !== current || current.generation !== generation || !settings.interactionOptimization) return;
-        for (const tool of [current.chatHistoryBatch, current.secretKeyBatch, current.transferTools]) {
-            await tool?.start();
-            if (!activated || runtime !== current || current.generation !== generation || !settings.interactionOptimization) {
-                tool?.stop(); return;
-            }
-        }
-    } else {
-        current.interactionOptimizer.stop();
-        current.chatHistoryBatch?.stop();
-        current.secretKeyBatch?.stop();
-        current.transferTools?.stop();
-    }
-}
-
-async function changeAutoConnect(enabled, current) {
-    if (!enabled) { current.autoConnect?.stop(); return; }
-    if (appReady) await current.autoConnect?.start();
+    if (enabled && appReady) await current.interactionOptimizer.start();
+    else current.interactionOptimizer.stop();
 }
 
 async function changeChatPageSize(value, current) {
@@ -275,7 +238,6 @@ const settingHandlers = Object.freeze({
     pageAcceleration: changePageAcceleration,
     chatOptimization: changeChatOptimization,
     interactionOptimization: changeInteractionOptimization,
-    autoConnect: changeAutoConnect,
     chatPageSize: changeChatPageSize,
 });
 
@@ -283,6 +245,7 @@ async function changeSetting(key, value) {
     const handler = settingHandlers[key];
     settings[key] = value;
     if (handler) await handler(value, getRuntime());
+    if (appReady) await getRuntime().miniFeatures?.apply(settings);
     persistSettings();
     await panel?.refresh();
 }

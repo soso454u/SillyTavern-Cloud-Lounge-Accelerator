@@ -59,8 +59,8 @@ export class PresetTokenPreview {
     }
 
     wrap(key, handler) {
-        const manager = this.manager, previous = manager[key];
-        const wrapped = (...args) => this.started ? handler(previous.bind(manager), args) : previous.apply(manager, args);
+        const manager = this.manager, previous = manager[key], generation = this.generation;
+        const wrapped = (...args) => this.started && this.generation === generation ? handler(previous.bind(manager), args) : previous.apply(manager, args);
         manager[key] = wrapped; this.wrappers.push({ key, previous, wrapped });
     }
 

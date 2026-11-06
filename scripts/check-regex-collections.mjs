@@ -9,8 +9,10 @@ const { chromium } = createRequire(import.meta.url)('playwright');
 const adapterSource = await readFile(new URL('../modules/regex-ui-adapter.js', import.meta.url), 'utf8');
 const styles = await readFile(new URL('../style.css', import.meta.url), 'utf8');
 const themeStyles = process.env.CLA_REGEX_THEME_CSS ? await readFile(process.env.CLA_REGEX_THEME_CSS,'utf8') : '';
-const server = createServer((request, response) => {
-    if (request.url === '/adapter.js') {
+const server = createServer(async (request, response) => {
+    if (request.url === '/utils/press-sweep-selection.js' || request.url === '/utils/regex-collections.js') {
+        response.setHeader('Content-Type','text/javascript'); response.end(await readFile(new URL('..'+request.url,import.meta.url),'utf8'));
+    } else if (request.url === '/adapter.js') {
         response.setHeader('Content-Type', 'text/javascript');
         response.end(adapterSource);
     } else if (request.url === '/regex/engine.js') {
@@ -104,7 +106,7 @@ try {
             window.originalRows = data.map(([id]) => document.getElementById(id));
             window.nativeIds = () => [...globalList.children].map(node => node.id).filter(Boolean);
         });
-        await page.waitForFunction(() => adapter.organizerButton?.isConnected);
+        await page.waitForFunction(() => document.querySelector(".cla-regex-group-handle"));
         const initialIds = ['a1', 'b1', 'plain', 'a2', 'player'];
         assert.deepEqual(await page.evaluate(() => nativeIds()), initialIds);
         assert.equal(await page.locator('.cla-regex-organizer [data-cla-regex-fold]').count(), 0);
@@ -166,17 +168,9 @@ try {
         await page.evaluate(() => adapter.saveQueue);
         assert.equal(await page.evaluate(() => saved[0].next.find(script => script.id === 'a1').disabled), true);
 
-        await page.locator('.cla-regex-organizer-toggle').click();
-        await page.locator('[data-cla-regex-search]').fill('白色');
-        assert.equal(await page.locator('#a1').isVisible(), false);
-        assert.equal(await page.locator('#a2').isVisible(), true);
-        assert.equal(await header.locator('small').textContent(), '1 条');
-        await page.locator('[data-cla-regex-search]').fill('');
+        assert.equal(await page.locator('.cla-regex-organizer,.cla-regex-organizer-toggle').count(),0);
         await header.locator('.cla-regex-collection-toggle').click();
-        assert.equal(await page.locator('#a2').isVisible(), false);
-        // Closing the organizer must leave inline folding active.
-        await page.locator('.cla-regex-organizer-toggle').click();
-        assert.equal(await page.locator('#a1').isVisible(), false);
+        assert.equal(await page.locator('#a2').isVisible(),false);
 
         await page.evaluate(() => {
             document.querySelector('#b1 .regex_script_name').textContent = '[月下美化]第三条';
@@ -191,18 +185,11 @@ try {
         assert.equal(await page.evaluate(() => refreshes), settledRefreshes, 'own collection headers must not cause a refresh loop');
 
         const originalScripts = await page.evaluate(()=>JSON.stringify(scripts));
-        await page.locator('.cla-regex-organizer-toggle').click();
-        await page.locator('.cla-regex-group-manager summary').click();
-        await page.locator('[data-cla-regex-new-name]').fill('自建空组');
-        await page.locator('[data-cla-regex-action="create-collection"]').click();
+        await page.locator('[data-cla-regex-create-scope="GLOBAL"]').click();
+        await page.locator('.cla-regex-rename-form:not([hidden]) input').fill('自建空组');
+        await page.locator('.cla-regex-rename-form:not([hidden]) input').press('Enter');
         assert.equal(await page.locator('#saved_regex_scripts [data-cla-regex-fold="自建空组"]').isVisible(),true);
-        assert.equal(await page.locator('#saved_regex_scripts [data-cla-regex-fold="自建空组"] small').textContent(),'0 条');
-        await page.locator('[data-cla-regex-action="clear"]').click();
-        await header.locator('.cla-regex-collection-toggle').click();
-        await page.locator('#a1 .regex_script_name').click();
-        await page.locator('#a2 .regex_script_name').click();
-        await page.locator('[data-cla-regex-move-target]').selectOption('自建空组');
-        await page.locator('[data-cla-regex-action="move-selected"]').click();
+        await page.evaluate(()=>{adapter.clearRowSelection();adapter.setRowSelected(document.getElementById('a1'),true);adapter.setRowSelected(document.getElementById('a2'),true);adapter.moveSelectedToCollection('自建空组')});
         assert.deepEqual(await page.evaluate(()=>['a1','a2'].map(id=>document.getElementById(id).dataset.claRegexCollection)),['自建空组','自建空组']);
         const customName='自定义分组名字很长也应该自动换行不撑出边框';
         await page.locator('#saved_regex_scripts [data-cla-regex-fold="自建空组"] .cla-regex-collection-rename').click();
@@ -213,9 +200,7 @@ try {
         assert.equal(await page.evaluate(()=>JSON.stringify(scripts)),originalScripts,'grouping never rewrites native rule definitions');
         assert.deepEqual(await page.evaluate(()=>nativeIds()),initialIds);
         const savesBeforeDuplicate=await page.evaluate(()=>groupSaves);
-        await page.locator('[data-cla-regex-new-name]').fill(customName);
-        await page.locator('[data-cla-regex-action="create-collection"]').click();
-        assert.match(await page.locator('[data-cla-regex-feedback]').textContent(),/同名/);
+        assert.equal(await page.evaluate(name=>{try{adapter.createCollection('GLOBAL',name);return false}catch{return true}},customName),true);
         assert.equal(await page.evaluate(()=>groupSaves),savesBeforeDuplicate);
         await page.evaluate(async()=>{
             const {RegexUiAdapter}=await import('/adapter.js');
@@ -224,10 +209,9 @@ try {
             window.adapter=new RegexUiAdapter({extensionSettings:collectionSettings});
             await adapter.start();
         });
-        await page.waitForFunction(()=>document.querySelector('.cla-regex-organizer-toggle'));
+        await page.waitForFunction(()=>document.querySelector('.cla-regex-group-handle'));
         assert.equal(await page.evaluate(()=>document.getElementById('a1').dataset.claRegexCollection),customName,'groups survive serialized settings and adapter restart');
-        await page.locator('.cla-regex-organizer-toggle').click();
-        await page.locator('.cla-regex-group-manager summary').click();
+        assert.equal(await page.locator('.cla-regex-organizer-toggle').count(),0);
         await page.locator(`#saved_regex_scripts [data-cla-regex-fold="${customName}"] .cla-regex-collection-toggle`).click();
         await page.evaluate(()=>{
             window.originalRuleTitle=document.querySelector('#a1 .regex_script_name').textContent;
@@ -277,11 +261,11 @@ try {
         const reorderedIds = ['a2', 'a1', 'b1', 'plain', 'player'];
         await page.locator('.cla-regex-reorder-toggle').click();
         assert.deepEqual(await page.evaluate(() => nativeIds()), reorderedIds);
-        await page.locator('[data-cla-regex-auto-collapse]').uncheck();
+        await page.evaluate(()=>adapter.setCollectionsEnabled(false));
         assert.equal(await page.locator('[data-cla-regex-fold]').count(), 0);
         assert.equal(await page.locator('#a1').isVisible(), true);
         assert.equal(await page.locator('#a1 .drag-handle').isVisible(), true);
-        await page.locator('[data-cla-regex-auto-collapse]').check();
+        await page.evaluate(()=>adapter.setCollectionsEnabled(true));
         await page.evaluate(() => adapter.stop());
         assert.equal(await page.locator('[data-cla-regex-fold]').count(), 0);
         assert.deepEqual(await page.evaluate(() => nativeIds()), reorderedIds);

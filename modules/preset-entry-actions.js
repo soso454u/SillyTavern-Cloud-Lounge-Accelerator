@@ -46,7 +46,7 @@ export class PresetEntryActions {
             const adapter = this;
             const wrapped = async function (...args) {
                 const result = await originalRender.apply(this, args);
-                if (adapter.started) adapter.decorate();
+                if (adapter.started && adapter.generation === generation) adapter.decorate();
                 return result;
             };
             wrapped[MARK] = true;
