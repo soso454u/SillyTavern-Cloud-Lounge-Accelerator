@@ -147,8 +147,7 @@ export class StartupOptimizer {
             }
         };
         this.nativeFetch = originalFetch;
-        const fetchWrapper = async (input, init = {}) => {
-            if (this.fetchWrapper !== fetchWrapper) return originalFetch(input, init);
+        this.fetchWrapper = async (input, init = {}) => {
             let descriptor;
             try {
                 descriptor = describeRequest(input, init);
@@ -194,8 +193,7 @@ export class StartupOptimizer {
                 throw error;
             }
         };
-        this.fetchWrapper = fetchWrapper;
-        window.fetch = fetchWrapper;
+        window.fetch = this.fetchWrapper;
     }
 
     async fetchRecentChats(nativeFetch, input, init, descriptor) {

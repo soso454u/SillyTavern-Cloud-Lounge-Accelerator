@@ -32,7 +32,7 @@ export function createDeferredRuntime({
     const chatHistoryBatch = new ChatHistoryBatchActions({ scriptApi });
     const autoConnect = new AutoConnectController({ scriptApi, isGenerating, isSecretBusy: () => secretKeyBatch.busy });
     const miniFeatures = new MiniFeatures({ regexUiAdapter, modules: {
-        presetEntryActions: new PresetEntryActions({ isGenerating }), presetTokenPreview: new PresetTokenPreview({ sentOptions: { eventSource, eventTypes, getCurrentChatId, getRequestHeaders } }),
+        presetEntryActions: new PresetEntryActions({ isGenerating }), presetTokenPreview: new PresetTokenPreview(),
         chatHistoryBatch, secretKeyBatch, transferTools, autoConnect,
     } });
     return {

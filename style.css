@@ -980,8 +980,6 @@ body.cla-preset-drag-guard [id$="prompt_manager_list"] [data-pm-identifier][clas
 /* Show raw-text previews over the native dash without changing its markup or data. */
 .prompt_manager_prompt_tokens[data-pm-tokens="-"][data-cla-preset-raw-tokens] { position: relative; visibility: hidden; }
 .prompt_manager_prompt_tokens[data-pm-tokens="-"][data-cla-preset-raw-tokens]::after { content: attr(data-cla-preset-raw-tokens); position: absolute; inset: 0; visibility: visible; }
-[data-cla-sent-token-native] { display: none !important; }
-.cla-sent-history-tokens { font-size: calc(var(--mainFontSize, 1rem) * 0.9); text-align: right; }
 .cla-preset-token-preview { display: block; min-height: 1.2em; white-space: nowrap; margin: 4px 0; text-align: right; color: inherit; }
 
 .cla-transfer-item-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; align-self: center; }
