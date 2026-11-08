@@ -1,3 +1,5 @@
+import { SentPromptTokens } from './sent-prompt-tokens.js';
+
 // Preview the edited prompt using the native asynchronous model tokenizer.
 // Row previews fill only native placeholders and never replace native counts.
 const NATIVE_CONTEXT_IDS = new Set([
@@ -10,12 +12,12 @@ function canPreview(prompt) {
     return Boolean(prompt?.identifier && !prompt.marker && !NATIVE_CONTEXT_IDS.has(prompt.identifier));
 }
 export class PresetTokenPreview {
-    constructor({ documentRef = globalThis.document, delay = 300, loadApi = async () => {
+    constructor({ documentRef = globalThis.document, delay = 300, sentOptions, loadApi = async () => {
         const [openai, tokenizer] = await Promise.all([import('../../../../openai.js'), import('../../../../tokenizers.js')]);
-        return { manager: openai.promptManager, count: tokenizer.countTokensOpenAIAsync,
+        return { manager: openai.promptManager, count: tokenizer.countTokensOpenAIAsync, tokenizerModel: tokenizer.getTokenizerModel,
             model: () => JSON.stringify([tokenizer.getTokenizerModel?.(), openai.getChatCompletionModel?.(), openai.oai_settings?.chat_completion_source]) };
     } } = {}) {
-        Object.assign(this, { document: documentRef, delay, loadApi });
+        Object.assign(this, { document: documentRef, delay, loadApi, sentOptions });
         this.started = false; this.generation = 0; this.revision = 0;
         this.tracked = new WeakMap(); this.cache = new Map(); this.wrappers = []; this.previewCells = new Set();
         this.onInput = event => {
@@ -65,8 +67,13 @@ export class PresetTokenPreview {
                 const result = original(...args);
                 this.schedule(); return result;
             });
+            if (this.sentOptions) {
+                this.sent = new SentPromptTokens({ ...this.sentOptions, manager, model: this.model, tokenizerModel: api.tokenizerModel });
+                this.sent.start();
+            }
             this.wrap('renderPromptManagerListItems', async (original, args) => {
                 const result = await original(...args);
+                this.sent?.render();
                 this.schedule(); return result;
             });
             for (const type of ['input', 'change']) this.document.addEventListener(type, this.onInput);
@@ -117,6 +124,7 @@ export class PresetTokenPreview {
 
     async refresh() {
         if (!this.started) return;
+        this.sent?.render();
         // At most one tokenizer request is in flight. New input supersedes it.
         if (this.running) { this.queued = true; return; }
         this.running = true;
@@ -185,6 +193,7 @@ export class PresetTokenPreview {
 
     stop() {
         this.started = false; this.generation++; this.revision++;
+        this.sent?.stop(); this.sent = null;
         clearTimeout(this.timer); this.timer = null;
         for (const type of ['input', 'change']) this.document?.removeEventListener(type, this.onInput);
         this.document?.removeEventListener('compositionend', this.onComposition);

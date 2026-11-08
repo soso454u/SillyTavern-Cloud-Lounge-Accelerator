@@ -58,6 +58,7 @@ window.adapter=new PresetEntryActions();
 await manager.renderPromptManager();await manager.renderPromptManagerListItems();await adapter.start();window.tokenCalls=[];window.model='model-A';window.tokens=new PresetTokenPreview({delay:40});await tokens.start();window.ready=true;
 </script>`;
 const assets = new Map([['/native.js', native.replace(/from ['"][^'"]+['"]/g, "from '/stub.js'")], ['/stub.js', stub], ['/actions.js', source], ['/style.css', style], ['/native.css', nativeCss]]);
+assets.set('/sent-prompt-tokens.js', await readFile(new URL('../modules/sent-prompt-tokens.js', import.meta.url), 'utf8'));
 assets.set('/tokens.js', await readFile(new URL('../modules/preset-token-preview.js', import.meta.url), 'utf8'));
 assets.set('/tokenizers.js', `export const getTokenizerModel=()=>window.model;export const countTokensOpenAIAsync=async message=>{window.tokenCalls.push(message);await window.tokenGate;if(window.tokenFail)throw Error('offline');return message.content.length+message.role.length};`);
 assets.set('/openai.js', 'export const promptManager=window.manager;export const oai_settings={};export const getChatCompletionModel=()=>window.model;');
@@ -204,6 +205,71 @@ try {
             }
             await page.evaluate(()=>document.body.style.removeProperty('--SmartThemeBlurTintColor'));
         }
+        const sentFixture = await page.evaluate(async () => {
+            const { SentPromptTokens } = await import('/sent-prompt-tokens.js');
+            const header = document.createElement('div');
+            header.innerHTML = '<div><span data-i18n="Total Tokens:">总 Token 数量</span> 276825</div>';
+            manager.containerElement.prepend(header);
+            const history = manager.listElement.querySelector('[data-pm-identifier="chatHistory"] .prompt_manager_prompt_tokens');
+            history.dataset.pmTokens = '237640';
+            history.lastChild.textContent = '237640';
+            const handlers = new Map();
+            const eventTypes = { CHAT_COMPLETION_PROMPT_READY: 'prompt', CHAT_COMPLETION_SETTINGS_READY: 'settings',
+                CHAT_CHANGED: 'chat', GENERATION_ENDED: 'end' };
+            const eventSource = { on: (key, fn) => handlers.set(key, fn), removeListener: key => handlers.delete(key) };
+            const sent = [], counted = [];
+            const generationResponse = new Response('unread stream');
+            const nativeFetch = (url, options) => {
+                const messages = JSON.parse(options.body);
+                if (url.startsWith('/api/tokenizers/')) {
+                    counted.push(messages);
+                    return Promise.resolve(Response.json({ token_count: messages.reduce((sum, message) => sum + message.content.length, 0) }));
+                }
+                sent.push(messages);
+                return generationPromise;
+            };
+            const generationPromise = Promise.resolve(generationResponse);
+            const fetchTarget = { fetch: nativeFetch };
+            const controller = new SentPromptTokens({ manager, eventTypes, eventSource, fetchTarget,
+                model: () => 'model-A', tokenizerModel: () => 'gpt-4o', getCurrentChatId: () => 'test-chat',
+                getRequestHeaders: () => ({ 'Content-Type': 'application/json' }) });
+            window.sentTest = { controller, handlers, sent, counted, history, fetchTarget, nativeFetch, generationResponse };
+            controller.start();
+
+            const request = { type: 'normal', model: 'model-A', messages: [] };
+            const system = { role: 'system', content: '提示' };
+            const discarded = { role: 'user', content: '将被删掉的历史' };
+            const retained = { role: 'assistant', content: '原始历史' };
+            const chat = [system, discarded, retained];
+            manager.messages = { getCollection: () => [
+                { identifier: 'main', getCollection: () => [system] },
+                { identifier: 'chatHistory', getCollection: () => [discarded, retained] },
+            ] };
+            handlers.get('prompt')({ chat, dryRun: true });
+            if (counted.length || fetchTarget.fetch !== nativeFetch) throw Error('dry run armed the observer');
+            handlers.get('settings')({ type: 'quiet', messages: [system] });
+            if (fetchTarget.fetch !== nativeFetch) throw Error('quiet request armed the observer');
+
+            handlers.get('prompt')({ chat, dryRun: false });
+            request.messages = chat;
+            handlers.get('settings')(request);
+            // Simulate extensions that strip data after native token accounting.
+            retained.content = '发送历史';
+            request.messages = [system, retained];
+            const promise = fetchTarget.fetch('/api/backends/chat-completions/generate', { method: 'POST', body: JSON.stringify(request) });
+            return { originalPromise: promise === generationPromise, restoredFetch: fetchTarget.fetch === nativeFetch };
+        });
+        assert.deepEqual(sentFixture,{originalPromise:true,restoredFetch:true});
+        await page.waitForFunction(()=>document.querySelector('.cla-sent-total-tokens')?.textContent==='最近发送 · 输入约 6');
+        assert.equal(await page.locator('.cla-sent-history-tokens').textContent(),'约 4');
+        assert.equal(await historyTokens.isVisible(),false,'native number is retained but the last request estimate is displayed');
+        const sentValues=await page.evaluate(()=>({sent:sentTest.sent[0].messages.map(message=>message.content),counted:sentTest.counted.map(group=>group.map(message=>message.content)),native:sentTest.history.dataset.pmTokens,read:sentTest.generationResponse.bodyUsed}));
+        assert.deepEqual(sentValues,{sent:['提示','发送历史'],counted:[['提示','发送历史'],['发送历史']],native:'237640',read:false});
+        await page.evaluate(()=>sentTest.handlers.get('chat')());
+        assert.equal(await page.locator('.cla-sent-total-tokens').textContent(),'最近发送 · —');
+        await page.evaluate(()=>sentTest.controller.stop());
+        assert.equal(await page.locator('[data-cla-sent-token-native],.cla-sent-total-tokens,.cla-sent-history-tokens').count(),0);
+        assert.equal(await historyTokens.isVisible(),true);
         await page.screenshot({path:`/private/tmp/cla-preset-entries-${mobile?'390':'1100'}.png`});
         await page.evaluate(()=>{tokens.stop();adapter.stop()});assert.equal(await page.locator('[data-cla-preset-action]').count(),0);
         await page.locator('[data-pm-identifier="main"] .prompt-manager-edit-action').click();

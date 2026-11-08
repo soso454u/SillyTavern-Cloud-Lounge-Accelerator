@@ -218,7 +218,7 @@ export class SettingsPanel {
             ['regexCollections', '正则分类与多选', '直接在合集里勾选、按住名称划选和拖动归组'],
             ['transferTools', '世界书 / 正则转移', '魔法棒双栏工具，支持跨角色、跨预设复制与移动'],
             ['presetEntryActions', '预设条目操作', '行内新建、复制、移出和删除条目'],
-            ['presetTokenPreview', '预设实时 token', '编辑条目时即时统计原文 token'],
+            ['presetTokenPreview', '预设实时 token', '编辑时统计草稿，提示词列表显示最近发送的输入估算'],
             ['secretKeyBatch', '密钥批量删除', '在密钥管理弹窗里多选删除'],
             ['chatHistoryBatch', '聊天批量操作', '在聊天记录中多选删除，保护当前聊天'],
             ['autoConnect', '自动连接 API', '进入酒馆或切换密钥后连接一次；手动取消后不自动重试'],
