@@ -181,8 +181,8 @@ async function stopOptimizationModules({ stopCache = false } = {}) {
     if (!runtime) return;
     runtime.generation += 1;
     runtime.chatStart = null;
-    runtime.startupOptimizer.stop();
     runtime.miniFeatures?.stop();
+    runtime.startupOptimizer.stop();
     runtime.regexRefresh?.stop();
     runtime.streamingRender?.stop();
     await runtime.chatOptimizer.stop();

@@ -55,9 +55,25 @@ manager.activeCharacter={id:1};
 manager.renderPromptManager=async()=>{manager.containerElement.innerHTML='<button id="native-new-prompt" title="新提示词">＋</button><ul id="completion_prompt_manager_list"></ul>';manager.listElement=document.querySelector('ul');document.getElementById('native-new-prompt').addEventListener('click',manager.handleNewPrompt)};
 manager.saveServiceSettings=async()=>{window.saves++;if(window.failSave)throw Error('offline');localStorage.setItem('preset',JSON.stringify(manager.serviceSettings))};
 window.adapter=new PresetEntryActions();
-await manager.renderPromptManager();await manager.renderPromptManagerListItems();await adapter.start();window.tokenCalls=[];window.model='model-A';window.tokens=new PresetTokenPreview({delay:40});await tokens.start();window.ready=true;
+await manager.renderPromptManager();await manager.renderPromptManagerListItems();await adapter.start();window.tokenCalls=[];window.model='model-A';
+const handlers = new Map(), counted = [];
+const eventTypes = { CHAT_COMPLETION_SETTINGS_READY: 'settings', CHAT_CHANGED: 'chat', GENERATION_ENDED: 'end' };
+const eventSource = { on: (name, listener) => handlers.set(name, listener), removeListener: name => handlers.delete(name) };
+const reply = Response.json({ usage: { prompt_tokens: 777 } });
+const generation = Promise.resolve(reply);
+const nativeFetch = (url, init) => {
+    if (!url.startsWith('/api/tokenizers/')) return generation;
+    counted.push(JSON.parse(init.body));
+    return Promise.resolve(Response.json({ token_count: 49442 }));
+};
+const fetchTarget = { fetch: nativeFetch };
+window.sentTest = { handlers, counted, reply, generation, nativeFetch, fetchTarget };
+window.tokens = new PresetTokenPreview({ delay:40, sentOptions: { eventTypes, eventSource, fetchTarget,
+    getCurrentChatId: () => 'test-chat', getRequestHeaders: () => ({ 'Content-Type': 'application/json' }) } });
+await tokens.start();window.ready=true;
 </script>`;
 const assets = new Map([['/native.js', native.replace(/from ['"][^'"]+['"]/g, "from '/stub.js'")], ['/stub.js', stub], ['/actions.js', source], ['/style.css', style], ['/native.css', nativeCss]]);
+assets.set('/sent-prompt-total.js', await readFile(new URL('../modules/sent-prompt-total.js', import.meta.url), 'utf8'));
 assets.set('/tokens.js', await readFile(new URL('../modules/preset-token-preview.js', import.meta.url), 'utf8'));
 assets.set('/tokenizers.js', `export const getTokenizerModel=()=>window.model;export const countTokensOpenAIAsync=async message=>{window.tokenCalls.push(message);await window.tokenGate;if(window.tokenFail)throw Error('offline');return message.content.length+message.role.length};`);
 assets.set('/openai.js', 'export const promptManager=window.manager;export const oai_settings={};export const getChatCompletionModel=()=>window.model;');
@@ -214,6 +230,41 @@ try {
             }
             await page.evaluate(()=>document.body.style.removeProperty('--SmartThemeBlurTintColor'));
         }
+        const dispatch = await page.evaluate(() => {
+            const header = document.createElement('div');
+            header.innerHTML = '<span data-i18n="Total Tokens:">总 Token 数量：</span> 279055 ';
+            manager.containerElement.prepend(header);
+            const { handlers, generation, fetchTarget, nativeFetch } = sentTest;
+            const quiet = { type: 'quiet', messages: [{ role: 'system', content: '后台' }] };
+            handlers.get('settings')(quiet);
+            if (fetchTarget.fetch !== nativeFetch) throw Error('Quiet generation armed the observer');
+
+            const request = { type: 'normal', messages: [
+                { role: 'system', content: '提示' },
+                { role: 'user', content: '发送前被裁剪的文字' },
+            ] };
+            handlers.get('settings')(request);
+            request.messages.splice(1, 1, { role: 'user', content: '实际发送' });
+            const result = fetchTarget.fetch('/api/backends/chat-completions/generate', { method: 'POST', body: JSON.stringify(request) });
+            return { samePromise: result === generation, restored: fetchTarget.fetch === nativeFetch };
+        });
+        assert.deepEqual(dispatch, { samePromise:true, restored:true });
+        await page.waitForFunction(() => document.querySelector('[data-i18n="Total Tokens:"]')?.nextSibling.data === ' 49442 ');
+        const sentTotal = page.locator('[data-i18n="Total Tokens:"]').locator('..');
+        assert.equal(await sentTotal.innerHTML(), '<span data-i18n="Total Tokens:">总 Token 数量：</span> 49442 ');
+        assert.deepEqual(await page.evaluate(() => ({ read: sentTest.reply.bodyUsed, counted: sentTest.counted })), {
+            read: false,
+            counted: [[{ role:'system',content:'提示' },{ role:'user',content:'实际发送' }]],
+        });
+        assert.equal(await historyTokens.getAttribute('data-pm-tokens'), '31');
+        await page.evaluate(async () => {
+            const node = document.querySelector('[data-i18n="Total Tokens:"]').parentElement;
+            node.innerHTML = '<span data-i18n="Total Tokens:">总 Token 数量：</span> 280000 ';
+            await manager.renderPromptManagerListItems();
+        });
+        assert.match(await sentTotal.innerHTML(), / 49442 $/, 'native rerender reapplies only the number');
+        await page.evaluate(() => sentTest.handlers.get('chat')());
+        assert.match(await sentTotal.innerHTML(), / 280000 $/, 'chat switch restores the native value');
         await page.screenshot({path:`/private/tmp/cla-preset-entries-${mobile?'390':'1100'}.png`});
         await page.evaluate(()=>{tokens.stop();adapter.stop()});assert.equal(await page.locator('[data-cla-preset-action]').count(),0);
         await page.locator('[data-pm-identifier="main"] .prompt-manager-edit-action').click();
