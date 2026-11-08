@@ -1,5 +1,14 @@
 // Preview the edited prompt using the native asynchronous model tokenizer.
-// Row previews never alter the native context budget/count cache or save drafts.
+// Row previews fill only native placeholders and never replace native counts.
+const NATIVE_CONTEXT_IDS = new Set([
+    'chatHistory', 'dialogueExamples', 'worldInfoBefore', 'worldInfoAfter',
+    'charDescription', 'charPersonality', 'scenario', 'personaDescription',
+]);
+const RAW_TOKENS = 'data-cla-preset-raw-tokens';
+
+function canPreview(prompt) {
+    return Boolean(prompt?.identifier && !prompt.marker && !NATIVE_CONTEXT_IDS.has(prompt.identifier));
+}
 export class PresetTokenPreview {
     constructor({ documentRef = globalThis.document, delay = 300, loadApi = async () => {
         const [openai, tokenizer] = await Promise.all([import('../../../../openai.js'), import('../../../../tokenizers.js')]);
@@ -8,7 +17,7 @@ export class PresetTokenPreview {
     } } = {}) {
         Object.assign(this, { document: documentRef, delay, loadApi });
         this.started = false; this.generation = 0; this.revision = 0;
-        this.tracked = new WeakMap(); this.cache = new Map(); this.wrappers = [];
+        this.tracked = new WeakMap(); this.cache = new Map(); this.wrappers = []; this.previewCells = new Set();
         this.onInput = event => {
             if (event.isComposing) return;
             if (this.isField(event.target)) this.schedule();
@@ -30,23 +39,34 @@ export class PresetTokenPreview {
             this.wrap('loadPromptIntoEditForm', (original, args) => {
                 const result = original(...args);
                 const prompt = args[0];
-                this.draft = prompt && !prompt.marker ? { id: prompt.identifier, scope: this.scope() } : null;
+                this.draft = canPreview(prompt) && !this.field('prompt')?.disabled
+                    ? { id: prompt.identifier, scope: this.scope() } : null;
+                this.badge?.remove();
+                this.badge = null;
                 if (this.draft) {
-                    this.lastEdited = this.draft.id; this.track(this.draft.id);
+                    this.track(this.draft.id);
                     this.ensureBadge();
                     if (this.badge) this.badge.textContent = '草稿：计数中…';
-                    this.schedule();
                 }
+                this.schedule();
                 return result;
             });
             this.wrap('clearEditForm', (original, args) => {
-                this.revision++; this.draft = null; this.badge?.remove(); this.badge = null;
+                const draft = this.draft;
+                const scope = this.scope();
+                // The insert/copy tool saves a new prompt by appending it in
+                // a replacement array. A preset switch must not inherit IDs.
+                if (draft?.scope && scope?.length === draft.scope.length + 1
+                    && draft.scope.every((prompt, index) => scope[index] === prompt)
+                    && scope.at(-1)?.identifier === draft.id && canPreview(scope.at(-1))) {
+                    this.track(draft.id);
+                }
+                this.draft = null; this.badge?.remove(); this.badge = null;
                 const result = original(...args);
                 this.schedule(); return result;
             });
             this.wrap('renderPromptManagerListItems', async (original, args) => {
                 const result = await original(...args);
-                if (this.lastEdited && this.manager.getPromptById(this.lastEdited)) this.track(this.lastEdited);
                 this.schedule(); return result;
             });
             for (const type of ['input', 'change']) this.document.addEventListener(type, this.onInput);
@@ -104,14 +124,21 @@ export class PresetTokenPreview {
         const valid = () => this.started && this.generation === generation && this.revision === revision
             && this.scope() === scope && this.model() === model;
         try {
-            for (const cell of this.originalCells?.keys() || []) if (!cell.isConnected) this.originalCells.delete(cell);
-            const ids = this.tracked.get(scope) || [];
+            for (const cell of this.previewCells) {
+                if (!cell.isConnected || cell.getAttribute('data-pm-tokens') !== '-') {
+                    cell.removeAttribute(RAW_TOKENS);
+                    this.previewCells.delete(cell);
+                }
+            }
+            const draftId = this.draft?.scope === scope ? this.draft?.id : null;
+            const ids = new Set([...(draftId ? [draftId] : []), ...(this.tracked.get(scope) || [])]);
             for (const id of ids) {
                 if (!valid()) break;
                 const prompt = this.manager.getPromptById(id);
-                const draft = this.draft?.id === id && this.draft.scope === scope && this.field('save')?.dataset.pmPrompt === id;
-                if (!prompt && !draft) continue;
-                if (prompt?.marker) continue;
+                const draft = draftId === id && this.field('save')?.dataset.pmPrompt === id && !this.field('prompt')?.disabled;
+                if (prompt ? !canPreview(prompt) : !draft) continue;
+                const cell = this.rowPlaceholder(id);
+                if (!draft && !cell) continue;
                 const content = draft ? this.field('prompt')?.value ?? '' : prompt.content ?? '';
                 const role = draft ? this.field('role')?.value || 'system' : prompt.role || 'system';
                 // Macro expansion can execute setvar/custom macros. Count raw
@@ -128,14 +155,12 @@ export class PresetTokenPreview {
                     }
                 }
                 if (!valid()) break;
-                const row = [...(this.manager.listElement?.querySelectorAll('[data-pm-identifier]') || [])]
-                    .find(element => element.dataset.pmIdentifier === id);
-                const cell = row?.querySelector('.prompt_manager_prompt_tokens');
-                if (cell) {
-                    const original = this.originalCells ??= new Map();
-                    if (!original.has(cell)) original.set(cell, { html: cell.innerHTML, tokens: cell.getAttribute('data-pm-tokens'), title: cell.getAttribute('title') });
-                    cell.textContent = String(count); cell.dataset.pmTokens = String(count);
-                    cell.title = `当前模型的条目${draft ? '草稿' : '原文'} token 数；宏展开及实际上下文以酒馆统计为准`;
+                // Recheck after awaiting tokenization: a native render may
+                // have replaced the row or supplied an authoritative count.
+                const placeholder = this.rowPlaceholder(id);
+                if (placeholder) {
+                    placeholder.setAttribute(RAW_TOKENS, String(count));
+                    this.previewCells.add(placeholder);
                 }
                 if (draft) {
                     this.ensureBadge();
@@ -150,6 +175,14 @@ export class PresetTokenPreview {
         }
     }
 
+    rowPlaceholder(id) {
+        const row = [...(this.manager.listElement?.children || [])].find(element => element.dataset.pmIdentifier === id);
+        if (!row?.querySelector('.prompt-manager-edit-action')
+            || row.classList.contains(`${this.manager.configuration.prefix}prompt_manager_marker`)) return null;
+        const cell = row.querySelector(':scope > .prompt_manager_prompt_tokens');
+        return cell?.getAttribute('data-pm-tokens') === '-' ? cell : null;
+    }
+
     stop() {
         this.started = false; this.generation++; this.revision++;
         clearTimeout(this.timer); this.timer = null;
@@ -158,12 +191,7 @@ export class PresetTokenPreview {
         for (const { key, previous, wrapped } of this.wrappers.reverse()) if (this.manager[key] === wrapped) this.manager[key] = previous;
         this.wrappers = [];
         this.badge?.remove(); this.badge = null; this.draft = null;
-        for (const [cell, previous] of this.originalCells || []) if (cell.isConnected) {
-            cell.innerHTML = previous.html;
-            for (const [name, value] of [['data-pm-tokens', previous.tokens], ['title', previous.title]]) {
-                if (value === null) cell.removeAttribute(name); else cell.setAttribute(name, value);
-            }
-        }
-        this.originalCells?.clear(); this.cache.clear(); this.tracked = new WeakMap();
+        for (const cell of this.previewCells) cell.removeAttribute(RAW_TOKENS);
+        this.previewCells.clear(); this.cache.clear(); this.tracked = new WeakMap();
     }
 }

@@ -977,6 +977,9 @@ body.cla-preset-drag-guard [id$="prompt_manager_list"] [data-pm-identifier][clas
     .cla-transfer-tool button.cla-transfer-drag-handle { width: 18px; }
     .cla-transfer-item small { display: none; }
 }
+/* Show raw-text previews over the native dash without changing its markup or data. */
+.prompt_manager_prompt_tokens[data-pm-tokens="-"][data-cla-preset-raw-tokens] { position: relative; visibility: hidden; }
+.prompt_manager_prompt_tokens[data-pm-tokens="-"][data-cla-preset-raw-tokens]::after { content: attr(data-cla-preset-raw-tokens); position: absolute; inset: 0; visibility: visible; }
 .cla-preset-token-preview { display: block; min-height: 1.2em; white-space: nowrap; margin: 4px 0; text-align: right; color: inherit; }
 
 .cla-transfer-item-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; align-self: center; }
