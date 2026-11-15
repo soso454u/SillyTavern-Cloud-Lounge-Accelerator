@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 const {chromium}=createRequire(import.meta.url)('playwright');
-const assets=new Map(await Promise.all(['modules/transfer-tools.js','modules/content-transfer.js','modules/auto-connect.js','utils/transfer-drag.js','utils/press-sweep-selection.js','utils/regex-collections.js','utils/transfer-editor-style.js','style.css'].map(async path=>['/'+path,await readFile(new URL('../'+path,import.meta.url),'utf8')])));
+const assets=new Map(await Promise.all(['modules/transfer-tools.js','modules/content-transfer.js','modules/auto-connect.js','utils/transfer-drag.js','utils/press-sweep-selection.js','utils/regex-collections.js','utils/transfer-editor-style.js','utils/transfer-reader-stats.js','style.css'].map(async path=>['/'+path,await readFile(new URL('../'+path,import.meta.url),'utf8')])));
 const manifest=JSON.parse(await readFile(new URL('../manifest.json',import.meta.url),'utf8'));
 // Emulate a browser with the old unversioned CSS cached. The native manifest
 // loader must request the new versioned URL to get the matching four controls.
@@ -30,6 +30,7 @@ savePreset:async(name,preset,{skipUpdate}={})=>{if(!skipUpdate)throw Error('must
 writePresetExtensionField:async({name,value})=>{presets[name].extensions.regex_scripts=value;const response=await fetch('/api/presets/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,apiId:'openai',preset:presets[name]})});if(!response.ok)throw Error('preset save failed')}};
 export const getPresetManager=id=>!id||id==='openai'?manager:null;window.presetFixtures=presets;
 `);
+assets.set('/tokenizers.js', 'export async function getTokenCountAsync(text) { (window.tokenizedReaderText ??= []).push(text); return text.length; }');
 assets.set('/openai.js','export const promptManager = {render(){}}');
 assets.set('/popup.js',`
 export const POPUP_TYPE={TEXT:1,CONFIRM:2};export const POPUP_RESULT={AFFIRMATIVE:1};
@@ -43,7 +44,7 @@ static show={confirm:async(header,content)=>{window.confirmations++;const dialog
 assets.set('/secrets.js',`export const SECRET_KEYS={CUSTOM:'custom'};export let secret_state={custom:[{id:'a',active:true}]};export const resolveSecretKey=()=> 'custom';export function rotate(id){secret_state={custom:[{id,active:true}]};}`);
 const rule=id=>({id,scriptName:id==='r1'?'01 | 社交动态 | 正文':id==='r2'?'02 | 社交动态 | 标题':'同名角色规则',findRegex:'/abc/g',replaceString:'<div>$1</div>',disabled:true,placement:[1,2],unknown:{keep:true}});
 let worlds,cards,savedPresets,writes,fail;
-const reset=()=>{worlds={'世界书 A':{entries:{0:{uid:0,comment:'<img src=x onerror=window.injected=true>',content:'世界条目正文',key:['关键词'],disable:true,position:4,depth:8,unknown:42},1:{uid:1,comment:'第二条',content:'搜索内容',key:['甲']}},extensions:{keep:true}},'世界书 B':{entries:{0:{uid:0,comment:'已有条目',content:'不能覆盖',displayIndex:5}},extensions:{target:true}}};for(let i=2;i<16;i++)worlds['世界书 A'].entries[i]={uid:i,comment:'其他条目 '+i,content:'用于检查正常上下滑动'};cards={'A.png':{avatar:'A.png',data:{extensions:{regex_scripts:[rule('r1'),rule('r2')],other:42}}},'B.png':{avatar:'B.png',data:{extensions:{regex_scripts:[rule('existing')],other:77}}}};savedPresets={};writes=[];fail=null};reset();
+const reset=()=>{worlds={'世界书 A':{entries:{0:{uid:0,comment:'<img src=x onerror=window.injected=true>',content:'世界条目正文',key:['关键词'],disable:true,position:4,depth:8,unknown:42},1:{uid:1,comment:'第二条',content:'搜索内容',key:['甲'],constant:true}},extensions:{keep:true}},'世界书 B':{entries:{0:{uid:0,comment:'已有条目',content:'不能覆盖',displayIndex:5}},extensions:{target:true}}};for(let i=2;i<16;i++)worlds['世界书 A'].entries[i]={uid:i,comment:'其他条目 '+i,content:'用于检查正常上下滑动',vectorized:i===2};cards={'A.png':{avatar:'A.png',data:{extensions:{regex_scripts:[rule('r1'),rule('r2')],other:42}}},'B.png':{avatar:'B.png',data:{extensions:{regex_scripts:[rule('existing')],other:77}}}};savedPresets={};writes=[];fail=null};reset();
 const html=`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/${manifest.css}"><style>
 *{box-sizing:border-box}body{font:15px sans-serif;background:#c8dbea;color:#202c36;--SmartThemeBorderColor:#7895;--SmartThemeBodyColor:#202c36}.menu_button,.text_pole{font:inherit;color:inherit;border:1px solid #9aabb8;border-radius:8px;background:#eff6facc;padding:6px}.fixture-popup{width:680px;max-width:calc(100vw - 20px);max-height:calc(100vh - 24px);overflow:auto;border:1px solid #bccddd;border-radius:18px;background:#e8f1f9;padding:16px}#confirm-transfer{max-width:calc(100vw - 20px);border-radius:12px}dialog::backdrop{background:#1235}.cla-transfer-list{max-height:35vh}.cla-transfer-editor .menu_button{width:1.5em}.cla-transfer-editor{--SmartThemeBlurTintColor:rgba(151,171,191,.2)}.cla-transfer-keywords{display:block}.cla-transfer-keywords textarea{height:180px}dialog:not(.fixture-popup):not(#confirm-transfer){width:fit-content;height:fit-content;max-width:400px;margin:auto;background:white}.fa-eye::before{content:"◉"}#extensionsMenu{padding:12px}.list-group-item{cursor:pointer;padding:8px}
 </style><div id="extensionsMenu"></div><input id="custom_api_url_text" value="https://example.invalid/v1"><select id="chat_completion_source"><option value="custom">custom</option></select><button id="api_button_openai" class="api_button">连接</button><button class="api_loading">取消连接</button>
@@ -125,13 +126,37 @@ try{
   const reader = side => page.locator(`[data-cla-transfer-pane="${side}"] [data-cla-transfer-action="reader"]`);
   const readerWindow = page.locator('.cla-transfer-reader');
   const closeReader = () => press(readerWindow.getByRole('button', {name:'关闭'}));
+  const readerFilter = key => readerWindow.locator(`[data-filter="${key}"]`);
+  const readerTokens = key => readerWindow.locator(`[data-cla-reader-tokens="${key}"]`);
+  const waitForTokens = () => page.waitForFunction(() => /^\d+$/.test(document.querySelector('[data-cla-reader-tokens="all"]')?.textContent));
   await press(reader('source'));
   assert.equal(await readerWindow.locator('article').count(),16);
   assert.match(await readerWindow.innerText(),/共 16 项/);
   assert.match(await readerWindow.innerText(),/世界条目正文/);
   assert.equal(await readerWindow.locator('img').count(),0,'rich text remains literal');
   assert.ok(await readerWindow.locator('.cla-transfer-reader-list').evaluate(list=>list.scrollHeight>list.clientHeight));
+  await waitForTokens();
+  assert.equal(await readerTokens('blue').textContent(),String('搜索内容'.length));
+  assert.equal(await readerTokens('disabled').textContent(),String('世界条目正文'.length));
+  assert.equal(await readerTokens('vector').textContent(),String('用于检查正常上下滑动'.length));
+  const totalFromFilters = await readerWindow.locator('[data-cla-reader-tokens]:not([data-cla-reader-tokens="all"])').evaluateAll(nodes => nodes.reduce((sum, item) => sum + Number(item.textContent), 0));
+  assert.equal(await readerTokens('all').textContent(),String(totalFromFilters));
+  await press(readerFilter('blue'));assert.equal(await readerWindow.locator('article').count(),1);
+  assert.match(await readerWindow.innerText(),/搜索内容/);
+  await press(readerFilter('green'));assert.equal(await readerWindow.locator('article').count(),13);
+  await press(readerFilter('disabled'));assert.equal(await readerWindow.locator('article').count(),1);
+  await page.screenshot({path:'/private/tmp/cla-world-reader-'+(mobile?'touch':'desktop')+'.png'});
   await closeReader();await page.waitForFunction(()=>!tools.previewLoading);
+  assert.equal(await selected('0').locator('.cla-transfer-entry-dot').getAttribute('data-status'),'disabled');
+  assert.equal(await selected('1').locator('.cla-transfer-entry-dot').getAttribute('data-status'),'blue');
+  assert.equal(await selected('3').locator('.cla-transfer-entry-dot').getAttribute('data-status'),'green');
+  await press(selected('0'));
+  await field('source-status').selectOption('blue');
+  assert.equal(await selected('0').count(),0);
+  assert.equal(await selected('1').count(),1);
+  assert.equal(await page.evaluate(()=>tools.selected.size),0,'hidden selections cannot be moved or deleted');
+  assert.equal(await field('target-status').inputValue(),'all');
+  await field('source-status').selectOption('all');
   await checkRowLayout();
   assert.equal(await field('source').inputValue(),'世界书 A');assert.equal(await field('target').inputValue(),'世界书 B');
   if(mobile){const box=await page.locator('.cla-transfer-source-list').boundingBox();const x=box.x+70;const start=box.y+box.height-15,finish=box.y+15;
@@ -233,17 +258,32 @@ await page.screenshot({path:'/private/tmp/cla-world-editor-'+(mobile?'touch':'de
   const deleteRow=page.locator('.cla-transfer-target-list .cla-transfer-item').first();const deleteId=await deleteRow.getAttribute('data-cla-transfer-id');await press(deleteRow);await press(action('delete'));await press(page.locator('#cancel'));assert.ok((await state()).worlds['世界书 B'].entries[deleteId]);
   await press(action('delete'));await press(page.locator('#approve'));await page.waitForFunction(()=>!tools.busy&&!tools.targetLoading);assert.equal((await state()).worlds['世界书 B'].entries[deleteId],undefined);
   const panes=await page.locator('.cla-transfer-pane').evaluateAll(nodes=>nodes.map(n=>{const b=n.getBoundingClientRect();return {left:b.left,right:b.right,top:b.top}}));assert.ok(Math.abs(panes[0].top-panes[1].top)<2&&panes[0].right<=panes[1].left,'source and target stay side by side');
-  const bounds=await page.locator('.cla-transfer-tool select,.cla-transfer-actions button:visible').evaluateAll(nodes=>nodes.map(n=>{const b=n.getBoundingClientRect();return[b.left,b.right]}));assert.ok(bounds.every(([left,right])=>left>=0&&right<=(mobile?390:1100)),'tool controls fit viewport');
+  const bounds=await page.locator('.cla-transfer-tool select:visible,.cla-transfer-actions button:visible').evaluateAll(nodes=>nodes.map(n=>{const b=n.getBoundingClientRect();return[b.left,b.right]}));assert.ok(bounds.every(([left,right])=>left>=0&&right<=(mobile?390:1100)),'tool controls fit viewport');
   await field('kind').selectOption('prompt');await selected('custom-on').waitFor();await page.waitForFunction(()=>!tools.loading&&!tools.targetLoading);
   await press(reader('source'));
   assert.match(await readerWindow.innerText(),/已启用 2 \/ 3 项/);
   assert.match(await readerWindow.innerText(),/preserve/);
   assert.match(await readerWindow.innerText(),/运行时由酒馆填充/);
   assert.doesNotMatch(await readerWindow.innerText(),/disabled text/);
-  await press(readerWindow.getByRole('checkbox'));
+  await waitForTokens();
+  assert.equal(await readerTokens('enabled').textContent(),'8','dynamic markers do not contribute tokens');
+  assert.equal(await readerTokens('disabled').textContent(),'13');
+  assert.equal(await readerTokens('all').textContent(),'21');
+  await press(readerFilter('disabled'));
+  assert.equal(await readerWindow.locator('article').count(),1);
   assert.match(await readerWindow.innerText(),/disabled text/);
+  assert.doesNotMatch(await readerWindow.innerText(),/preserve/);
+  await press(readerFilter('all'));assert.equal(await readerWindow.locator('article').count(),3);
+  await page.screenshot({path:'/private/tmp/cla-preset-reader-'+(mobile?'touch':'desktop')+'.png'});
   await closeReader();await page.waitForFunction(()=>!tools.previewLoading);
   assert.equal(await selected('chatHistory').count(),0);
+  await field('source-status').selectOption('enabled');
+  assert.equal(await selected('custom-on').count(),1);
+  assert.equal(await selected('custom-off').count(),0);
+  await field('source-status').selectOption('disabled');
+  assert.equal(await selected('custom-on').count(),0);
+  assert.equal(await selected('custom-off').count(),1);
+  await field('source-status').selectOption('all');
   await field('operation').selectOption('copy');
   await press(selected('custom-on'));await press(selected('custom-off'));await press(action('execute'));await press(page.locator('#approve'));
   await page.waitForFunction(()=>!tools.busy&&!tools.loading&&!tools.targetLoading);

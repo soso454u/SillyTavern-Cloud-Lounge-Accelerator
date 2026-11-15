@@ -1,3 +1,4 @@
+import { WORLD_FILTERS, PRESET_FILTERS, entryStatus, countReaderTokens } from '../utils/transfer-reader-stats.js';
 import { ensureTransferEditorStyles } from '../utils/transfer-editor-style.js';
 import { PressSweepSelection } from '../utils/press-sweep-selection.js';
 import { TransferDrag } from '../utils/transfer-drag.js';
@@ -50,6 +51,21 @@ function iconButton(action, title) {
 const itemName = ({ value, id }) => value.comment || value.scriptName || value.name || `条目 ${id}`;
 const isRegex = kind => kind === 'character' || kind === 'preset';
 
+const worldStatusText = {
+    blue: '蓝灯 · 常驻',
+    green: '绿灯 · 关键词触发',
+    vector: '向量触发',
+    disabled: '未启用',
+};
+
+function worldIndicator(status) {
+    const dot = node('span', undefined, 'cla-transfer-entry-dot');
+    dot.dataset.status = status;
+    dot.title = worldStatusText[status];
+    dot.setAttribute('aria-hidden', 'true');
+    return dot;
+}
+
 // Theme tints may be translucent. The expanded editor always uses an opaque
 // surface, including themes that make every native popup transparent.
 function editorSurface(element) {
@@ -78,8 +94,8 @@ const expandIcon = (collapse = false) => {
 export class TransferTools {
     constructor({ scriptApi, extensionSettings = {}, isGenerating = () => false, onRegexSaved = () => {}, loadApis = () => Promise.all([
         import('../../../../world-info.js'), import('../../../../preset-manager.js'), import('../../../../popup.js'), import('../../../../openai.js').catch(() => null),
-    ]) } = {}) {
-        Object.assign(this, { scriptApi, extensionSettings, isGenerating, onRegexSaved, loadApis });
+    ]), loadTokenizer = () => import('../../../../tokenizers.js') } = {}) {
+        Object.assign(this, { scriptApi, extensionSettings, isGenerating, onRegexSaved, loadApis, loadTokenizer });
         this.started = false;
         this.generation = 0;
         this.busy = false;
@@ -186,6 +202,7 @@ export class TransferTools {
 
         this.sideButtons = new Map();
         this.readButtons = new Map();
+        this.statusFilters = new Map();
         const pane = (side, label, kind, endpoint, search, count, list) => {
             const section = node('section', undefined, 'cla-transfer-pane');
             section.dataset.claTransferPane = side;
@@ -202,7 +219,17 @@ export class TransferTools {
             this.readButtons.set(side, read);
             bar.append(activate, count, read);
             const filters = node('div', undefined, 'cla-transfer-filters');
-            filters.append(kind, endpoint, search);
+            const status = field(`${label}条目状态`, `${side}-status`);
+            this.statusFilters.set(side, status);
+            status.addEventListener('change', () => {
+                this.cancelGestures();
+                const shown = new Set(this.filtered(side).map(item => item.id));
+                const selection = this.selectionFor(side);
+                for (const id of selection) if (!shown.has(id)) selection.delete(id);
+                if (side === 'source') this.renderItems();
+                else { this.renderTarget(); this.updateSelectionChecks(); }
+            });
+            filters.append(kind, endpoint, search, status);
             section.append(bar, filters, list);
             return section;
         };
@@ -314,9 +341,26 @@ export class TransferTools {
             const option = node('option', title); option.value = value; this.targetKind.append(option);
         }
         this.targetKind.value = compatible.some(([type]) => type === previous) ? previous : this.kind.value;
+        this.syncStatusFilters();
         this.populateTargets(); this.refreshButton.hidden = true;
         void this.reloadPanels();
     }
+    syncStatusFilters() {
+        const sets = { world: WORLD_FILTERS, prompt: PRESET_FILTERS };
+        for (const [side, control] of this.statusFilters) {
+            const kind = (side === 'source' ? this.kind : this.targetKind).value;
+            if (control.dataset.kind === kind) continue;
+            control.dataset.kind = kind;
+            control.hidden = !sets[kind];
+            control.replaceChildren();
+            for (const [value, text] of sets[kind] || []) {
+                const option = node('option', value === 'all' ? '全部状态' : text);
+                option.value = value;
+                control.append(option);
+            }
+        }
+    }
+
     excludeSource() {
         for (const option of this.target.options) option.disabled = this.kind.value === this.targetKind.value && option.value === this.source.value;
         if (this.kind.value === this.targetKind.value && this.target.value === this.source.value) this.target.value = this.targetRefs.find(ref => ref.id !== this.source.value)?.id || '';
@@ -341,8 +385,8 @@ export class TransferTools {
             this.targetData = data;
             this.targetItems = transferItems(ref.kind, data).filter(item => !item.protected);
             if (new Set(this.targetItems.map(item => item.id)).size !== this.targetItems.length || this.targetItems.some(item => !item.id || item.id === 'undefined')) { this.targetData = null; this.targetItems = []; throw new Error('目标含缺失或重复 ID，请先在原生编辑器修复'); }
-            this.targetSelected = new Set(this.targetItems.filter(item => previousSelection.has(item.id)).map(item => item.id));
             this.targetSearch.value = previousSearch;
+            this.targetSelected = new Set(this.filtered('target').filter(item => previousSelection.has(item.id)).map(item => item.id));
         } catch (error) {
             if (sequence === this.targetLoadSequence && view === this.view) this.status.textContent = error.message;
         } finally {
@@ -354,12 +398,18 @@ export class TransferTools {
 
     groupName(item, side) { return transferCollection(this.refFor(side), item.value, this.extensionSettings); }
     renderItem(item, side) {
-        const { id, value } = item;
+        const { id } = item;
         const row = node('div', undefined, 'cla-transfer-item'); row.dataset.claTransferId = id;
         if (side === 'target') row.dataset.claTransferTargetId = id;
         row.dataset.claTransferSide = side; row.tabIndex = 0; row.setAttribute('role', 'checkbox');
         const name = node('span', itemName(item), 'cla-transfer-item-name');
         name.title = name.textContent;
+        if ((side === 'source' ? this.kind : this.targetKind).value === 'world') {
+            const status = entryStatus('world', item);
+            name.prepend(worldIndicator(status));
+            name.title = `${name.textContent} · ${worldStatusText[status]}`;
+            name.setAttribute('aria-label', name.title);
+        }
         if (item.enabled !== undefined) {
             const state = item.enabled ? '已启用' : '未启用';
             name.title = `${name.textContent} · ${state}`;
@@ -429,11 +479,14 @@ export class TransferTools {
     renderTarget() {
         const query = this.targetSearch.value.toLocaleLowerCase().trim();
         this.targetCount.textContent = this.targetLoading ? '正在读取…' : `${this.targetItems.length} 项 · 已选 ${this.targetSelected.size}`;
+        const status = this.statusFilters.get('target').value;
         const previous = this.targetRendered;
-        if (previous?.items === this.targetItems && previous.query === query && previous.loading === this.targetLoading
+        if (previous?.items === this.targetItems && previous.query === query && previous.status === status && previous.loading === this.targetLoading
             && previous.ready === Boolean(this.targetData) && previous.list === this.targetList) return;
-        this.targetRendered = { items: this.targetItems, query, loading: this.targetLoading, ready: Boolean(this.targetData), list: this.targetList };
-        this.renderList(this.targetList, this.targetItems.filter(item => !query || JSON.stringify(item.value).toLocaleLowerCase().includes(query)), 'target');
+        this.targetRendered = { items: this.targetItems, query, status, loading: this.targetLoading, ready: Boolean(this.targetData), list: this.targetList };
+        const visible = this.filtered('target');
+        this.renderList(this.targetList, visible, 'target');
+        if (!visible.length && this.targetItems.length) this.targetList.append(node('p', '没有符合筛选的条目。'));
         if (!this.targetItems.length && !this.targetLoading) this.targetList.append(node('p', this.targetData ? '目标为空，可以拖入条目' : '请选择其他目标'));
     }
 
@@ -452,8 +505,8 @@ export class TransferTools {
             this.sourceData = data;
             this.items = transferItems(ref.kind, data).filter(item => !item.protected);
             if (new Set(this.items.map(item => item.id)).size !== this.items.length || this.items.some(item => !item.id || item.id === 'undefined')) throw new Error('来源含缺失或重复 ID，请先在原生编辑器修复');
-            this.selected = new Set(this.items.filter(item => previousSelection.has(item.id)).map(item => item.id));
             this.search.value = previousSearch;
+            this.selected = new Set(this.filtered('source').filter(item => previousSelection.has(item.id)).map(item => item.id));
             this.status.textContent = message;
         } catch (error) {
             if (sequence !== this.loadSequence || view !== this.view) return;
@@ -466,11 +519,18 @@ export class TransferTools {
 
     filtered(side = 'source') {
         const query = (side === 'source' ? this.search : this.targetSearch).value.toLocaleLowerCase().trim();
-        return (side === 'source' ? this.items : this.targetItems).filter(item => !query || JSON.stringify(item.value).toLocaleLowerCase().includes(query));
+        const kind = (side === 'source' ? this.kind : this.targetKind).value;
+        const status = this.statusFilters.get(side)?.value;
+        return (side === 'source' ? this.items : this.targetItems).filter(item => {
+            return (!status || status === 'all' || entryStatus(kind, item) === status)
+                && (!query || JSON.stringify(item.value).toLocaleLowerCase().includes(query));
+        });
     }
 
     renderItems() {
-        this.renderList(this.list, this.filtered(), 'source');
+        const visible = this.filtered();
+        this.renderList(this.list, visible, 'source');
+        if (!visible.length && this.items.length) this.list.append(node('p', '没有符合筛选的条目。'));
         if (!this.items.length && !this.loading) this.list.append(node('p', '此来源没有可转移的内容。'));
         this.updateSelectionChecks();
     }
@@ -542,34 +602,54 @@ export class TransferTools {
             heading.append(title);
             const meta = node('div', undefined, 'cla-transfer-reader-meta');
             const total = node('small');
-            const enabledOnly = node('input');
-            enabledOnly.type = 'checkbox';
-            enabledOnly.checked = ref.kind === 'prompt';
-            const label = node('label');
-            label.append(enabledOnly, ' 仅已启用');
-            meta.append(total);
-            if (ref.kind === 'prompt') meta.append(label);
+            const definitions = ref.kind === 'world' ? WORLD_FILTERS : PRESET_FILTERS;
+            let filter = ref.kind === 'prompt' ? 'enabled' : 'all';
+            const filters = node('div', undefined, 'cla-transfer-reader-filters');
+            filters.setAttribute('role', 'group');
+            filters.setAttribute('aria-label', '按条目状态筛选');
+            filters.title = '使用酒馆分词器统计原始正文，全部为各分项之和。';
+            const controls = new Map();
+            for (const [key, text] of definitions) {
+                const control = button('', 'reader-filter');
+                control.dataset.filter = key;
+                if (ref.kind === 'world' && key !== 'all') control.append(worldIndicator(key));
+                control.append(text);
+                const tokens = node('small', '…');
+                tokens.dataset.claReaderTokens = key;
+                control.append(tokens);
+                controls.set(key, { control, tokens });
+                control.addEventListener('click', () => {
+                    if (filter === key) return;
+                    filter = key;
+                    render();
+                });
+                filters.append(control);
+            }
+            const unit = node('small', '正文 Token', 'cla-transfer-reader-unit');
+            meta.append(total, filters, unit);
             const list = node('div', undefined, 'cla-transfer-reader-list');
             list.tabIndex = 0;
             list.setAttribute('aria-label', '条目正文');
             const render = () => {
-                const visible = enabledOnly.checked ? items.filter(item => item.enabled) : items;
-                total.textContent = enabledOnly.checked ? `已启用 ${visible.length} / ${items.length} 项` : `共 ${items.length} 项`;
+                const visible = filter === 'all' ? items : items.filter(item => entryStatus(ref.kind, item) === filter);
+                total.textContent = filter === 'all' ? `共 ${items.length} 项`
+                    : `${definitions.find(([key]) => key === filter)[1]} ${visible.length} / ${items.length} 项`;
+                for (const [key, { control }] of controls) control.setAttribute('aria-pressed', String(filter === key));
                 list.replaceChildren();
                 for (const item of visible) {
                     const section = node('article');
-                    const status = ref.kind === 'world' ? (item.value.disable ? '已停用' : '') : (item.enabled ? '' : '未启用');
+                    const status = entryStatus(ref.kind, item);
                     const header = node('header');
+                    if (ref.kind === 'world') header.append(worldIndicator(status));
                     header.append(node('h4', itemName(item)));
-                    if (status) header.append(node('small', status));
+                    if (status === 'disabled') header.append(node('small', '未启用'));
                     const content = item.value.marker ? '运行时由酒馆填充' : item.value.content || '（无正文）';
                     section.append(header, node('div', content, 'cla-transfer-reader-content'));
                     list.append(section);
                 }
-                if (!visible.length) list.append(node('p', '没有可查看的条目。'));
+                if (!visible.length) list.append(node('p', '没有符合筛选的条目。'));
                 list.scrollTop = 0;
             };
-            enabledOnly.addEventListener('change', render);
             render();
             reader.append(heading, meta, list);
             const popup = new this.popupApi.Popup(reader, this.popupApi.POPUP_TYPE.TEXT, '', {
@@ -579,7 +659,15 @@ export class TransferTools {
             popup.dlg?.classList.add('cla-transfer-dialog');
             if (popup.buttonControls) heading.append(popup.buttonControls);
             this.readerPopup = popup;
-            await popup.show();
+            const closed = popup.show();
+            const active = () => this.started && this.view === view && this.readerPopup === popup;
+            void Promise.resolve().then(() => this.loadTokenizer()).then(({ getTokenCountAsync }) => {
+                return countReaderTokens(ref.kind, items, getTokenCountAsync, active);
+            }).catch(() => new Map()).then(counts => {
+                if (!active()) return;
+                for (const [key, { tokens }] of controls) tokens.textContent = counts.get(key) ?? '—';
+            });
+            await closed;
         } catch (error) {
             if (view === this.view) this.status.textContent = error.message;
         } finally {

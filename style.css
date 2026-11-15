@@ -1008,7 +1008,7 @@ dialog.cla-transfer-dialog .popup-body, dialog.cla-transfer-dialog .popup-conten
 .cla-transfer-pane-bar .cla-transfer-count { flex: 1; }
 .cla-transfer-count { font-size: .78em; min-width: 0; opacity: .85; }
 .cla-transfer-filters { display: grid; grid-template-columns: minmax(78px, auto) minmax(0, 1fr); gap: 5px; }
-.cla-transfer-filters input[type="search"] { grid-column: 1 / -1; }
+.cla-transfer-filters:has(select[hidden]) input[type="search"] { grid-column: 1 / -1; }
 .cla-transfer-tool select, .cla-transfer-tool input[type="search"] {
     box-sizing: border-box;
     width: 100%;
@@ -1056,8 +1056,43 @@ dialog.cla-transfer-dialog .popup-body, dialog.cla-transfer-dialog .popup-conten
 .cla-transfer-tool .cla-transfer-status { margin: 0; font-size: .8em; overflow: auto; max-height: 4em; overflow-wrap: anywhere; }
 .cla-transfer-tool .cla-transfer-status:empty { display: none; }
 .cla-transfer-prompt-off .cla-transfer-item-name { opacity: .65; }
-.cla-transfer-reader-meta { font-size: .9em; }
-.cla-transfer-reader-meta label { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.cla-transfer-entry-dot {
+    --entry-dot-color: #8b9291;
+    display: inline-block;
+    width: .56em;
+    height: .56em;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    background: var(--entry-dot-color);
+}
+.cla-transfer-entry-dot[data-status="blue"] { --entry-dot-color: #2382dd; }
+.cla-transfer-entry-dot[data-status="green"] { --entry-dot-color: #39a662; }
+.cla-transfer-entry-dot[data-status="vector"] { --entry-dot-color: #a273d1; }
+.cla-transfer-item-name .cla-transfer-entry-dot { margin-inline-end: .44em; vertical-align: .08em; }
+.cla-transfer-reader-meta { justify-content: flex-start; flex-wrap: wrap; font-size: .9em; gap: 5px 8px; }
+.cla-transfer-reader-meta > small { white-space: nowrap; }
+.cla-transfer-reader-meta > .cla-transfer-reader-unit { order: 1; opacity: .75; }
+.cla-transfer-reader-filters { order: 2; flex: 1 1 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.cla-transfer-reader .cla-transfer-reader-filters .menu_button {
+    width: auto;
+    min-height: 28px;
+    margin: 0;
+    padding: 3px 7px;
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+    font-size: .9em;
+    white-space: nowrap;
+}
+.cla-transfer-reader-filters small { opacity: .8; font-variant-numeric: tabular-nums; }
+.cla-transfer-reader .cla-transfer-reader-filters [aria-pressed="true"] {
+    border-color: var(--SmartThemeQuoteColor, #7594df);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #7594df) 15%, transparent);
+}
+@media (max-width: 600px) {
+    .cla-transfer-reader-filters { flex-basis: 100%; }
+    .cla-transfer-reader-meta { justify-content: space-between; }
+}
 .cla-transfer-reader-list { flex: 1 1 0; min-height: 0; overflow: auto; overscroll-behavior: contain; padding-inline: 3px; }
 .cla-transfer-reader-list article { padding: 12px 5px; border-top: 1px solid var(--SmartThemeBorderColor, #8885); }
 .cla-transfer-reader-list article header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; }
@@ -1065,8 +1100,9 @@ dialog.cla-transfer-dialog .popup-body, dialog.cla-transfer-dialog .popup-conten
 .cla-transfer-reader-list small { opacity: .7; flex: none; }
 .cla-transfer-reader-content { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
 @media (min-width: 860px) {
-    .cla-transfer-filters { grid-template-columns: minmax(86px, auto) minmax(0, 1.4fr) minmax(0, 1fr); }
-    .cla-transfer-filters input[type="search"] { grid-column: auto; }
+    .cla-transfer-filters { grid-template-columns: minmax(86px, auto) minmax(0, 1.4fr) minmax(0, 1fr) minmax(76px, auto); }
+    .cla-transfer-filters:has(select[hidden]) { grid-template-columns: minmax(86px, auto) minmax(0, 1.4fr) minmax(0, 1fr); }
+    .cla-transfer-filters:has(select[hidden]) input[type="search"] { grid-column: auto; }
 }
 @media (max-width: 600px) {
     dialog.cla-transfer-dialog { width: calc(100% - 10px) !important; max-width: calc(100% - 10px) !important; height: calc(100dvh - 10px) !important; max-height: calc(100dvh - 10px) !important; padding: 7px !important; }
