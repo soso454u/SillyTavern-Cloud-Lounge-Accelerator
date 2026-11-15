@@ -12,12 +12,7 @@ const CONTROL_SELECTOR = [
 
 const LOG_PREFIX = '[Cloud Lounge Accelerator]';
 
-function recordsOnlyAffectChat(records) {
-    return records.length > 0 && records.every(record => {
-        const target = record.target instanceof Element ? record.target : record.target.parentElement;
-        return Boolean(target?.closest?.('#chat'));
-    });
-}
+const REGEX_LISTS = '#saved_regex_scripts, #saved_scoped_scripts, #saved_preset_scripts';
 
 export class RegexRefreshController {
     constructor({
@@ -39,7 +34,6 @@ export class RegexRefreshController {
         this.compileRegex = null;
         this.snapshot = null;
         this.pendingBaseSnapshot = null;
-        this.editorWasOpen = false;
         this.dirty = false;
         this.refreshing = false;
         this.refreshCheckRequested = false;
@@ -51,11 +45,13 @@ export class RegexRefreshController {
 
     async start() {
         if (this.started) return true;
+        const generation = ++this.generation;
         try {
             const [engine, utils] = await Promise.all([
                 import('../../../regex/engine.js'),
                 import('../../../../utils.js'),
             ]);
+            if (generation !== this.generation) return false;
             this.engine = engine;
             this.compileRegex = utils.regexFromString;
             this.snapshot = this.readSnapshot();
@@ -69,17 +65,23 @@ export class RegexRefreshController {
         document.addEventListener('click', this.onInteraction, false);
         document.addEventListener('cla-regex-dirty', this.onInteraction, false);
         this.observer = new MutationObserver(records => {
-            if (recordsOnlyAffectChat(records)) return;
-            const editorOpen = Boolean(document.querySelector('.regex_editor'));
-            if (this.editorWasOpen && !editorOpen) this.queueSnapshotCheck(250, false);
-            this.editorWasOpen = editorOpen;
-            const listChanged = records.some(record => {
-                const target = record.target instanceof Element ? record.target : record.target.parentElement;
-                return Boolean(target?.closest?.('#saved_regex_scripts, #saved_scoped_scripts, #saved_preset_scripts'));
-            });
+            let listChanged = false;
+            let editorRemoved = false;
+            for (const record of records) {
+                if (record.target === document.body) {
+                    // Native Popup appends its dialog directly to body.
+                    editorRemoved ||= Array.from(record.removedNodes).some(node =>
+                        node.matches?.('.popup') && node.querySelector('.regex_editor'));
+                } else {
+                    listChanged ||= Boolean(record.target.matches?.(REGEX_LISTS));
+                }
+            }
             if (listChanged) this.queueSnapshotCheck(350, false);
+            else if (editorRemoved && !document.querySelector('.regex_editor')) this.queueSnapshotCheck(250, false);
         });
-        this.observer.observe(document.body, { childList: true, subtree: true });
+        const regexRoot = document.getElementById('regex_container');
+        if (regexRoot) this.observer.observe(regexRoot, { childList: true, subtree: true });
+        this.observer.observe(document.body, { childList: true });
         return true;
     }
 
@@ -149,38 +151,42 @@ export class RegexRefreshController {
         }, 650);
     }
 
-    getDescriptors(targetIds = null) {
+    getDisplayedMessages() {
         const root = document.querySelector('#chat');
-        if (!root) return [];
-        const targets = targetIds ? new Set(targetIds) : null;
-        const rootRect = root.getBoundingClientRect();
-        const elements = [...root.querySelectorAll('.mes[mesid]')];
-        const recent = new Set(elements.slice(-5));
-        return prioritizeMessageDescriptors(elements.map(element => {
+        const elements = root?.querySelectorAll('.mes[mesid]') || [];
+        const messages = [];
+        for (let index = 0; index < elements.length; index++) {
+            const element = elements[index];
             const messageId = Number(element.getAttribute('mesid'));
-            const rect = element.getBoundingClientRect();
-            return {
-                element,
-                messageId,
-                visible: rect.bottom >= rootRect.top && rect.top <= rootRect.bottom,
-                recent: recent.has(element),
-                complexity: estimateRenderComplexity({
-                    domNodes: element.querySelectorAll('*').length,
-                    htmlLength: element.innerHTML.length,
-                    richElements: element.querySelectorAll('details, table, pre, svg, iframe').length,
-                }),
-            };
-        }).filter(item => Number.isInteger(item.messageId)
-            && this.chat[item.messageId]
-            && (!targets || targets.has(item.messageId))));
+            if (!Number.isInteger(messageId) || !this.chat[messageId]) continue;
+            messages.push({ element, messageId, recent: index >= elements.length - 5 });
+        }
+        return { root, messages };
     }
 
-    getMessageSources(descriptors) {
-        return descriptors.map(({ messageId }) => ({
+    getDescriptors({ root, messages } = this.getDisplayedMessages()) {
+        if (!messages.length) return [];
+        const rootRect = root.getBoundingClientRect();
+        return prioritizeMessageDescriptors(messages.map(descriptor => {
+            const rect = descriptor.element.getBoundingClientRect();
+            return { ...descriptor, visible: rect.bottom >= rootRect.top && rect.top <= rootRect.bottom };
+        }));
+    }
+
+    getMessageSources(messages) {
+        return messages.map(({ messageId }) => ({
             id: messageId,
             text: String(this.chat[messageId]?.mes || ''),
             placement: this.chat[messageId]?.is_user ? 1 : 2,
         }));
+    }
+
+    measureBatchLead({ element }) {
+        return estimateRenderComplexity({
+            domNodes: element.querySelectorAll('*').length,
+            htmlLength: element.innerHTML.length,
+            richElements: element.querySelectorAll('details, table, pre, svg, iframe').length,
+        });
     }
 
     async reapply({ automatic = false, before = null, after = null } = {}) {
@@ -188,6 +194,7 @@ export class RegexRefreshController {
         if (this.isGenerating()) return { skipped: true };
         const chatId = this.getCurrentChatId();
         const generation = this.generation;
+        const job = this.refreshJob = new AbortController();
         const isCurrent = () => generation === this.generation
             && chatId === this.getCurrentChatId() && !this.isGenerating();
         this.refreshing = true;
@@ -215,13 +222,14 @@ export class RegexRefreshController {
                     ...plan,
                 };
             }
-            const displayed = this.getDescriptors();
-            if (!displayed.length) return { completed: 0, failed: 0, elapsedMs: 0, mode: 'none' };
+            let displayed;
             if (automatic) {
+                displayed = this.getDisplayedMessages();
+                if (!displayed.messages.length) return { completed: 0, failed: 0, elapsedMs: 0, mode: 'none' };
                 plan = planRegexRefresh({
                     before,
                     after,
-                    messages: this.getMessageSources(displayed),
+                    messages: this.getMessageSources(displayed.messages),
                     compileRegex: this.compileRegex,
                 });
                 if (plan.mode === 'none' || (plan.mode === 'matched' && !plan.targetIds.length)) {
@@ -229,16 +237,21 @@ export class RegexRefreshController {
                     return { completed: 0, failed: 0, elapsedMs: performance.now() - startedAt, ...plan };
                 }
             }
-            const descriptors = plan.mode === 'matched' ? this.getDescriptors(plan.targetIds) : displayed;
+            if (plan.mode === 'matched') {
+                const targets = new Set(plan.targetIds);
+                displayed.messages = displayed.messages.filter(({ messageId }) => targets.has(messageId));
+            }
+            const descriptors = this.getDescriptors(displayed);
+            if (!descriptors.length) return { completed: 0, failed: 0, elapsedMs: 0, mode: 'none' };
             let batch = 4;
             let previousFrameMs = 0;
             for (let cursor = 0; cursor < descriptors.length;) {
-                await this.scheduler.yield(descriptors[cursor].visible ? 0 : (descriptors[cursor].recent ? 1 : 2));
+                await this.scheduler.yield(descriptors[cursor].visible ? 0 : (descriptors[cursor].recent ? 1 : 2), job.signal);
                 if (!isCurrent()) return { cancelled: true, completed, failed };
                 const frameStart = performance.now();
                 const updateEvents = [];
                 batch = getAdaptiveBatchSize({
-                    complexity: descriptors[cursor].complexity,
+                    complexity: this.measureBatchLead(descriptors[cursor]),
                     previousFrameMs,
                     currentBatch: batch,
                 });
@@ -283,6 +296,7 @@ export class RegexRefreshController {
             if (!automatic) throw error;
             return { completed, failed, elapsedMs: performance.now() - startedAt, ...plan };
         } finally {
+            this.refreshJob = null;
             this.refreshing = false;
             if (this.started && this.dirty) this.markDirty();
         }
@@ -290,6 +304,7 @@ export class RegexRefreshController {
 
     stop() {
         this.generation += 1;
+        this.refreshJob?.abort();
         if (!this.started) return;
         this.started = false;
         document.removeEventListener('input', this.onInteraction, false);
@@ -303,6 +318,7 @@ export class RegexRefreshController {
         this.checkTimer = null;
         this.flushTimer = null;
         this.dirty = false;
+        this.refreshCheckRequested = false;
         this.snapshot = null;
         this.pendingBaseSnapshot = null;
         this.engine = null;

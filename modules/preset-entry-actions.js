@@ -55,8 +55,6 @@ export class PresetEntryActions {
             this.started = true;
             this.document.addEventListener('click', this.onClick, true);
             this.document.addEventListener('keydown', this.onKey, true);
-            this.document.addEventListener('scroll', this.closeMenu, true);
-            this.document.defaultView?.addEventListener('resize', this.closeMenu);
             this.decorate();
             return true;
         } catch (error) {
@@ -145,6 +143,8 @@ export class PresetEntryActions {
         this.document.body.append(menu);
         this.menu = menu;
         this.menuButton = button;
+        this.document.addEventListener('scroll', this.closeMenu, true);
+        this.document.defaultView?.addEventListener('resize', this.closeMenu);
         button.setAttribute('aria-expanded', 'true');
         const rect = button.getBoundingClientRect();
         const viewport = this.document.documentElement;
@@ -156,6 +156,9 @@ export class PresetEntryActions {
     }
 
     closeMenu() {
+        if (!this.menu) return;
+        this.document.removeEventListener('scroll', this.closeMenu, true);
+        this.document.defaultView?.removeEventListener('resize', this.closeMenu);
         this.menuButton?.setAttribute('aria-expanded', 'false');
         this.menu?.remove();
         this.menu = null;
@@ -323,8 +326,6 @@ export class PresetEntryActions {
         this.closeMenu();
         this.document?.removeEventListener('click', this.onClick, true);
         this.document?.removeEventListener('keydown', this.onKey, true);
-        this.document?.removeEventListener('scroll', this.closeMenu, true);
-        this.document?.defaultView?.removeEventListener('resize', this.closeMenu);
         if (this.manager && this.wrappedRender && this.manager.renderPromptManagerListItems === this.wrappedRender) this.manager.renderPromptManagerListItems = this.originalRender;
         // Do not let a canceled plugin draft fall through to native creation.
         const save = this.document?.getElementById(`${this.manager?.configuration?.prefix}prompt_manager_popup_entry_form_save`);

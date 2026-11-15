@@ -45,7 +45,7 @@ function fixture(t, { text = 'const a = 1;', copy = true } = {}) {
         buttons = []; // Real highlight.js replaces innerHTML, including icons.
         code.dataset.highlighted = 'yes';
     };
-    globalThis.document = {querySelectorAll:()=>[message],getSelection:()=>selection};
+    globalThis.document = {querySelector: () => optimizer.chatElement, getSelection: () => selection};
     t.after(() => {
         clearTimeout(optimizer.codeScanTimer);
         for (const [key,value] of Object.entries(previous)) {
@@ -104,7 +104,7 @@ test('oversized code stays intact as plain text without expensive syntax parsing
 test('queued work cannot highlight or rebuild copy controls after stop/restart', async t => {
     const f = fixture(t,{copy:false});
     f.optimizer.queueHighlight(f.code);
-    f.optimizer.generation++;
+    f.optimizer.pauseCodeScanning();
     await f.jobs[0]();
     assert.equal(f.highlights,0);
     assert.deepEqual(f.copyScopes,[]);

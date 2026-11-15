@@ -21,9 +21,6 @@ export class PressSweepSelection {
         this.key = event => { if (event.key === 'Escape' && this.gesture) { event.preventDefault(); event.stopImmediatePropagation(); this.cancel(); } };
         root.addEventListener('pointerdown', this.down, true); root.addEventListener('click', this.click, true);
         root.addEventListener('contextmenu', this.contextMenu, true);
-        document.addEventListener('pointermove', this.move, { capture: true, passive: false });
-        document.addEventListener('pointerup', this.end, true); document.addEventListener('pointercancel', this.end, true);
-        document.addEventListener('lostpointercapture', this.lost, true);
         document.addEventListener('keydown', this.key, true); globalThis.addEventListener?.('blur', this.blur);
     }
     down(event) {
@@ -33,6 +30,9 @@ export class PressSweepSelection {
         const gesture = this.gesture = { pointer: event.pointerId, name, row, rows: this.getRows(row), context: this.context(row),
             startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, active: false,
             selected: !this.isSelected(row), visited: new Map(), index: -1, mouse: event.pointerType === 'mouse' };
+        document.addEventListener('pointermove', this.move, { capture: true, passive: false });
+        document.addEventListener('pointerup', this.end, true); document.addEventListener('pointercancel', this.end, true);
+        document.addEventListener('lostpointercapture', this.lost, true);
         if (gesture.mouse) event.preventDefault();
         else {
             // Keep blocking touch listeners out of normal chat/page scrolling.
@@ -111,6 +111,8 @@ export class PressSweepSelection {
         } else this.cancel(false);
     }
     cancel(restore = true) {
+        document.removeEventListener('pointermove', this.move, true); document.removeEventListener('pointerup', this.end, true);
+        document.removeEventListener('pointercancel', this.end, true); document.removeEventListener('lostpointercapture', this.lost, true);
         document.removeEventListener('touchmove', this.touchMove, true);
         if (this.frame != null) cancelAnimationFrame(this.frame);
         this.frame = null;
@@ -126,9 +128,7 @@ export class PressSweepSelection {
     destroy() {
         this.cancel(); this.root.removeEventListener('pointerdown', this.down, true); this.root.removeEventListener('click', this.click, true);
         this.root.removeEventListener('contextmenu', this.contextMenu, true);
-        document.removeEventListener('pointermove', this.move, true); document.removeEventListener('pointerup', this.end, true);
-        document.removeEventListener('pointercancel', this.end, true); document.removeEventListener('lostpointercapture', this.lost, true);
-        document.removeEventListener('touchmove', this.touchMove, true); document.removeEventListener('keydown', this.key, true);
+        document.removeEventListener('keydown', this.key, true);
         globalThis.removeEventListener?.('blur', this.blur);
     }
 }

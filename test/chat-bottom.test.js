@@ -6,6 +6,7 @@ import { ChatOptimizer, hasRenderedChatTail } from '../modules/chat-optimizer.js
 function createChatElement(lastId) {
     const listeners = new Map();
     const lastMessage = {
+        matches: selector => selector === '.mes[mesid]',
         getAttribute(name) {
             return name === 'mesid' ? String(lastId) : null;
         },
@@ -13,9 +14,7 @@ function createChatElement(lastId) {
     return {
         scrollHeight: 2400,
         scrollCalls: [],
-        querySelectorAll() {
-            return lastId === null ? [] : [lastMessage];
-        },
+        lastElementChild: { matches: () => false, previousElementSibling: lastId === null ? null : lastMessage },
         addEventListener(type, handler) {
             listeners.set(type, handler);
         },
@@ -86,7 +85,6 @@ test('settles only once per actual chat entry and not for same-chat history upda
         getCurrentChatId: () => currentChatId,
     });
     optimizer.started = true;
-    optimizer.inspectPayload = () => {};
     optimizer.refreshChatBindings = () => {};
     let settleCalls = 0;
     let cancelCalls = 0;
@@ -116,7 +114,6 @@ test('claims history pagination as the current chat before a following chat even
         getCurrentChatId: () => 'chat-a',
     });
     optimizer.started = true;
-    optimizer.inspectPayload = () => {};
     optimizer.refreshChatBindings = () => {};
     let settleCalls = 0;
     let cancelCalls = 0;

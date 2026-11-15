@@ -44,9 +44,8 @@ function normalizeScript(script, type, position, scopeActive) {
 }
 
 function valuesEqual(left, right) {
-    return Array.isArray(left) || Array.isArray(right)
-        ? JSON.stringify(left) === JSON.stringify(right)
-        : left === right;
+    if (!Array.isArray(left) || !Array.isArray(right)) return left === right;
+    return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 export function createRegexSnapshot(groups = []) {
@@ -100,8 +99,9 @@ export function diffRegexSnapshots(before, after) {
         if (before.scopes.get(type) !== after.scopes.get(type)) scopeChanged = true;
         const previousOrder = before.orders.get(type) || [];
         const nextOrder = after.orders.get(type) || [];
-        const shared = new Set(previousOrder.filter(key => nextOrder.includes(key)));
-        const previousShared = previousOrder.filter(key => shared.has(key));
+        const nextKeys = new Set(nextOrder);
+        const previousShared = previousOrder.filter(key => nextKeys.has(key));
+        const shared = new Set(previousShared);
         const nextShared = nextOrder.filter(key => shared.has(key));
         if (!valuesEqual(previousShared, nextShared)) reordered = true;
     }

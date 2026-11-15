@@ -24,7 +24,7 @@ function serializeHeaders(headers) {
 }
 
 function captureSensitiveInitiator(pathname) {
-    if (!['/api/settings/get', '/api/quick-replies/save'].includes(pathname)) return '';
+    if (pathname !== '/api/settings/get' && pathname !== '/api/quick-replies/save') return '';
     try {
         return String(new Error().stack || '')
             .split('\n')
@@ -42,21 +42,24 @@ function captureSensitiveInitiator(pathname) {
     }
 }
 
-function describeRequest(input, init = {}) {
+function describeRequest(input, init) {
     const isRequest = typeof Request !== 'undefined' && input instanceof Request;
     const url = new URL(isRequest ? input.url : String(input), location.href);
-    const method = String(init.method || (isRequest ? input.method : 'GET')).toUpperCase();
-    const body = init.body;
-    const reusableBody = body == null || typeof body === 'string' || body instanceof URLSearchParams;
+    const method = String(init?.method || (isRequest ? input.method : 'GET')).toUpperCase();
+    return { url, method, isRequest };
+}
+
+function describeReusableRequest(descriptor, init) {
+    if (descriptor.isRequest || init?.signal) return null;
+    const body = init?.body;
+    if (body != null && typeof body !== 'string' && !(body instanceof URLSearchParams)) return null;
     return {
-        url,
-        method,
+        ...descriptor,
         body: body == null ? '' : String(body),
-        headers: init.headers || (isRequest ? input.headers : undefined),
-        credentials: init.credentials || (isRequest ? input.credentials : ''),
-        cache: init.cache || (isRequest ? input.cache : ''),
-        mode: init.mode || (isRequest ? input.mode : ''),
-        reusable: !isRequest && reusableBody && !init.signal,
+        headers: init?.headers,
+        credentials: init?.credentials || '',
+        cache: init?.cache || '',
+        mode: init?.mode || '',
     };
 }
 
@@ -101,7 +104,7 @@ export class StartupOptimizer {
         this.started = true;
         this.diagnostics.start();
         this.installFetchCoordinator();
-        this.bind(this.eventTypes.APP_READY, () => this.onAppReady());
+        this.bind(this.eventTypes.APP_READY, () => this.entries.clear());
         if (this.startupFeatures) this.onStatus?.('页面启动优化已启用');
     }
 
@@ -111,17 +114,16 @@ export class StartupOptimizer {
         this.handlers.push([name, handler]);
     }
 
-    onAppReady() {
-        this.entries.clear();
-    }
-
     installFetchCoordinator() {
         if (this.fetchWrapper) return;
-        const originalFetch = window.fetch.bind(window);
-        const nativeFetch = async (input, init = {}, initiator = '') => {
-            if (!this.diagnostics.started || this.diagnostics.completed) return originalFetch(input, init);
+        const previousFetch = window.fetch;
+        const originalFetch = previousFetch.bind(window);
+        const diagnosticsActive = () => this.diagnostics.started && !this.diagnostics.completed;
+        const nativeFetch = (input, init, initiator = '') =>
+            diagnosticsActive() ? measureFetch(input, init, initiator) : originalFetch(input, init);
+        const measureFetch = async (input, init, initiator) => {
             const startedAt = performance.now();
-            const method = init.method || (typeof Request !== 'undefined' && input instanceof Request ? input.method : 'GET');
+            const method = init?.method || (typeof Request !== 'undefined' && input instanceof Request ? input.method : 'GET');
             try {
                 const response = await originalFetch(input, init);
                 const durationMs = performance.now() - startedAt;
@@ -146,56 +148,64 @@ export class StartupOptimizer {
                 throw error;
             }
         };
-        this.nativeFetch = originalFetch;
-        const fetchWrapper = async (input, init = {}) => {
-            if (this.fetchWrapper !== fetchWrapper) return originalFetch(input, init);
+        this.nativeFetch = previousFetch;
+        const fetchWrapper = (input, init) => {
+            if (this.fetchWrapper !== fetchWrapper || (!this.startupFeatures && !diagnosticsActive())) {
+                return originalFetch(input, init);
+            }
             let descriptor;
             try {
                 descriptor = describeRequest(input, init);
             } catch {
                 return nativeFetch(input, init);
             }
-            const initiator = this.diagnostics.started && !this.diagnostics.completed
-                ? captureSensitiveInitiator(descriptor.url.pathname) : '';
-            const policy = classifyStartupRequest({ pathname: descriptor.url.pathname, method: descriptor.method });
-            if (policy === 'stale-recent' && this.startupFeatures && descriptor.reusable) {
-                return this.fetchRecentChats(nativeFetch, input, init, descriptor);
-            }
+            const initiator = diagnosticsActive() ? captureSensitiveInitiator(descriptor.url.pathname) : '';
             if (!this.startupFeatures) return nativeFetch(input, init, initiator);
+            const policy = classifyStartupRequest({ pathname: descriptor.url.pathname, method: descriptor.method });
             if (policy === 'invalidate') {
-                const response = await nativeFetch(input, init, initiator);
-                if (response.ok) {
-                    this.entries.clear();
-                    this.recentGeneration += 1;
-                    this.recentSnapshots.clear();
-                    this.recentPending.clear();
-                }
-                return response;
+                return nativeFetch(input, init, initiator).then(response => {
+                    if (response.ok && this.fetchWrapper === fetchWrapper) {
+                        this.entries.clear();
+                        this.recentGeneration += 1;
+                        this.recentSnapshots.clear();
+                        this.recentPending.clear();
+                    }
+                    return response;
+                });
             }
-            if (policy !== 'reuse' || !descriptor.reusable) return nativeFetch(input, init, initiator);
-
-            const key = fingerprint(descriptor);
-            const now = performance.now();
-            const existing = this.entries.get(key);
-            if (existing?.expiresAt > now) return cloneResponse(await existing.promise);
-            const promise = nativeFetch(input, init, initiator);
-            this.entries.set(key, { promise, expiresAt: now + FETCH_TTL_MS });
-            const timer = setTimeout(() => {
-                if (this.entries.get(key)?.promise === promise) this.entries.delete(key);
-                this.timers.delete(timer);
-            }, FETCH_TTL_MS + 100);
-            this.timers.add(timer);
-            try {
-                const response = await promise;
-                if (!response.ok) this.entries.delete(key);
-                return cloneResponse(response);
-            } catch (error) {
-                this.entries.delete(key);
-                throw error;
-            }
+            if (policy !== 'reuse' && policy !== 'stale-recent') return nativeFetch(input, init, initiator);
+            const reusable = describeReusableRequest(descriptor, init);
+            if (!reusable) return nativeFetch(input, init, initiator);
+            if (policy === 'stale-recent') return this.fetchRecentChats(nativeFetch, input, init, reusable);
+            return this.fetchReusable(nativeFetch, input, init, initiator, reusable);
         };
         this.fetchWrapper = fetchWrapper;
         window.fetch = fetchWrapper;
+    }
+
+    async fetchReusable(nativeFetch, input, init, initiator, descriptor) {
+        const key = fingerprint(descriptor);
+        const now = performance.now();
+        const existing = this.entries.get(key);
+        if (existing?.expiresAt > now) return cloneResponse(await existing.promise);
+        const promise = nativeFetch(input, init, initiator);
+        this.entries.set(key, { promise, expiresAt: now + FETCH_TTL_MS });
+        const forget = () => {
+            if (this.entries.get(key)?.promise === promise) this.entries.delete(key);
+        };
+        const timer = setTimeout(() => {
+            forget();
+            this.timers.delete(timer);
+        }, FETCH_TTL_MS + 100);
+        this.timers.add(timer);
+        try {
+            const response = await promise;
+            if (!response.ok) forget();
+            return cloneResponse(response);
+        } catch (error) {
+            forget();
+            throw error;
+        }
     }
 
     async fetchRecentChats(nativeFetch, input, init, descriptor) {
@@ -225,12 +235,14 @@ export class StartupOptimizer {
     refreshRecentChats(nativeFetch, input, init, key) {
         if (this.recentPending.has(key)) return;
         const generation = this.recentGeneration;
-        const pending = nativeFetch(input, init).then(response => {
+        this.recentRefreshController ??= new AbortController();
+        const { signal } = this.recentRefreshController;
+        const pending = nativeFetch(input, { ...init, signal }).then(response => {
             if (response.ok && this.started && generation === this.recentGeneration) {
                 this.recentSnapshots.set(key, cloneResponse(response));
             }
         }).catch(error => {
-            console.debug(LOG_PREFIX, '最近聊天后台刷新失败，继续使用本次会话缓存', error);
+            if (!signal.aborted) console.debug(LOG_PREFIX, '最近聊天后台刷新失败，继续使用本次会话缓存', error);
         }).finally(() => {
             if (this.recentPending.get(key) === pending) this.recentPending.delete(key);
         });
@@ -240,6 +252,8 @@ export class StartupOptimizer {
     stop() {
         if (!this.started) return;
         this.started = false;
+        this.recentRefreshController?.abort();
+        this.recentRefreshController = null;
         this.diagnostics.stop();
         if (this.fetchWrapper && window.fetch === this.fetchWrapper) window.fetch = this.nativeFetch;
         for (const [name, handler] of this.handlers) this.eventSource.removeListener(name, handler);

@@ -49,14 +49,15 @@ export class SecretKeyBatchActions {
         document.addEventListener('click', this.onClick, true);
         document.addEventListener('change', this.onChange, true);
         this.observer = new MutationObserver(records => {
-            if (records.some(record => [...record.removedNodes].some(node =>
-                node === this.root || (this.root && node.contains?.(this.root))))) {
+            if (this.root && records.some(record => record.removedNodes.length
+                && !record.target.closest?.('#chat')
+                && Array.from(record.removedNodes).some(node => node.contains?.(this.root)))) {
                 this.generation++;
                 this.mode = false;
                 this.selected.clear();
             }
             if (records.some(record => {
-                if (record.target?.closest?.(OWN)) return false;
+                if (record.target?.closest?.(`#chat, ${OWN}`)) return false;
                 const nodes = [...record.addedNodes, ...record.removedNodes];
                 if (nodes.length && nodes.every(node => node.matches?.(OWN))) return false;
                 return record.target?.closest?.(ROOT) || nodes.some(node =>

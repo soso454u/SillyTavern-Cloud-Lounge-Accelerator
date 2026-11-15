@@ -177,6 +177,8 @@ export class StartupDiagnostics {
                 jsonParse: 'not-observed',
                 initializationBeforePlugin: 'not-observed',
                 requestDuration: 'response-headers-only',
+                longTaskBreakdown: 'not-observed',
+                layoutAndPaint: 'not-observed',
             },
             slowRequests: [],
             requestStats: {},

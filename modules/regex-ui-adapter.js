@@ -65,13 +65,6 @@ export function shouldShowRegexOrganizerRow(options = {}) {
     return openCollections.has(getRegexCollectionKey(options.scope, options.collection));
 }
 
-function recordsOnlyAffectChat(records) {
-    return records.length > 0 && records.every(record => {
-        const target = record.target instanceof Element ? record.target : record.target.parentElement;
-        return Boolean(target?.closest?.('#chat'));
-    });
-}
-
 function parseOptionalInteger(value) {
     const parsed = Number.parseInt(String(value ?? ''), 10);
     return Number.isFinite(parsed) ? parsed : null;
@@ -82,11 +75,13 @@ function getTypeKey(element) {
     return list ? TYPE_BY_LIST_ID[list.id] : null;
 }
 
+const ORGANIZER_NODE = '[data-cla-regex-fold], [data-cla-regex-scope-actions], .cla-regex-group-handle';
+
 function mutationAffectsRegexUi(record) {
     const target = record.target instanceof Element ? record.target : record.target?.parentElement;
-    if (target?.closest?.('[data-cla-regex-fold], [data-cla-regex-scope-actions]')) return false;
+    if (target?.closest?.(ORGANIZER_NODE)) return false;
     const changedNodes = [...(record.addedNodes || []), ...(record.removedNodes || [])];
-    if (changedNodes.length && changedNodes.every(node => node?.matches?.('[data-cla-regex-fold], [data-cla-regex-scope-actions]'))) return false;
+    if (changedNodes.length && changedNodes.every(node => node?.matches?.(ORGANIZER_NODE))) return false;
     if (target?.closest?.(REGEX_LIST_SELECTOR)) return true;
     return changedNodes.some(node => (
         node?.matches?.('.regex_settings, .regex-script-label, #saved_regex_scripts, #saved_scoped_scripts, #saved_preset_scripts')
@@ -162,37 +157,37 @@ export class RegexUiAdapter {
 
     async start() {
         if (this.started) return true;
+        const generation = ++this.generation;
         try {
-            [this.engine, this.popupApi, this.scriptApi] = await Promise.all([
+            const [engine, popupApi, scriptApi] = await Promise.all([
                 import('../../../regex/engine.js'),
                 import('../../../../popup.js'),
                 import('../../../../../script.js'),
             ]);
+            if (generation !== this.generation) return false;
+            Object.assign(this, { engine, popupApi, scriptApi });
         } catch (error) {
             console.debug('[Cloud Lounge Accelerator] 正则界面最小刷新适配不可用', error);
             return false;
         }
         this.autoCollapseCollections = true;
         this.started = true;
-        this.generation += 1;
         document.addEventListener('click', this.onClick, true);
         document.addEventListener('input', this.onInput, true);
         document.addEventListener('change', this.onChange, true);
         document.addEventListener('pointerdown', this.onPointerDown, true);
-        document.addEventListener('pointermove', this.onPointerMove, { capture: true, passive: false });
-        document.addEventListener('pointerup', this.onPointerEnd, true);
-        document.addEventListener('pointercancel', this.onPointerEnd, true);
-        document.addEventListener('lostpointercapture', this.onLostPointerCapture, true);
         this.observer = new MutationObserver(records => {
-            if (recordsOnlyAffectChat(records)) return;
-            if (document.querySelector('.regex_editor')) {
-                if (this.editorContext) this.editorContext.opened = true;
-            } else if (this.editorContext?.opened && !document.querySelector('.popup[closing] .regex_editor')) {
-                this.editorContext = null;
-            }
-            if (records.some(mutationAffectsRegexUi)) this.scheduleOrganizerRefresh();
+            if (this.collectionsEnabled && records.some(record =>
+                record.target !== document.body && mutationAffectsRegexUi(record))) this.scheduleOrganizerRefresh();
+            if (!this.editorContext || !records.some(record => record.target === document.body
+                && [...record.addedNodes, ...record.removedNodes].some(node =>
+                    node.matches?.('.popup') && node.querySelector('.regex_editor')))) return;
+            if (document.querySelector('.regex_editor')) this.editorContext.opened = true;
+            else if (this.editorContext.opened) this.editorContext = null;
         });
-        this.observer.observe(document.body, { childList: true, subtree: true });
+        const regexRoot = document.getElementById('regex_container');
+        if (regexRoot) this.observer.observe(regexRoot, { childList: true, subtree: true });
+        this.observer.observe(document.body, { childList: true });
         if (this.collectionsEnabled) this.startNameSelection();
         this.scheduleOrganizerRefresh();
         return true;
@@ -1084,6 +1079,7 @@ export class RegexUiAdapter {
                 context: this.getCollectionContext(scope), collection: header.dataset.claRegexFold, header, rows: [],
                 x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, active: false, target: null,
                 scroller: this.findGestureScroller(header) };
+            this.listenForPointerGesture();
             collectionHandle.setPointerCapture?.(event.pointerId);
             event.preventDefault();
             event.stopImmediatePropagation();
@@ -1100,12 +1096,20 @@ export class RegexUiAdapter {
                 collection: row.dataset.claRegexCollection,
                 x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, active: false, target: null };
             this.groupDrag.scroller = this.findGestureScroller(row);
+            this.listenForPointerGesture();
             handle.setPointerCapture?.(event.pointerId);
             event.preventDefault();
             event.stopImmediatePropagation();
             return;
         }
 
+    }
+
+    listenForPointerGesture() {
+        document.addEventListener('pointermove', this.onPointerMove, { capture: true, passive: false });
+        document.addEventListener('pointerup', this.onPointerEnd, true);
+        document.addEventListener('pointercancel', this.onPointerEnd, true);
+        document.addEventListener('lostpointercapture', this.onLostPointerCapture, true);
     }
 
     onPointerMove(event) {
@@ -1218,13 +1222,13 @@ export class RegexUiAdapter {
     }
 
     setSortTarget(drag, row) {
-        drag.sortTarget?.row.classList.remove('cla-regex-sort-before', 'cla-regex-sort-after');
-        drag.sortTarget = null;
-        if (!row) return;
-        const bounds = row.getBoundingClientRect();
-        const after = drag.y >= bounds.top + bounds.height / 2;
-        row.classList.add(after ? 'cla-regex-sort-after' : 'cla-regex-sort-before');
-        drag.sortTarget = { row, after };
+        const previous = drag.sortTarget;
+        const bounds = row?.getBoundingClientRect();
+        const after = bounds && drag.y >= bounds.top + bounds.height / 2;
+        if ((!row && !previous) || (previous?.row === row && previous.after === after)) return;
+        previous?.row.classList.remove('cla-regex-sort-before', 'cla-regex-sort-after');
+        if (row) row.classList.add(after ? 'cla-regex-sort-after' : 'cla-regex-sort-before');
+        drag.sortTarget = row ? { row, after } : null;
     }
 
     onPointerEnd(event) {
@@ -1241,6 +1245,12 @@ export class RegexUiAdapter {
         this.pointerFrame = null;
         const drag = this.groupDrag;
         const selection = this.selectionGesture;
+        if (drag || selection) {
+            document.removeEventListener('pointermove', this.onPointerMove, true);
+            document.removeEventListener('pointerup', this.onPointerEnd, true);
+            document.removeEventListener('pointercancel', this.onPointerEnd, true);
+            document.removeEventListener('lostpointercapture', this.onLostPointerCapture, true);
+        }
         this.groupDrag = null;
         this.selectionGesture = null;
         const source = drag?.source || selection?.source;
@@ -1473,12 +1483,12 @@ export class RegexUiAdapter {
     }
 
     stop() {
+        this.generation += 1;
         if (!this.started) return;
         this.nameSelection?.destroy(); this.nameSelection = null;
         this.clearRowSelection();
         this.cancelSelectionButton?.remove(); this.cancelSelectionButton = null;
         this.started = false;
-        this.generation += 1;
         this.finishPointerGesture(false);
         for (const restore of [...this.pendingRestores]) restore();
         this.busyEditors = new WeakSet();
@@ -1492,10 +1502,6 @@ export class RegexUiAdapter {
         document.removeEventListener('input', this.onInput, true);
         document.removeEventListener('change', this.onChange, true);
         document.removeEventListener('pointerdown', this.onPointerDown, true);
-        document.removeEventListener('pointermove', this.onPointerMove, true);
-        document.removeEventListener('pointerup', this.onPointerEnd, true);
-        document.removeEventListener('pointercancel', this.onPointerEnd, true);
-        document.removeEventListener('lostpointercapture', this.onLostPointerCapture, true);
         this.observer?.disconnect();
         this.observer = null;
         clearTimeout(this.organizerTimer);

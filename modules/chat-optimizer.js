@@ -1,26 +1,28 @@
 import {
     CHAT_PAGE_SIZE,
-    chooseAdaptiveChatLimit,
+    normalizeChatPageSize,
     detectSwipeAxis,
-    measureChatPayload,
 } from '../client-core.js';
 
-const CODE_SELECTOR = '#chat .mes pre code';
+const CODE_SELECTOR = '.mes pre code';
 const LOG_PREFIX = '[Cloud Lounge Accelerator]';
 const ORIGINAL_TRUNCATION_KEY = 'cloud-lounge-accelerator:original-chat-truncation';
 const MAX_HIGHLIGHT_CHARS = 20000;
 
-function isVisible(element, root) {
-    if (!(element instanceof Element) || !(root instanceof Element)) return false;
-    const rect = element.getBoundingClientRect();
-    const rootRect = root.getBoundingClientRect();
-    return rect.bottom >= rootRect.top && rect.top <= rootRect.bottom;
+function isRecentCode(element) {
+    const message = element.closest('.mes');
+    if (!message) return false;
+    let newer = 0;
+    for (let sibling = message.nextElementSibling; sibling; sibling = sibling.nextElementSibling) {
+        if (sibling.matches('.mes') && ++newer === 3) return false;
+    }
+    return true;
 }
 
 export function hasRenderedChatTail(chatElement, expectedLastId) {
     if (!chatElement || !Number.isInteger(expectedLastId) || expectedLastId < 0) return false;
-    const messages = chatElement.querySelectorAll?.('.mes[mesid]') || [];
-    const lastMessage = messages[messages.length - 1];
+    let lastMessage = chatElement.lastElementChild;
+    while (lastMessage && !lastMessage.matches('.mes[mesid]')) lastMessage = lastMessage.previousElementSibling;
     return Number(lastMessage?.getAttribute?.('mesid')) === expectedLastId;
 }
 
@@ -60,6 +62,11 @@ export class ChatOptimizer {
         this.originalHighlights = new Map();
         this.highlightWrappers = new Map();
         this.queuedHighlights = new WeakSet();
+        this.highlightJobs = null;
+        this.deferredHighlights = new Map();
+        this.observedHighlights = new Set();
+        this.collapseHandlers = new WeakMap();
+        this.scanAllCode = false;
         this.highlightPointerId = null;
         this.highlightObserver = null;
         this.codeScanTimer = null;
@@ -67,8 +74,6 @@ export class ChatOptimizer {
         this.generationEndTimer = null;
         this.touchState = null;
         this.swipeSuppressUntil = 0;
-        this.heavyHtmlMode = false;
-        this.pendingMetrics = null;
         this.chatPageSize = CHAT_PAGE_SIZE;
         this.generation = 0;
         this.bottomSettleTimers = new Set();
@@ -100,14 +105,11 @@ export class ChatOptimizer {
                 ? restoredTruncation
                 : (Number.isFinite(this.powerUser?.chat_truncation) ? this.powerUser.chat_truncation : 100);
             localStorage.setItem(ORIGINAL_TRUNCATION_KEY, String(this.originalTruncation));
-            const initialMetrics = this.pendingMetrics || (Array.isArray(this.chat) && this.chat.length
-                ? measureChatPayload(this.chat)
-                : { averageTextLength: 1200, richMarkerCount: 3, heavyHtmlCount: 0, maxHtmlLength: 0 });
-            this.pendingMetrics = null;
-            this.applyMetrics(initialMetrics);
+            this.powerUser.chat_truncation = this.chatPageSize;
         } catch (error) {
             console.debug(LOG_PREFIX, '官方聊天截断接口不可用', error);
         }
+        if (!this.started || generation !== this.generation) return;
         this.bind(this.eventTypes.CHAT_CHANGED, () => this.handleChatChanged());
         this.bind(this.eventTypes.MORE_MESSAGES_LOADED, () => this.handleMoreMessagesLoaded());
         this.bind(this.eventTypes.GENERATION_STARTED, () => this.pauseCodeScanning());
@@ -127,48 +129,72 @@ export class ChatOptimizer {
         this.eventHandlers.push([name, handler]);
     }
 
-    inspectPayload(messages) {
-        if (!this.started) return;
-        const metrics = measureChatPayload(messages);
-        if (!this.powerUser) {
-            this.pendingMetrics = metrics;
-            return;
-        }
-        this.applyMetrics(metrics);
-    }
-
-    applyMetrics(metrics) {
-        if (!this.powerUser || !this.started) return;
-        this.heavyHtmlMode = Number(metrics?.heavyHtmlCount) > 0 || Number(metrics?.maxHtmlLength) >= 10000;
-        const limit = chooseAdaptiveChatLimit({
-            ...metrics,
-            pageSize: this.chatPageSize,
-            hardwareConcurrency: navigator.hardwareConcurrency,
-            deviceMemory: navigator.deviceMemory,
-        });
-        this.powerUser.chat_truncation = limit;
-    }
-
     setPageSize(value) {
-        this.chatPageSize = chooseAdaptiveChatLimit({ pageSize: value });
+        this.chatPageSize = normalizeChatPageSize(value);
         if (this.powerUser && this.started) this.powerUser.chat_truncation = this.chatPageSize;
         return this.chatPageSize;
     }
 
     refreshChatBindings() {
-        this.domObserver?.disconnect();
-        this.chatElement = document.querySelector('#chat');
-        if (!this.chatElement || !this.started) return;
-        this.domObserver = new MutationObserver(() => {
-            if (this.isGenerating?.()) return;
-            this.queueCodeScan();
-        });
-        if (!this.isGenerating?.()) this.resumeCodeObservation();
-        if (!this.isGenerating?.()) this.queueCodeScan(0);
+        const chatElement = document.querySelector('#chat');
+        if (this.chatElement !== chatElement) {
+            this.pauseCodeScanning();
+            this.chatElement = chatElement;
+        }
+        if (!this.chatElement || !this.started || !this.originalHighlight) return;
+        this.domObserver ??= new MutationObserver(records => this.collectAddedCode(records));
+        if (!this.highlightObserver && typeof IntersectionObserver === 'function') {
+            this.highlightObserver = new IntersectionObserver((entries, observer) => {
+                if (this.highlightObserver !== observer) return;
+                for (const { target, isIntersecting } of entries) {
+                    if (!isIntersecting || !this.observedHighlights.delete(target)) continue;
+                    observer.unobserve(target);
+                    if (this.chatElement?.contains(target)) this.queueHighlight(target, true);
+                }
+            }, { root: this.chatElement, rootMargin: '180px 0px' });
+        }
+        this.resumeCodeObservation();
+        this.queueCodeScan(0, true);
+    }
+
+    collectAddedCode(records) {
+        if (this.isGenerating?.()) return;
+        let removedElements = false;
+        for (const { target, addedNodes, removedNodes } of records) {
+            // Native copy icons and the highlighter's spans are inside code.
+            if (target.closest?.('code')) continue;
+            for (const node of addedNodes) {
+                if (node.nodeType !== 1) continue;
+                if (node.matches(CODE_SELECTOR) && !node.dataset.claHighlighted) this.deferHighlight(node);
+                for (const code of node.querySelectorAll(CODE_SELECTOR)) {
+                    if (!code.dataset.claHighlighted) this.deferHighlight(code);
+                }
+            }
+            removedElements ||= removedNodes.length > 0;
+        }
+        if (removedElements) {
+            for (const element of this.observedHighlights) {
+                if (this.chatElement?.contains(element)) continue;
+                this.highlightObserver?.unobserve(element);
+                this.observedHighlights.delete(element);
+            }
+            for (const element of this.deferredHighlights.keys()) {
+                if (!this.chatElement?.contains(element)) this.deferredHighlights.delete(element);
+            }
+        }
+        if (this.deferredHighlights.size && !this.highlightBlocked()) this.queueCodeScan();
     }
 
     pauseCodeScanning() {
         this.domObserver?.disconnect();
+        this.highlightJobs?.abort();
+        this.highlightJobs = null;
+        this.queuedHighlights = new WeakSet();
+        this.highlightObserver?.disconnect();
+        this.highlightObserver = null;
+        this.observedHighlights.clear();
+        this.deferredHighlights.clear();
+        this.scanAllCode = false;
         clearTimeout(this.codeScanTimer);
         this.codeScanTimer = null;
         if (this.codeScanFrame !== null) cancelAnimationFrame(this.codeScanFrame);
@@ -181,16 +207,24 @@ export class ChatOptimizer {
         }
     }
 
-    queueCodeScan(delay = 180) {
+    deferHighlight(element, force = false) {
+        this.deferredHighlights.set(element, force || this.deferredHighlights.get(element) === true);
+    }
+
+    highlightBlocked() {
+        return this.highlightPointerId !== null || this.hasActiveChatSelection();
+    }
+
+    queueCodeScan(delay = 180, scanAll = false) {
         if (!this.started || this.isGenerating?.()) return;
-        clearTimeout(this.codeScanTimer);
+        this.scanAllCode ||= scanAll;
+        if (!this.scanAllCode && !this.deferredHighlights.size) return;
+        if (this.codeScanTimer !== null || this.codeScanFrame !== null) return;
         this.codeScanTimer = setTimeout(() => {
             this.codeScanTimer = null;
-            if (!this.started || this.isGenerating?.()) return;
-            if (this.codeScanFrame !== null) cancelAnimationFrame(this.codeScanFrame);
             this.codeScanFrame = requestAnimationFrame(() => {
                 this.codeScanFrame = null;
-                if (!this.started || this.isGenerating?.()) return;
+                if (!this.started || this.isGenerating?.() || this.highlightBlocked()) return;
                 this.observeCodeBlocks();
             });
         }, delay);
@@ -205,14 +239,13 @@ export class ChatOptimizer {
                 this.generationEndTimer = setTimeout(waitForUnlock, 80);
                 return;
             }
-            this.resumeCodeObservation();
-            this.queueCodeScan(180);
+            this.refreshChatBindings();
         };
         waitForUnlock();
     }
 
     handleChatChanged() {
-        this.inspectPayload(this.chat);
+        if (this.powerUser) this.powerUser.chat_truncation = this.chatPageSize;
         this.refreshChatBindings();
 
         const chatId = this.getCurrentChatId?.();
@@ -419,7 +452,7 @@ export class ChatOptimizer {
                     if (!this.started) return original.apply(hljs, args);
                     if (this.isGenerating?.()) return undefined;
                     const temporaryMarks = [];
-                    document.querySelectorAll(CODE_SELECTOR).forEach(element => {
+                    this.chatElement?.querySelectorAll(CODE_SELECTOR).forEach(element => {
                         this.queueHighlight(element);
                         if (!element.hasAttribute('data-highlighted')) {
                             element.dataset.highlighted = 'yes';
@@ -438,50 +471,50 @@ export class ChatOptimizer {
                 this.highlightWrappers.set('highlightAll', wrapper);
                 hljs.highlightAll = wrapper;
             }
-            this.highlightObserver = new IntersectionObserver(entries => {
-                for (const entry of entries) {
-                    if (!entry.isIntersecting) continue;
-                    this.highlightObserver.unobserve(entry.target);
-                    this.queueHighlight(entry.target, true);
-                }
-            }, { root: this.chatElement, rootMargin: '180px 0px' });
-            this.queueCodeScan(0);
+            this.refreshChatBindings();
         } catch (error) {
             console.debug(LOG_PREFIX, '代码延迟高亮不可用', error);
         }
     }
 
     queueHighlight(element, force = false) {
-        if (!this.started || element.dataset.claHighlighted === '1' || !this.originalHighlight) return;
-        if (this.isGenerating?.() || this.highlightPointerId !== null || this.hasActiveChatSelection()) {
-            element.dataset.claHighlightPending = '1';
+        if (!this.started || element.dataset.claHighlighted === '1' || !this.originalHighlight
+            || this.queuedHighlights.has(element)) return;
+        // Streaming can replace these nodes on the next chunk. Rediscover
+        // only the surviving markup once generation has finished.
+        if (this.isGenerating?.()) return;
+        if (this.highlightBlocked()) {
+            this.deferHighlight(element, force);
             return;
         }
-        const messages = [...document.querySelectorAll('#chat .mes')];
-        const recent = messages.slice(-3).includes(element.closest('.mes'));
-        if (isHeavyHtmlCode(element) || (element.textContent?.length || 0) > MAX_HIGHLIGHT_CHARS) {
+        this.deferredHighlights.delete(element);
+        if (this.observedHighlights.has(element) && !force) return;
+        const recent = isRecentCode(element);
+        const text = element.textContent || '';
+        if (text.length > MAX_HIGHLIGHT_CHARS || isHeavyHtmlCodeText({ text })) {
             if (!recent) this.collapseOldCode(element);
             element.dataset.claHighlighted = '1';
             element.dataset.claHeavyHtml = '1';
             element.dataset.highlighted = 'yes';
-            delete element.dataset.claHighlightPending;
-            this.highlightObserver?.unobserve(element);
             return;
         }
         if (!recent) this.collapseOldCode(element);
-        if (!force && !recent && !isVisible(element, this.chatElement)) {
-            element.dataset.claHighlightPending = '1';
-            this.highlightObserver?.observe(element);
+        if (!force && !recent && this.highlightObserver) {
+            this.observedHighlights.add(element);
+            this.highlightObserver.observe(element);
             return;
         }
-        if (this.queuedHighlights.has(element)) return;
-        this.queuedHighlights.add(element);
-        const generation = this.generation;
+        if (this.observedHighlights.delete(element)) this.highlightObserver?.unobserve(element);
+        const queued = this.queuedHighlights;
+        queued.add(element);
+        this.highlightJobs ??= new AbortController();
+        const { signal } = this.highlightJobs;
         void this.scheduler.schedule(async () => {
-            if (!this.started || generation !== this.generation) return;
-            if (!element.isConnected || element.dataset.claHighlighted === '1') return;
-            if (this.isGenerating?.() || this.highlightPointerId !== null || this.hasActiveChatSelection()) {
-                element.dataset.claHighlightPending = '1';
+            if (signal.aborted) return;
+            if (!element.isConnected || !this.chatElement?.contains(element) || element.dataset.claHighlighted === '1') return;
+            if (this.isGenerating?.()) return;
+            if (this.highlightBlocked()) {
+                this.deferHighlight(element, true);
                 return;
             }
             const copyButtons = [...element.querySelectorAll('.code-copy')];
@@ -495,19 +528,18 @@ export class ChatOptimizer {
                 }
             }
             element.dataset.claHighlighted = '1';
-            delete element.dataset.claHighlightPending;
             const pre = element.closest('pre');
             if (pre && !element.querySelector('.code-copy')) {
                 const api = await this.importChatApi();
-                if (!this.started || generation !== this.generation || !element.isConnected || this.isGenerating?.()) return;
+                if (signal.aborted || !this.chatElement?.contains(element) || this.isGenerating?.()) return;
                 // The native helper highlights and adds buttons to every block
                 // it receives. Scope it to this one pre; never remove or replace
                 // sibling copy buttons that may currently have focus/capture.
                 if (!element.querySelector('.code-copy')) api.addCopyToCodeBlocks?.(pre);
             }
-        }, { priority: recent ? 1 : 3 }).catch(error => {
+        }, { priority: recent ? 1 : 3, signal }).catch(error => {
             if (error?.name !== 'AbortError') console.debug(LOG_PREFIX, '延迟高亮失败', error);
-        }).finally(() => this.queuedHighlights.delete(element));
+        }).finally(() => queued.delete(element));
     }
 
     hasActiveChatSelection() {
@@ -520,15 +552,28 @@ export class ChatOptimizer {
         if (!pre || pre.dataset.claCollapsible === '1') return;
         pre.dataset.claCollapsible = '1';
         pre.classList.add('cla-code-collapsed');
-        pre.addEventListener('click', () => {
+        const expand = () => {
+            this.collapseHandlers.delete(pre);
+            if (!this.started || !this.chatElement?.contains(element)) return;
             pre.classList.remove('cla-code-collapsed');
             this.queueHighlight(element, true);
-        }, { once: true });
+        };
+        this.collapseHandlers.set(pre, expand);
+        pre.addEventListener('click', expand, { once: true });
     }
 
     observeCodeBlocks() {
-        if (!this.highlightLibrary || !this.started || this.isGenerating?.()) return;
-        document.querySelectorAll(CODE_SELECTOR).forEach(element => this.queueHighlight(element));
+        if (this.scanAllCode) {
+            this.scanAllCode = false;
+            for (const element of this.chatElement?.querySelectorAll(CODE_SELECTOR) || []) {
+                if (!element.dataset.claHighlighted) this.deferHighlight(element);
+            }
+        }
+        const pending = this.deferredHighlights;
+        this.deferredHighlights = new Map();
+        for (const [element, force] of pending) {
+            if (this.chatElement?.contains(element)) this.queueHighlight(element, force);
+        }
     }
 
     installSwipeGuard() {
@@ -579,7 +624,6 @@ export class ChatOptimizer {
         this.pauseCodeScanning();
         clearTimeout(this.generationEndTimer);
         this.generationEndTimer = null;
-        this.highlightObserver?.disconnect();
         if (this.highlightLibrary) {
             for (const [name, wrapper] of this.highlightWrappers) {
                 if (this.highlightLibrary[name] === wrapper) this.highlightLibrary[name] = this.originalHighlights.get(name);
@@ -589,12 +633,14 @@ export class ChatOptimizer {
         this.originalHighlight = null;
         this.originalHighlights.clear();
         this.highlightWrappers.clear();
-        this.queuedHighlights = new WeakSet();
         this.highlightPointerId = null;
         document.querySelectorAll('[data-cla-collapsible]').forEach(element => {
+            const handler = this.collapseHandlers.get(element);
+            if (handler) element.removeEventListener('click', handler);
             element.classList.remove('cla-code-collapsed');
             delete element.dataset.claCollapsible;
         });
+        this.collapseHandlers = new WeakMap();
         document.querySelectorAll('[data-cla-heavy-html]').forEach(element => {
             delete element.dataset.claHighlighted;
             delete element.dataset.claHeavyHtml;
@@ -620,21 +666,11 @@ export class ChatOptimizer {
         localStorage.removeItem(ORIGINAL_TRUNCATION_KEY);
         this.powerUser = null;
         this.originalTruncation = null;
-        this.heavyHtmlMode = false;
-        this.pendingMetrics = null;
     }
 }
 
 export function isHeavyHtmlCodeText({ text = '' } = {}) {
     if (typeof text !== 'string') return false;
-    const fullDocument = /<!doctype\s+html\b/i.test(text) || /<html\b/i.test(text);
-    const hasPageParts = /<style\b/i.test(text) || /<script\b/i.test(text) || /<head\b/i.test(text);
-    return fullDocument && (hasPageParts || text.length >= 2500);
-}
-
-function isHeavyHtmlCode(element) {
-    if (!(element instanceof Element)) return false;
-    return isHeavyHtmlCodeText({
-        text: element.textContent || '',
-    });
+    return /<(?:!doctype\s+html|html)\b/i.test(text)
+        && (text.length >= 2500 || /<(?:style|script|head)\b/i.test(text));
 }

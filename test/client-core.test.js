@@ -28,7 +28,7 @@ test('keeps every published version source in sync', async () => {
         import('../manifest.json', { with: { type: 'json' } }),
         import('../package.json', { with: { type: 'json' } }),
     ]);
-    assert.equal(CLIENT_VERSION, '2.1.63');
+    assert.equal(CLIENT_VERSION, '2.1.64');
     assert.equal(manifest.version, CLIENT_VERSION);
     assert.equal(packageJson.version, CLIENT_VERSION);
     assert.equal(ACCELERATOR_VERSION, CLIENT_VERSION);
@@ -161,8 +161,10 @@ test('pauses chat scanning during generation and leaves native sortable ownershi
     assert.match(promptToggleSource, /renderDebounced/);
     assert.doesNotMatch(promptToggleSource, /PromptManager\.prototype|\.render\s*=/);
     assert.match(promptToggleSource, /pointerup/);
-    assert.match(regexRefreshSource, /recordsOnlyAffectChat/);
-    assert.match(regexUiSource, /recordsOnlyAffectChat/);
+    for (const source of [regexRefreshSource, regexUiSource]) {
+        assert.match(source, /observe\(regexRoot, \{ childList: true, subtree: true \}\)/);
+        assert.match(source, /observe\(document\.body, \{ childList: true \}\)/);
+    }
     assert.doesNotMatch(styles, /content-visibility|contain-intrinsic-size|cla-drag-ghost/);
     assert.doesNotMatch(styles, /cla-keyboard-overlay|--cla-keyboard-inset|--cla-keyboard-shift/);
     assert.match(styles, /@media \(pointer: coarse\)/);

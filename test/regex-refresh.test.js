@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { RegexRefreshController } from '../modules/regex-refresh.js';
+import { createRegexSnapshot } from '../modules/regex-impact.js';
 
 test('missing rendering API preserves the entire chat without a network reload', async () => {
     const chat = Object.freeze(Array.from({ length: 1000 }, (_, id) => Object.freeze({ mes: `message-${id}` })));
@@ -47,4 +48,41 @@ test('stopping the controller cancels a refresh awaiting the native module', asy
     controller.stop();
     resolveApi({ updateMessageBlock() {} });
     assert.equal((await pending).cancelled, true);
+});
+
+
+test('automatic refresh queries chat once and measures only matched messages', async t => {
+    const originalDocument = globalThis.document;
+    t.after(() => { globalThis.document = originalDocument; });
+    const rect = { top: 0, bottom: 100 };
+    let scans = 0;
+    const element = {
+        getAttribute: () => '1',
+        getBoundingClientRect: () => rect,
+        querySelectorAll: () => [],
+        innerHTML: '<p>needle</p>',
+    };
+    const unrelated = {
+        getAttribute: () => '0',
+        getBoundingClientRect: () => assert.fail('unmatched message must not be measured'),
+        get innerHTML() { assert.fail('unmatched message must not be serialized'); },
+    };
+    globalThis.document = { querySelector: () => ({
+        getBoundingClientRect: () => rect,
+        querySelectorAll: () => { scans++; return [unrelated, element]; },
+    }) };
+    const updated = [];
+    const controller = new RegexRefreshController({
+        chat: [{ mes: 'other' }, { mes: 'needle' }],
+        importChatApi: async () => ({ updateMessageBlock: id => updated.push(id) }),
+        scheduler: { yield: async () => {} },
+    });
+    controller.compileRegex = source => new RegExp(source);
+    const snapshot = scripts => createRegexSnapshot([{ type: 0, scripts }]);
+    const rule = { id: 'r', findRegex: 'needle', replaceString: 'changed', placement: [2], markdownOnly: true };
+
+    const result = await controller.reapply({ automatic: true, before: snapshot([]), after: snapshot([rule]) });
+    assert.equal(result.mode, 'matched');
+    assert.equal(scans, 1);
+    assert.deepEqual(updated, [1]);
 });

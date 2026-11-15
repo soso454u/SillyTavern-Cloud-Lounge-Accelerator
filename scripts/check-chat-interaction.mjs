@@ -84,6 +84,20 @@ try{
         assert.deepEqual(await page.evaluate(()=>({codeScans,popupScans})),{codeScans:0,popupScans:0},'streaming does not trigger plugin code or popup subtree scans');
         await page.evaluate(()=>{generating=false;emit('end');});
         await page.waitForFunction(()=>codeScans>0);
+        await page.evaluate(()=>{
+            const chat=document.querySelector('#chat');
+            const old=document.createElement('div');old.className='mes';
+            old.innerHTML='<pre><code id="offscreen">const old = 1;</code></pre><div style="height:1500px"></div>';
+            chat.prepend(old);
+            window.fullScans=0;const query=chat.querySelectorAll.bind(chat);
+            chat.querySelectorAll=(selector)=>{fullScans++;return query(selector);};
+            chat.scrollTop=chat.scrollHeight;
+        });
+        await page.waitForFunction(()=>optimizer.observedHighlights.has(document.querySelector('#offscreen')));
+        assert.equal(await page.locator('#offscreen').getAttribute('data-cla-highlighted'),null,'old code waits offscreen');
+        await page.evaluate(()=>{document.querySelector('#chat').scrollTop=0;});
+        await page.waitForFunction(()=>document.querySelector('#offscreen').dataset.claHighlighted==='1');
+        assert.equal(await page.evaluate(()=>fullScans),0,'new code and viewport entry need no chat-wide scan');
         await page.evaluate(()=>{window.dialog=document.createElement('dialog');dialog.className='popup';dialog.textContent='Valid editor';document.body.append(dialog);dialog.showModal();});
         await page.waitForTimeout(1050);
         assert.equal(await page.evaluate(()=>dialog.open),true,'a visible editor stays open');

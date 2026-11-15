@@ -145,17 +145,21 @@ export class PresetTokenPreview {
                 const prompt = this.manager.getPromptById(id);
                 const draft = draftId === id && this.field('save')?.dataset.pmPrompt === id && !this.field('prompt')?.disabled;
                 if (prompt ? !canPreview(prompt) : !draft) continue;
-                const cell = this.rowPlaceholder(id);
+                let cell = this.rowPlaceholder(id);
                 if (!draft && !cell) continue;
                 const content = draft ? this.field('prompt')?.value ?? '' : prompt.content ?? '';
                 const role = draft ? this.field('role')?.value || 'system' : prompt.role || 'system';
                 // Macro expansion can execute setvar/custom macros. Count raw
                 // editor text only; never run prompt macros just for a preview.
                 const prepared = { role, content };
-                const key = JSON.stringify([model, prepared.role, prepared.content]);
+                const key = typeof content === 'string'
+                    ? JSON.stringify([model, role]) + content
+                    : JSON.stringify([model, role, content]);
                 let count = this.cache.get(key);
                 if (count === undefined) {
-                    count = prepared.content ? await this.count({ role: prepared.role, content: prepared.content }) : 0;
+                    count = content ? await this.count(prepared) : 0;
+                    // The native list may have been rebuilt while counting.
+                    if (content && valid()) cell = this.rowPlaceholder(id);
                     if (!Number.isFinite(count) || count < 0) throw new Error('token count unavailable');
                     if (valid()) {
                         this.cache.set(key, count);
@@ -163,12 +167,10 @@ export class PresetTokenPreview {
                     }
                 }
                 if (!valid()) break;
-                // Recheck after awaiting tokenization: a native render may
-                // have replaced the row or supplied an authoritative count.
-                const placeholder = this.rowPlaceholder(id);
-                if (placeholder) {
-                    placeholder.setAttribute(RAW_TOKENS, String(count));
-                    this.previewCells.add(placeholder);
+                if (cell) {
+                    const value = String(count);
+                    if (cell.getAttribute(RAW_TOKENS) !== value) cell.setAttribute(RAW_TOKENS, value);
+                    this.previewCells.add(cell);
                 }
                 if (draft) {
                     this.ensureBadge();
@@ -184,7 +186,7 @@ export class PresetTokenPreview {
     }
 
     rowPlaceholder(id) {
-        const row = [...(this.manager.listElement?.children || [])].find(element => element.dataset.pmIdentifier === id);
+        const row = Array.prototype.find.call(this.manager.listElement?.children || [], element => element.dataset.pmIdentifier === id);
         if (!row?.querySelector('.prompt-manager-edit-action')
             || row.classList.contains(`${this.manager.configuration.prefix}prompt_manager_marker`)) return null;
         const cell = row.querySelector(':scope > .prompt_manager_prompt_tokens');
@@ -194,7 +196,7 @@ export class PresetTokenPreview {
     stop() {
         this.started = false; this.generation++; this.revision++;
         this.sent?.stop(); this.sent = null;
-        clearTimeout(this.timer); this.timer = null;
+        clearTimeout(this.timer); this.timer = null; this.queued = false;
         for (const type of ['input', 'change']) this.document?.removeEventListener(type, this.onInput);
         this.document?.removeEventListener('compositionend', this.onComposition);
         for (const { key, previous, wrapped } of this.wrappers.reverse()) if (this.manager[key] === wrapped) this.manager[key] = previous;

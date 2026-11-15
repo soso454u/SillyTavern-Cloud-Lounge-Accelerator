@@ -113,7 +113,12 @@ export class TransferTools {
         document.addEventListener('click', this.onClick);
         document.addEventListener('keydown', this.onKey);
         this.observer = new MutationObserver(records => {
-            if (records.some(record => [...record.addedNodes].some(item => item.matches?.('#extensionsMenu') || item.querySelector?.('#extensionsMenu')))) this.mount();
+            const menuAdded = records.some(record => {
+                if (!record.addedNodes.length || record.target.closest?.('#chat')) return false;
+                return Array.from(record.addedNodes).some(node =>
+                    node.matches?.('#extensionsMenu') || node.querySelector?.('#extensionsMenu'));
+            });
+            if (menuAdded) this.mount();
         });
         this.observer.observe(document.body, { childList: true, subtree: true });
         this.mount();
