@@ -47,7 +47,6 @@ function fixture(t, { text = 'const a = 1;', copy = true } = {}) {
     };
     globalThis.document = {querySelector: () => optimizer.chatElement, getSelection: () => selection};
     t.after(() => {
-        clearTimeout(optimizer.codeScanTimer);
         for (const [key,value] of Object.entries(previous)) {
             if (value === undefined) delete globalThis[key]; else globalThis[key] = value;
         }
@@ -91,12 +90,12 @@ test('selection, held pointer and generation defer code mutation even if a task 
     assert.equal(f.buttons[0],f.button);
 });
 
-test('oversized code stays intact as plain text without expensive syntax parsing', t => {
+test('oversized code stays intact as plain text without expensive syntax parsing', async t => {
     const text = 'a'.repeat(20001);
     const f = fixture(t,{text});
     f.optimizer.queueHighlight(f.code);
+    await f.jobs[0]();
     assert.equal(f.highlights,0);
-    assert.equal(f.jobs.length,0);
     assert.equal(f.code.textContent,text);
     assert.equal(f.buttons[0],f.button);
 });
@@ -110,9 +109,10 @@ test('queued work cannot highlight or rebuild copy controls after stop/restart',
     assert.deepEqual(f.copyScopes,[]);
 });
 
-test('generation disconnects chat mutations and unlock resumes observation with a delayed scan', t => {
+test('generation disconnects chat mutations and unlock resumes observation with a scheduled scan', t => {
     const f = fixture(t);
     let disconnected=0,observed=0;
+    f.optimizer.codeObservationStarted = true;
     f.optimizer.domObserver = {disconnect(){disconnected++;},observe(){observed++;}};
     f.generating=true;
     f.optimizer.pauseCodeScanning();
@@ -121,5 +121,22 @@ test('generation disconnects chat mutations and unlock resumes observation with 
     f.generating=false;
     f.optimizer.refreshAfterGeneration();
     assert.equal(observed,1);
-    assert.notEqual(f.optimizer.codeScanTimer,null);
+    assert.equal(f.jobs.length,1);
+});
+
+test('old offscreen code is observed without reading its contents', t => {
+    const f = fixture(t);
+    const original = globalThis.IntersectionObserver;
+    let observed;
+    globalThis.IntersectionObserver = class {
+        observe(element) { observed = element; }
+    };
+    t.after(() => { globalThis.IntersectionObserver = original; });
+    const message = { matches: () => true, nextElementSibling: null };
+    const first = { nextElementSibling: { ...message, nextElementSibling: { ...message, nextElementSibling: message } } };
+    f.code.closest = selector => selector === '.mes' ? first : null;
+    Object.defineProperty(f.code, 'textContent', { get: () => assert.fail('offscreen code was read') });
+    f.optimizer.queueHighlight(f.code);
+    assert.equal(observed, f.code);
+    assert.equal(f.jobs.length, 0);
 });

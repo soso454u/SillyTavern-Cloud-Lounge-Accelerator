@@ -155,6 +155,7 @@ async function startEnabledModules({ skipCache = false, forceCache = false } = {
         await afterFrame(() => loadDeferredRuntime(current));
         if (!isCurrent()) return;
         await afterFrame(() => {
+            if (settings.chatOptimization) current.chatOptimizer.startCodeObservation();
             if (settings.interactionOptimization) return current.interactionOptimizer.start();
         });
         if (!isCurrent()) return;
@@ -230,6 +231,7 @@ async function changeChatOptimization(enabled, current) {
     await chatStart;
     legacyTruncation = null;
     if (!appReady) return;
+    current.chatOptimizer.startCodeObservation();
     current.streamingRender.start();
     await current.regexRefresh.start();
 }

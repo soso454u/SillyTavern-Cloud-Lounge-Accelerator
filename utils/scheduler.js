@@ -1,4 +1,5 @@
 const PRIORITY_COUNT = 5;
+const BACKGROUND_PRIORITY = 2;
 const DEFAULT_FRAME_MS = 1000 / 60;
 
 export class FrameScheduler {
@@ -17,10 +18,11 @@ export class FrameScheduler {
 
     schedule(callback, { priority = 2, signal = null } = {}) {
         if (this.destroyed) return Promise.reject(new DOMException('调度器已关闭', 'AbortError'));
-        const queueIndex = Math.min(PRIORITY_COUNT - 1, Math.max(0, Number(priority) || 0));
+        if (signal?.aborted) return Promise.reject(signal.reason);
+        const queueIndex = Math.min(PRIORITY_COUNT - 1, Math.max(0, Math.trunc(Number(priority)) || 0));
         const generation = this.generation;
         return new Promise((resolve, reject) => {
-            this.queues[queueIndex].push({ callback, resolve, reject, signal, generation });
+            this.queues[queueIndex].push({ callback, resolve, reject, signal, generation, priority: queueIndex });
             this.#requestFrame();
         });
     }
@@ -62,8 +64,12 @@ export class FrameScheduler {
         }
     }
 
-    #nextTask() {
-        for (const queue of this.queues) if (queue.length) return queue.shift();
+    #nextTask(allowBackground) {
+        const limit = allowBackground ? PRIORITY_COUNT : BACKGROUND_PRIORITY;
+        for (let index = 0; index < limit; index++) {
+            const queue = this.queues[index];
+            if (queue.length) return queue.shift();
+        }
         return null;
     }
 
@@ -80,10 +86,11 @@ export class FrameScheduler {
         const delayed = startedAt - requestedAt > this.frameInterval * 1.5;
         const budget = Math.min(this.budgetMs, this.frameInterval * (delayed ? 0.25 : 0.55));
         const deadline = startedAt + Math.max(2, budget);
+        const backgroundDeadline = startedAt + Math.max(2, budget * 0.55);
         this.flushing = true;
         try {
-            while (performance.now() < deadline) {
-                const task = this.#nextTask();
+            for (let now = performance.now(); now < deadline; now = performance.now()) {
+                const task = this.#nextTask(now < backgroundDeadline);
                 if (!task) break;
                 if (task.generation !== this.generation || task.signal?.aborted) {
                     task.reject(task.signal?.reason || new DOMException('任务已取消', 'AbortError'));
@@ -91,7 +98,8 @@ export class FrameScheduler {
                 }
                 try {
                     // Callbacks can check the same deadline between small units of work.
-                    Promise.resolve(task.callback(deadline)).then(task.resolve, error => {
+                    const taskDeadline = task.priority < BACKGROUND_PRIORITY ? deadline : backgroundDeadline;
+                    Promise.resolve(task.callback(taskDeadline)).then(task.resolve, error => {
                         task.reject(error);
                         this.onError?.(error);
                     });

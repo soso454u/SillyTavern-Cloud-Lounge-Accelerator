@@ -36,6 +36,7 @@ async function fixture(t, previous) {
             const {state} = globalThis.__claStartup;
             export class ChatOptimizer {
                 async start() { state.chatStarts++; await state.chatGate; }
+                startCodeObservation() { state.codeObservationStarts = (state.codeObservationStarts || 0) + 1; }
                 stop() {}
             }
         `),
@@ -103,14 +104,17 @@ test('activation avoids settings uploads and waits for a scheduled frame after A
     assert.equal(state.deferredLoads, 0);
     assert.equal(state.interactionStarts, 0);
     assert.equal(state.batchStarts, 0);
+    assert.equal(state.codeObservationStarts, undefined);
     assert.equal(state.saves, 0);
     let allowFrame;
     state.frameGate = new Promise(resolve => { allowFrame = resolve; });
     events.emit('ready');
     await tick();
     assert.equal(state.deferredLoads, 0);
+    assert.equal(state.codeObservationStarts, undefined);
     allowFrame();
     await tick();
+    assert.equal(state.codeObservationStarts, 1);
     assert.equal(state.deferredLoads, 1);
     assert.equal(state.cacheStarts, 1);
     assert.equal(state.panels, 1);

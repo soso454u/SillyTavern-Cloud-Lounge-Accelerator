@@ -72,10 +72,11 @@ test('automatic refresh queries chat once and measures only matched messages', a
         querySelectorAll: () => { scans++; return [unrelated, element]; },
     }) };
     const updated = [];
+    let scheduled = 0;
     const controller = new RegexRefreshController({
         chat: [{ mes: 'other' }, { mes: 'needle' }],
         importChatApi: async () => ({ updateMessageBlock: id => updated.push(id) }),
-        scheduler: { schedule: callback => callback(Infinity) },
+        scheduler: { schedule: callback => { scheduled++; return callback(0); } },
     });
     controller.compileRegex = source => new RegExp(source);
     const snapshot = scripts => createRegexSnapshot([{ type: 0, scripts }]);
@@ -84,5 +85,6 @@ test('automatic refresh queries chat once and measures only matched messages', a
     const result = await controller.reapply({ automatic: true, before: snapshot([]), after: snapshot([rule]) });
     assert.equal(result.mode, 'matched');
     assert.equal(scans, 1);
+    assert.equal(scheduled, 3, 'two matching slices followed by one render slice');
     assert.deepEqual(updated, [1]);
 });

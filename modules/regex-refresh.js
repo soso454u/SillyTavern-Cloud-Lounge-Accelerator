@@ -1,5 +1,5 @@
 import { getAdaptiveBatchSize, prioritizeMessageDescriptors } from '../client-core.js';
-import { createRegexSnapshot, diffRegexSnapshots, planRegexRefresh } from './regex-impact.js';
+import { createRegexSnapshot, diffRegexSnapshots, prepareRegexRefresh } from './regex-impact.js';
 
 const CONTROL_SELECTOR = [
     '.regex_editor',
@@ -141,6 +141,7 @@ export class RegexRefreshController {
         this.dirty = true;
         clearTimeout(this.flushTimer);
         this.flushTimer = setTimeout(() => {
+            if (this.refreshing) return;
             if (!this.started || this.isGenerating() || document.querySelector('.regex_editor')) {
                 this.markDirty();
                 return;
@@ -171,14 +172,6 @@ export class RegexRefreshController {
         return prioritizeMessageDescriptors(messages.map(descriptor => {
             const rect = descriptor.element.getBoundingClientRect();
             return { ...descriptor, visible: rect.bottom >= rootRect.top && rect.top <= rootRect.bottom };
-        }));
-    }
-
-    getMessageSources(messages) {
-        return messages.map(({ messageId }) => ({
-            id: messageId,
-            text: String(this.chat[messageId]?.mes || ''),
-            placement: this.chat[messageId]?.is_user ? 1 : 2,
         }));
     }
 
@@ -217,22 +210,35 @@ export class RegexRefreshController {
             }
             let displayed;
             if (automatic) {
-                displayed = this.getDisplayedMessages();
-                if (!displayed.messages.length) return { completed: 0, failed: 0, elapsedMs: 0, mode: 'none' };
-                plan = planRegexRefresh({
+                const { matches, ...prepared } = prepareRegexRefresh({
                     before,
                     after,
-                    messages: this.getMessageSources(displayed.messages),
                     compileRegex: this.compileRegex,
                 });
+                plan = prepared;
+                if (matches) {
+                    displayed = this.getDisplayedMessages();
+                    const targets = [];
+                    for (let cursor = 0; cursor < displayed.messages.length;) {
+                        await this.scheduler.schedule(deadline => {
+                            while (isCurrent() && cursor < displayed.messages.length) {
+                                const descriptor = displayed.messages[cursor++];
+                                const message = this.chat[descriptor.messageId];
+                                if (message && matches(message.is_user ? 1 : 2, String(message.mes || ''))) {
+                                    targets.push(descriptor);
+                                    plan.targetIds.push(descriptor.messageId);
+                                }
+                                if (performance.now() >= deadline) break;
+                            }
+                        }, { priority: 2, signal: job.signal });
+                        if (!isCurrent()) return { cancelled: true, completed, failed };
+                    }
+                    displayed.messages = targets;
+                }
                 if (plan.mode === 'none' || (plan.mode === 'matched' && !plan.targetIds.length)) {
                     this.onStatus?.('chat', '自动');
                     return { completed: 0, failed: 0, elapsedMs: performance.now() - startedAt, ...plan };
                 }
-            }
-            if (plan.mode === 'matched') {
-                const targets = new Set(plan.targetIds);
-                displayed.messages = displayed.messages.filter(({ messageId }) => targets.has(messageId));
             }
             const descriptors = this.getDescriptors(displayed);
             if (!descriptors.length) return { completed: 0, failed: 0, elapsedMs: 0, mode: 'none' };
@@ -246,7 +252,9 @@ export class RegexRefreshController {
                     const updateEvents = [];
                     batch = getAdaptiveBatchSize({ previousFrameMs, currentBatch: batch });
                     for (let count = 0; cursor < descriptors.length && count < batch && isCurrent(); count++) {
-                        const { messageId } = descriptors[cursor++];
+                        const { messageId, visible, recent } = descriptors[cursor];
+                        if (visible !== lead.visible || (!visible && recent !== lead.recent)) break;
+                        cursor += 1;
                         if (!this.chat[messageId]) continue;
                         try {
                             api.updateMessageBlock(messageId, this.chat[messageId], { rerenderMessage: true });
@@ -265,8 +273,8 @@ export class RegexRefreshController {
                         completed += 1;
                         if (performance.now() >= deadline) break;
                     }
-                    previousFrameMs = performance.now() - frameStart;
                     const eventResults = await Promise.allSettled(updateEvents.map(item => item.promise));
+                    previousFrameMs = performance.now() - frameStart;
                     eventResults.forEach((result, index) => {
                         if (result.status === 'fulfilled') return;
                         failed += 1;

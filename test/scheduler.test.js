@@ -50,6 +50,24 @@ test('a delayed animation frame leaves remaining background work for the next fr
     assert.deepEqual(order, ['chat', 'background']);
 });
 
+test('background work waits when foreground work has used its share of the frame', async t => {
+    let now = 0;
+    t.mock.method(performance, 'now', () => now);
+    const callbacks = [];
+    globalThis.requestAnimationFrame = callback => callbacks.push(callback);
+    globalThis.cancelAnimationFrame = () => {};
+    const scheduler = new FrameScheduler();
+    t.after(() => scheduler.destroy());
+    const foreground = scheduler.schedule(deadline => { now = deadline - 1; }, { priority: 1 });
+    const background = scheduler.schedule(deadline => deadline - now, { priority: 3 });
+    callbacks.shift()(0);
+    await foreground;
+    assert.equal(scheduler.pendingCount, 1);
+    now = 16;
+    callbacks.shift()(16);
+    assert.ok(await background < 6);
+});
+
 test('calculates a single DOM insertion point from item midpoints', () => {
     const rects = [
         { top: 0, height: 40 },

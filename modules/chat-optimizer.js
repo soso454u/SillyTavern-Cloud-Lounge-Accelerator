@@ -19,11 +19,15 @@ function isRecentCode(element) {
     return true;
 }
 
-export function hasRenderedChatTail(chatElement, expectedLastId) {
-    if (!chatElement || !Number.isInteger(expectedLastId) || expectedLastId < 0) return false;
+function getRenderedChatTail(chatElement, expectedLastId) {
+    if (!chatElement || !Number.isInteger(expectedLastId) || expectedLastId < 0) return null;
     let lastMessage = chatElement.lastElementChild;
     while (lastMessage && !lastMessage.matches('.mes[mesid]')) lastMessage = lastMessage.previousElementSibling;
-    return Number(lastMessage?.getAttribute?.('mesid')) === expectedLastId;
+    return Number(lastMessage?.getAttribute?.('mesid')) === expectedLastId ? lastMessage : null;
+}
+
+export function hasRenderedChatTail(chatElement, expectedLastId) {
+    return Boolean(getRenderedChatTail(chatElement, expectedLastId));
 }
 
 export class ChatOptimizer {
@@ -64,12 +68,13 @@ export class ChatOptimizer {
         this.queuedHighlights = new WeakSet();
         this.highlightJobs = null;
         this.deferredHighlights = new Map();
+        this.addedCodeRoots = new Set();
         this.observedHighlights = new Set();
         this.collapseHandlers = new WeakMap();
         this.scanAllCode = false;
+        this.codeObservationStarted = false;
         this.highlightPointerId = null;
         this.highlightObserver = null;
-        this.codeScanTimer = null;
         this.codeScanJob = null;
         this.generationEndTimer = null;
         this.touchState = null;
@@ -112,14 +117,19 @@ export class ChatOptimizer {
         if (!this.started || generation !== this.generation) return;
         this.bind(this.eventTypes.CHAT_CHANGED, () => this.handleChatChanged());
         this.bind(this.eventTypes.MORE_MESSAGES_LOADED, () => this.handleMoreMessagesLoaded());
+        this.refreshChatBindings();
+        this.installHistoryAnchorGuard();
+        this.installSwipeGuard();
+        await this.installHighlighter(generation);
+    }
+
+    startCodeObservation() {
+        if (!this.started || this.codeObservationStarted) return;
+        this.codeObservationStarted = true;
         this.bind(this.eventTypes.GENERATION_STARTED, () => this.pauseCodeScanning());
         this.bind(this.eventTypes.GENERATION_STOPPED, () => this.refreshAfterGeneration());
         this.bind(this.eventTypes.GENERATION_ENDED, () => this.refreshAfterGeneration());
-        this.refreshChatBindings();
-        await this.installHighlighter(generation);
-        if (!this.started || generation !== this.generation) return;
-        this.installHistoryAnchorGuard();
-        this.installSwipeGuard();
+        this.refreshChatBindings(true);
         this.onStatus?.('chat', '自动');
     }
 
@@ -135,26 +145,17 @@ export class ChatOptimizer {
         return this.chatPageSize;
     }
 
-    refreshChatBindings() {
+    refreshChatBindings(rescan = false) {
         const chatElement = document.querySelector('#chat');
         if (this.chatElement !== chatElement) {
             this.pauseCodeScanning();
             this.chatElement = chatElement;
+            rescan = true;
         }
-        if (!this.chatElement || !this.started || !this.originalHighlight) return;
+        if (!rescan || !this.chatElement || !this.codeObservationStarted || !this.originalHighlight) return;
         this.domObserver ??= new MutationObserver(records => this.collectAddedCode(records));
-        if (!this.highlightObserver && typeof IntersectionObserver === 'function') {
-            this.highlightObserver = new IntersectionObserver((entries, observer) => {
-                if (this.highlightObserver !== observer) return;
-                for (const { target, isIntersecting } of entries) {
-                    if (!isIntersecting || !this.observedHighlights.delete(target)) continue;
-                    observer.unobserve(target);
-                    if (this.chatElement?.contains(target)) this.queueHighlight(target, true);
-                }
-            }, { root: this.chatElement, rootMargin: '180px 0px' });
-        }
         this.resumeCodeObservation();
-        this.queueCodeScan(0, true);
+        this.queueCodeScan(true);
     }
 
     collectAddedCode(records) {
@@ -163,11 +164,9 @@ export class ChatOptimizer {
         for (const { target, addedNodes, removedNodes } of records) {
             // Native copy icons and the highlighter's spans are inside code.
             if (target.closest?.('code')) continue;
-            for (const node of addedNodes) {
-                if (node.nodeType !== 1) continue;
-                if (node.matches(CODE_SELECTOR) && !node.dataset.claHighlighted) this.deferHighlight(node);
-                for (const code of node.querySelectorAll(CODE_SELECTOR)) {
-                    if (!code.dataset.claHighlighted) this.deferHighlight(code);
+            if (!this.scanAllCode && !this.addedCodeRoots.has(target)) {
+                for (const node of addedNodes) {
+                    if (node.nodeType === 1) this.addedCodeRoots.add(node);
                 }
             }
             removedElements ||= removedNodes.length > 0;
@@ -182,7 +181,7 @@ export class ChatOptimizer {
                 if (!this.chatElement?.contains(element)) this.deferredHighlights.delete(element);
             }
         }
-        if (this.deferredHighlights.size && !this.highlightBlocked()) this.queueCodeScan();
+        this.queueCodeScan();
     }
 
     pauseCodeScanning() {
@@ -194,9 +193,8 @@ export class ChatOptimizer {
         this.highlightObserver = null;
         this.observedHighlights.clear();
         this.deferredHighlights.clear();
+        this.addedCodeRoots.clear();
         this.scanAllCode = false;
-        clearTimeout(this.codeScanTimer);
-        this.codeScanTimer = null;
         this.codeScanJob?.abort();
         this.codeScanJob = null;
     }
@@ -215,25 +213,23 @@ export class ChatOptimizer {
         return this.highlightPointerId !== null || this.hasActiveChatSelection();
     }
 
-    queueCodeScan(delay = 180, scanAll = false) {
-        if (!this.started || this.isGenerating?.()) return;
+    queueCodeScan(scanAll = false) {
+        if (!this.codeObservationStarted || this.isGenerating?.()) return;
         this.scanAllCode ||= scanAll;
-        if (!this.scanAllCode && !this.deferredHighlights.size) return;
-        if (this.codeScanTimer !== null || this.codeScanJob) return;
-        this.codeScanTimer = setTimeout(() => {
-            this.codeScanTimer = null;
-            const job = this.codeScanJob = new AbortController();
-            void this.scheduler.schedule(deadline => {
-                if (!this.started || this.isGenerating?.() || this.highlightBlocked()) return;
-                this.observeCodeBlocks(deadline);
-            }, { priority: 3, signal: job.signal }).catch(error => {
-                if (error?.name !== 'AbortError') console.debug(LOG_PREFIX, '代码块扫描失败', error);
-            }).finally(() => {
-                if (this.codeScanJob !== job) return;
-                this.codeScanJob = null;
-                if (!this.highlightBlocked()) this.queueCodeScan(0);
-            });
-        }, delay);
+        if (this.codeScanJob) return;
+        if (!this.scanAllCode && !this.deferredHighlights.size && !this.addedCodeRoots.size) return;
+        if (this.highlightBlocked()) return;
+        const job = this.codeScanJob = new AbortController();
+        void this.scheduler.schedule(deadline => {
+            if (this.isGenerating?.() || this.highlightBlocked()) return;
+            this.observeCodeBlocks(deadline);
+        }, { priority: 3, signal: job.signal }).catch(error => {
+            if (error?.name !== 'AbortError') console.debug(LOG_PREFIX, '代码块扫描失败', error);
+        }).finally(() => {
+            if (this.codeScanJob !== job) return;
+            this.codeScanJob = null;
+            this.queueCodeScan();
+        });
     }
 
     refreshAfterGeneration() {
@@ -245,7 +241,7 @@ export class ChatOptimizer {
                 this.generationEndTimer = setTimeout(waitForUnlock, 80);
                 return;
             }
-            this.refreshChatBindings();
+            this.refreshChatBindings(true);
         };
         waitForUnlock();
     }
@@ -300,9 +296,7 @@ export class ChatOptimizer {
             this.highlightPointerId = null;
             this.queueCodeScan();
         };
-        this.onCodeSelectionChange = () => {
-            if (!this.hasActiveChatSelection()) this.queueCodeScan();
-        };
+        this.onCodeSelectionChange = () => this.queueCodeScan();
         this.onCodeVisibilityChange = () => {
             this.highlightPointerId = null;
             if (!document.hidden) this.queueCodeScan();
@@ -412,10 +406,15 @@ export class ChatOptimizer {
             }, delay);
             this.bottomSettleTimers.add(timer);
         };
+        let swipeTail = null;
         const snapToBottom = () => {
             if (!this.started || this.chatElement !== chatElement) return;
-            if (!hasRenderedChatTail(chatElement, expectedLastId)) return;
-            this.refreshSwipeButtons?.(true, false);
+            const tail = getRenderedChatTail(chatElement, expectedLastId);
+            if (!tail) return;
+            if (swipeTail !== tail) {
+                this.refreshSwipeButtons?.(true, false);
+                swipeTail = tail;
+            }
             // Keep the settling frame fully owned here so a queued native rAF cannot
             // fire after MORE_MESSAGES_LOADED has cancelled the initial auto-scroll.
             this.scrollToBottom?.({ waitForFrame: false });
@@ -445,7 +444,11 @@ export class ChatOptimizer {
                     if (!(element instanceof Element) || !element.closest('#chat') || !this.started) {
                         return original.call(hljs, element);
                     }
-                    this.queueHighlight(element);
+                    if (!this.isGenerating?.() && !element.dataset.claHighlighted
+                        && !this.queuedHighlights.has(element) && !this.observedHighlights.has(element)) {
+                        this.deferHighlight(element);
+                        this.queueCodeScan();
+                    }
                     return undefined;
                 };
                 this.originalHighlights.set(name, original);
@@ -477,7 +480,6 @@ export class ChatOptimizer {
                 this.highlightWrappers.set('highlightAll', wrapper);
                 hljs.highlightAll = wrapper;
             }
-            this.refreshChatBindings();
         } catch (error) {
             console.debug(LOG_PREFIX, '代码延迟高亮不可用', error);
         }
@@ -496,16 +498,16 @@ export class ChatOptimizer {
         this.deferredHighlights.delete(element);
         if (this.observedHighlights.has(element) && !force) return;
         const recent = isRecentCode(element);
-        const text = element.textContent || '';
-        if (text.length > MAX_HIGHLIGHT_CHARS || isHeavyHtmlCodeText({ text })) {
-            if (!recent) this.collapseOldCode(element);
-            element.dataset.claHighlighted = '1';
-            element.dataset.claHeavyHtml = '1';
-            element.dataset.highlighted = 'yes';
-            return;
-        }
         if (!recent) this.collapseOldCode(element);
-        if (!force && !recent && this.highlightObserver) {
+        if (!force && !recent && typeof IntersectionObserver === 'function') {
+            this.highlightObserver ??= new IntersectionObserver((entries, observer) => {
+                if (this.highlightObserver !== observer) return;
+                for (const { target, isIntersecting } of entries) {
+                    if (!isIntersecting || !this.observedHighlights.delete(target)) continue;
+                    observer.unobserve(target);
+                    if (this.chatElement?.contains(target)) this.queueHighlight(target, true);
+                }
+            }, { root: this.chatElement, rootMargin: '180px 0px' });
             this.observedHighlights.add(element);
             this.highlightObserver.observe(element);
             return;
@@ -523,14 +525,23 @@ export class ChatOptimizer {
                 this.deferHighlight(element, true);
                 return;
             }
-            const copyButtons = [...element.querySelectorAll('.code-copy')];
-            try {
-                if (!element.hasAttribute('data-highlighted')) this.originalHighlight.call(this.highlightLibrary, element);
-            } finally {
-                // highlight.js replaces innerHTML. Restore the same native
-                // button nodes and handlers instead of recreating them.
-                for (const button of copyButtons) {
-                    if (!element.contains(button)) element.appendChild(button);
+            if (!element.hasAttribute('data-highlighted')) {
+                const text = element.textContent || '';
+                if (text.length > MAX_HIGHLIGHT_CHARS || isHeavyHtmlCodeText({ text })) {
+                    element.dataset.claHighlighted = '1';
+                    element.dataset.claHeavyHtml = '1';
+                    element.dataset.highlighted = 'yes';
+                    return;
+                }
+                const copyButtons = element.querySelectorAll('.code-copy');
+                try {
+                    this.originalHighlight.call(this.highlightLibrary, element);
+                } finally {
+                    // highlight.js replaces innerHTML. Restore the same native
+                    // button nodes and handlers instead of recreating them.
+                    for (const button of copyButtons) {
+                        if (!element.contains(button)) element.appendChild(button);
+                    }
                 }
             }
             element.dataset.claHighlighted = '1';
@@ -543,7 +554,7 @@ export class ChatOptimizer {
                 // sibling copy buttons that may currently have focus/capture.
                 if (!element.querySelector('.code-copy')) api.addCopyToCodeBlocks?.(pre);
             }
-        }, { priority: recent ? 1 : 3, signal }).catch(error => {
+        }, { priority: force || recent ? 1 : 3, signal }).catch(error => {
             if (error?.name !== 'AbortError') console.debug(LOG_PREFIX, '延迟高亮失败', error);
         }).finally(() => queued.delete(element));
     }
@@ -571,14 +582,24 @@ export class ChatOptimizer {
     observeCodeBlocks(deadline) {
         if (this.scanAllCode) {
             this.scanAllCode = false;
-            for (const element of this.chatElement?.querySelectorAll(CODE_SELECTOR) || []) {
-                if (!element.dataset.claHighlighted) this.deferHighlight(element);
+            this.addedCodeRoots.clear();
+            for (let node = this.chatElement?.lastElementChild; node; node = node.previousElementSibling) {
+                this.addedCodeRoots.add(node);
             }
         }
         for (const [element, force] of this.deferredHighlights) {
+            if (performance.now() >= deadline) return;
             this.deferredHighlights.delete(element);
             if (this.chatElement?.contains(element)) this.queueHighlight(element, force);
+        }
+        for (const node of this.addedCodeRoots) {
             if (performance.now() >= deadline) break;
+            this.addedCodeRoots.delete(node);
+            if (!this.chatElement?.contains(node)) continue;
+            if (node.matches(CODE_SELECTOR) && !node.dataset.claHighlighted) this.deferHighlight(node);
+            for (const code of node.querySelectorAll(CODE_SELECTOR)) {
+                if (!code.dataset.claHighlighted) this.deferHighlight(code);
+            }
         }
     }
 
@@ -618,6 +639,7 @@ export class ChatOptimizer {
     async stop() {
         if (!this.started) return;
         this.started = false;
+        this.codeObservationStarted = false;
         this.generation += 1;
         this.cancelInitialBottom();
         this.cancelHistoryAnchor();

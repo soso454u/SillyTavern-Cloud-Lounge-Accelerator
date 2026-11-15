@@ -139,23 +139,15 @@ export function extractRegexAnchor(source) {
 }
 
 function compileMatcher(script, compileRegex) {
-    if (!script?.findRegex || Number(script.substituteRegex) !== 0) return { unsafe: true };
-    const anchor = extractRegexAnchor(script.findRegex);
-    if (!anchor) return { unsafe: true };
     try {
         const regex = compileRegex(script.findRegex);
-        if (!(regex instanceof RegExp)) return { unsafe: true };
+        if (!(regex instanceof RegExp)) return null;
         regex.lastIndex = 0;
-        if (regex.test('')) return { unsafe: true };
+        if (regex.test('')) return null;
         regex.lastIndex = 0;
-        return {
-            unsafe: false,
-            anchor,
-            regex,
-            placements: new Set(script.placement.map(Number).filter(value => DISPLAY_PLACEMENTS.has(value))),
-        };
+        return regex;
     } catch {
-        return { unsafe: true };
+        return null;
     }
 }
 
@@ -165,10 +157,14 @@ function scriptChangedOnlyIn(change, allowedFields) {
 }
 
 function appendMatcher(matchers, script, compileRegex) {
-    const matcher = compileMatcher(script, compileRegex);
-    if (matcher.unsafe) return false;
-    const key = `${script.findRegex}\u0000${[...matcher.placements].join(',')}`;
-    if (!matchers.has(key)) matchers.set(key, matcher);
+    if (!script.findRegex || Number(script.substituteRegex) !== 0) return false;
+    const placements = new Set(script.placement.filter(value => DISPLAY_PLACEMENTS.has(value)));
+    const key = `${script.findRegex}\u0000${[...placements].join(',')}`;
+    if (matchers.has(key)) return true;
+    if (!extractRegexAnchor(script.findRegex)) return false;
+    const regex = compileMatcher(script, compileRegex);
+    if (!regex) return false;
+    matchers.set(key, { regex, placements });
     return true;
 }
 
@@ -188,7 +184,7 @@ function addProducerMatchers(matchers, script, snapshot, compileRegex) {
     return true;
 }
 
-export function planRegexRefresh({ before, after, messages = [], compileRegex }) {
+export function prepareRegexRefresh({ before, after, compileRegex }) {
     const difference = diffRegexSnapshots(before, after);
     if (difference.reordered || difference.scopeChanged || difference.moved || difference.changes.length > 8) {
         return { mode: 'all', targetIds: [], reason: 'structural-change', difference };
@@ -212,18 +208,25 @@ export function planRegexRefresh({ before, after, messages = [], compileRegex })
     }
 
     if (!matchers.size) return { mode: 'none', targetIds: [], reason: 'non-visual', difference };
-    const targetIds = [];
-    for (const message of Array.isArray(messages) ? messages : []) {
-        const placement = Number(message?.placement);
-        const text = String(message?.text || '');
-        const affected = [...matchers.values()].some(matcher => {
-            if (!matcher.placements.has(placement)) return false;
+    const matches = (placement, text) => {
+        for (const matcher of matchers.values()) {
+            if (!matcher.placements.has(placement)) continue;
             matcher.regex.lastIndex = 0;
             const matched = matcher.regex.test(text);
             matcher.regex.lastIndex = 0;
-            return matched;
-        });
-        if (affected) targetIds.push(Number(message.id));
+            if (matched) return true;
+        }
+        return false;
+    };
+    return { mode: 'matched', targetIds: [], reason: 'matched-source', difference, matches };
+}
+
+export function planRegexRefresh({ messages = [], ...options }) {
+    const { matches, ...plan } = prepareRegexRefresh(options);
+    if (!matches) return plan;
+    for (const message of Array.isArray(messages) ? messages : []) {
+        const id = Number(message?.id);
+        if (Number.isInteger(id) && matches(Number(message?.placement), String(message?.text || ''))) plan.targetIds.push(id);
     }
-    return { mode: 'matched', targetIds: targetIds.filter(Number.isInteger), reason: 'matched-source', difference };
+    return plan;
 }
