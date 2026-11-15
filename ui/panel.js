@@ -216,7 +216,7 @@ export class SettingsPanel {
         miniPage.className = 'cla-page'; miniPage.dataset.claPage = 'mini-features';
         for (const [key, title, description] of [
             ['regexCollections', '正则分类与多选', '直接在合集里勾选、按住名称划选和拖动归组'],
-            ['transferTools', '世界书 / 正则转移', '魔法棒双栏工具，支持跨角色、跨预设复制与移动'],
+            ['transferTools', '世界书 / 正则 / 预设转移', '双栏复制与移动，可连续阅读世界书和已启用的预设条目'],
             ['presetEntryActions', '预设条目操作', '行内新建、复制、移出和删除条目'],
             ['presetTokenPreview', '预设实时 token', '编辑条目时即时统计原文 token'],
             ['secretKeyBatch', '密钥批量删除', '在密钥管理弹窗里多选删除'],

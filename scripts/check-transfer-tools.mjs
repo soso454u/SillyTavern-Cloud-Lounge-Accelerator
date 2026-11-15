@@ -24,15 +24,17 @@ function splitKeywordsAndRegexes(input) {
 assets.set('/world-info.js', assets.get('/world-info.js') + '\nexport ' + splitKeywordsAndRegexes.toString());
 assets.set('/preset-manager.js',`
 const settings={extensions:{other:'keep',regex_scripts:[]}};
-const presets={P1:{temperature:0.8,prompts:[{content:'preserve'}],extensions:{other:'A',regex_scripts:[{id:'p1',scriptName:'预设规则',findRegex:'/P/g',replaceString:'PP',placement:[1,2],disabled:true,unknown:42}]}},P2:{temperature:0.2,prompts:[{content:'target'}],extensions:{other:'B',regex_scripts:[]}}};
+const presets={P1:{temperature:0.8,prompts:[{identifier:'custom-on',name:'已开启提示词',content:'preserve',role:'system',injection_depth:4},{identifier:'custom-off',name:'未开启提示词',content:'disabled text'},{identifier:'chatHistory',name:'过往信息',marker:true}],prompt_order:[{character_id:100001,order:[{identifier:'custom-on',enabled:true},{identifier:'custom-off',enabled:false},{identifier:'chatHistory',enabled:true}]}],extensions:{other:'A',regex_scripts:[{id:'p1',scriptName:'预设规则',findRegex:'/P/g',replaceString:'PP',placement:[1,2],disabled:true,unknown:42}]}},P2:{temperature:0.2,prompts:[{identifier:'target-prompt',content:'target'}],prompt_order:[{character_id:100001,order:[{identifier:'target-prompt',enabled:true}]}],extensions:{other:'B',regex_scripts:[]}}};
 export const manager={getAllPresets:()=>Object.keys(presets),getCompletionPresetByName:name=>presets[name],getSelectedPresetName:()=> 'P0',getPresetList:()=>({settings}),readPresetExtensionField:({name})=>presets[name]?.extensions.regex_scripts,
+savePreset:async(name,preset,{skipUpdate}={})=>{if(!skipUpdate)throw Error('must not switch presets');const response=await fetch('/api/presets/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,apiId:'openai',preset})});if(!response.ok)throw Error('preset save failed')},
 writePresetExtensionField:async({name,value})=>{presets[name].extensions.regex_scripts=value;const response=await fetch('/api/presets/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,apiId:'openai',preset:presets[name]})});if(!response.ok)throw Error('preset save failed')}};
 export const getPresetManager=id=>!id||id==='openai'?manager:null;window.presetFixtures=presets;
 `);
+assets.set('/openai.js','export const promptManager = {render(){}}');
 assets.set('/popup.js',`
 export const POPUP_TYPE={TEXT:1,CONFIRM:2};export const POPUP_RESULT={AFFIRMATIVE:1};
 export class Popup{
-constructor(content,type,text,options){this.content=content;this.options=options;this.dialog=document.createElement('dialog');this.dialog.className='fixture-popup';this.dialog.append(content);const close=document.createElement('button');close.id='fixture-close';close.textContent='关闭';close.className='menu_button';close.onclick=()=>this.complete(0);this.dialog.append(close);if(type===2){close.dataset.editorCancel='';close.textContent='取消';const save=document.createElement('button');save.textContent='保存';save.className='menu_button';save.dataset.editorSave='';save.onclick=()=>this.complete(1);this.dialog.append(save)}this.dialog.oncancel=e=>{e.preventDefault();this.complete(0)}}
+constructor(content,type,text,options){this.content=content;this.options=options;this.dialog=document.createElement('dialog');this.dialog.className='fixture-popup popup';this.dlg=this.dialog;const body=document.createElement('div');body.className='popup-body';const wrapper=document.createElement('div');wrapper.className='popup-content';this.buttonControls=document.createElement('div');this.buttonControls.className='popup-controls';wrapper.append(content);body.append(wrapper,this.buttonControls);this.dialog.append(body);const close=document.createElement('button');close.id='fixture-close';close.textContent='关闭';close.className='menu_button';close.onclick=()=>this.complete(0);this.buttonControls.append(close);if(type===2){close.dataset.editorCancel='';close.textContent='取消';const save=document.createElement('button');save.textContent='保存';save.className='menu_button';save.dataset.editorSave='';save.onclick=()=>this.complete(1);this.buttonControls.append(save)}this.dialog.oncancel=e=>{e.preventDefault();this.complete(0)}}
 show(){document.body.append(this.dialog);this.dialog.showModal();return new Promise(r=>this.resolve=r)}
 async complete(value){this.result=value;if(await this.options.onClosing?.(this)===false)return;await this.options.onClose?.();this.dialog.close();this.dialog.remove();this.resolve?.(value)}
 static show={confirm:async(header,content)=>{window.confirmations++;const dialog=document.createElement('dialog');dialog.id='confirm-transfer';dialog.append(content);document.body.append(dialog);dialog.showModal();return new Promise(resolve=>{for(const [id,text,value]of [['approve','确认',1],['cancel','取消',0]]){const button=document.createElement('button');button.id=id;button.textContent=text;button.className='menu_button';button.onclick=()=>{dialog.close();dialog.remove();resolve(value)};dialog.append(button)};dialog.oncancel=e=>{e.preventDefault();dialog.remove();resolve(null)}})}};
@@ -111,6 +113,25 @@ try{
     else{await page.mouse.move(start.x,start.y);await page.mouse.down();await page.mouse.move(end.x,end.y,{steps:6});await page.mouse.up();}
   };
   await press(page.locator('#cla-transfer-menu'));await selected('0').waitFor();assert.equal(await page.locator('.cla-transfer-item img').count(),0);
+  const layout = await page.locator('.cla-transfer-tool').evaluate(view => {
+    const left = view.querySelector('.cla-transfer-source-list');
+    const right = view.querySelector('.cla-transfer-target-list');
+    const actions = view.querySelector('.cla-transfer-actions');
+    return { height: view.clientHeight, left: left.clientHeight, right: right.clientHeight,
+      listsEnd: left.getBoundingClientRect().bottom, toolbarStart: actions.getBoundingClientRect().top };
+  });
+  assert.ok(layout.left / layout.height > .65 && layout.right === layout.left, JSON.stringify(layout));
+  assert.ok(layout.toolbarStart >= layout.listsEnd,'toolbar stays below the independently scrolling columns');
+  const reader = side => page.locator(`[data-cla-transfer-pane="${side}"] [data-cla-transfer-action="reader"]`);
+  const readerWindow = page.locator('.cla-transfer-reader');
+  const closeReader = () => press(readerWindow.getByRole('button', {name:'关闭'}));
+  await press(reader('source'));
+  assert.equal(await readerWindow.locator('article').count(),16);
+  assert.match(await readerWindow.innerText(),/共 16 项/);
+  assert.match(await readerWindow.innerText(),/世界条目正文/);
+  assert.equal(await readerWindow.locator('img').count(),0,'rich text remains literal');
+  assert.ok(await readerWindow.locator('.cla-transfer-reader-list').evaluate(list=>list.scrollHeight>list.clientHeight));
+  await closeReader();await page.waitForFunction(()=>!tools.previewLoading);
   await checkRowLayout();
   assert.equal(await field('source').inputValue(),'世界书 A');assert.equal(await field('target').inputValue(),'世界书 B');
   if(mobile){const box=await page.locator('.cla-transfer-source-list').boundingBox();const x=box.x+70;const start=box.y+box.height-15,finish=box.y+15;
@@ -190,7 +211,7 @@ try{
   await press(edit('replaceString').locator('..').locator('.cla-transfer-expand'));await press(page.locator('.cla-transfer-expanded .cla-transfer-expand'));
   assert.equal(await edit('replaceString').inputValue(),'放大编辑草稿');await cancelEditor();await page.waitForFunction(()=>!tools.previewLoading);
   const targetRow=page.locator('.cla-transfer-target-list [data-cla-transfer-id="'+targetId+'"]');
-  await press(targetRow);assert.equal(await targetRow.isChecked(),true);assert.match(await action('execute').innerText(),/到左侧/);
+  await press(targetRow);assert.equal(await targetRow.isChecked(),true);assert.match(await action('execute').getAttribute('aria-label'),/到左侧/);
   await field('operation').selectOption('move');await press(action('execute'));await press(page.locator('#approve'));await page.waitForFunction(()=>!tools.busy&&!tools.loading&&!tools.targetLoading);
   s=await state();assert.equal(s.cards['A.png'].data.extensions.regex_scripts.some(rule=>rule.id===targetId),false);assert.equal(s.savedPresets.P1.extensions.regex_scripts.at(-1).replaceString,'右侧编辑后的替换内容');
   await field('kind').selectOption('world');await page.waitForFunction(()=>!tools.loading&&!tools.targetLoading);
@@ -213,6 +234,36 @@ await page.screenshot({path:'/private/tmp/cla-world-editor-'+(mobile?'touch':'de
   await press(action('delete'));await press(page.locator('#approve'));await page.waitForFunction(()=>!tools.busy&&!tools.targetLoading);assert.equal((await state()).worlds['世界书 B'].entries[deleteId],undefined);
   const panes=await page.locator('.cla-transfer-pane').evaluateAll(nodes=>nodes.map(n=>{const b=n.getBoundingClientRect();return {left:b.left,right:b.right,top:b.top}}));assert.ok(Math.abs(panes[0].top-panes[1].top)<2&&panes[0].right<=panes[1].left,'source and target stay side by side');
   const bounds=await page.locator('.cla-transfer-tool select,.cla-transfer-actions button:visible').evaluateAll(nodes=>nodes.map(n=>{const b=n.getBoundingClientRect();return[b.left,b.right]}));assert.ok(bounds.every(([left,right])=>left>=0&&right<=(mobile?390:1100)),'tool controls fit viewport');
+  await field('kind').selectOption('prompt');await selected('custom-on').waitFor();await page.waitForFunction(()=>!tools.loading&&!tools.targetLoading);
+  await press(reader('source'));
+  assert.match(await readerWindow.innerText(),/已启用 2 \/ 3 项/);
+  assert.match(await readerWindow.innerText(),/preserve/);
+  assert.match(await readerWindow.innerText(),/运行时由酒馆填充/);
+  assert.doesNotMatch(await readerWindow.innerText(),/disabled text/);
+  await press(readerWindow.getByRole('checkbox'));
+  assert.match(await readerWindow.innerText(),/disabled text/);
+  await closeReader();await page.waitForFunction(()=>!tools.previewLoading);
+  assert.equal(await selected('chatHistory').count(),0);
+  await field('operation').selectOption('copy');
+  await press(selected('custom-on'));await press(selected('custom-off'));await press(action('execute'));await press(page.locator('#approve'));
+  await page.waitForFunction(()=>!tools.busy&&!tools.loading&&!tools.targetLoading);
+  s=await state();
+  const presetTarget=s.savedPresets.P2, copiedPrompts=presetTarget.prompts.slice(1);
+  assert.equal(copiedPrompts.length,2);assert.equal(copiedPrompts[0].injection_depth,4);
+  assert.notEqual(copiedPrompts[0].identifier,'custom-on');assert.equal(presetTarget.temperature,.2);
+  assert.deepEqual(presetTarget.prompt_order[0].order.slice(1),copiedPrompts.map((p,i)=>({identifier:p.identifier,enabled:i===0})));
+  assert.equal(await selected('custom-on').count(),1,'copy preserves the source prompt');
+  const writeCount = (await state()).writes.length;
+  const targetPrompt = page.locator(`.cla-transfer-target-list [data-cla-transfer-id="${copiedPrompts[0].identifier}"]`);
+  await field('operation').selectOption('move');
+  await press(targetPrompt);await press(action('execute'));await press(page.locator('#approve'));
+  await page.waitForFunction(()=>!tools.busy&&!tools.loading&&!tools.targetLoading);
+  s=await state();
+  assert.deepEqual(s.writes.slice(writeCount).map(write=>write.body.name),['P1','P2'],'reverse move saves destination first');
+  assert.equal(s.savedPresets.P2.prompts.some(prompt=>prompt.identifier===copiedPrompts[0].identifier),false);
+  assert.equal(s.savedPresets.P1.prompts.filter(prompt=>prompt.content==='preserve').length,2);
+  assert.equal(s.savedPresets.P1.prompt_order[0].order.at(-1).enabled,true);
+
   await page.screenshot({path:'/private/tmp/cla-transfer-'+(mobile?'touch':'desktop')+'.png'});
   await page.evaluate(()=>{tools.stop();auto.stop()});assert.equal(await page.locator('#cla-transfer-menu,.cla-transfer-tool').count(),0);assert.equal(await page.locator('dialog').count(),0);assert.deepEqual(errors,[]);
   console.log((mobile?'Touch':'Desktop')+': wand entry, cross-pane mouse/touch and batch drag, canceled/outside drops, world copy/move, character/preset regex copies, partial failure, IDs/metadata, layout, startup/key connection, manual cancel and cleanup passed');await page.close();

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ContentTransferService, NativeTransferRepository, planTransfer, editTransferEntry, transferCollection } from '../modules/content-transfer.js';
+import { ContentTransferService, NativeTransferRepository, planTransfer, editTransferEntry, transferCollection, transferItems, deleteTransferEntries } from '../modules/content-transfer.js';
 const clone = value => structuredClone(value);
 const rule = (id, extra = {}) => ({ id, scriptName: '同名规则', findRegex: '/abc/g', replaceString: '<div>$1</div>', disabled: true, placement: [1,2], trimStrings:['x'], minDepth:2, maxDepth:8, runOnEdit:true, markdownOnly:true, unknown:{future:true}, ...extra });
 
@@ -129,10 +129,77 @@ test('world settings edits validate bounds, preserve other fields and synchroniz
  assert.equal(next.originalData.entries[0].extensions.depth,12);assert.equal(next.originalData.entries[0].extensions.outlet_name,'out');assert.equal(next.originalData.entries[0].extensions.unknown,42);assert.equal(next.originalData.entries[0].enabled,false);assert.equal(next.originalData.entries[0].insertion_order,7777);assert.deepEqual(next.originalData.entries[0].keys,['甲,乙','丙']);assert.equal(source.entries[0].depth,undefined);
  for(const patch of [{depth:-1},{probability:101},{order:1.5},{role:3},{position:''},{strategy:'bad'},{selectiveLogic:4}])assert.throws(()=>editTransferEntry('world',source,'0',patch));
 });
-test('batch deletion removes exactly selected IDs including export originals without mutating inputs',async()=>{
- const {deleteTransferEntries}=await import('../modules/content-transfer.js');
+test('batch deletion removes exactly selected IDs including export originals without mutating inputs',()=>{
  const source={entries:{0:{uid:0},1:{uid:1}},originalData:{entries:[{uid:0},{uid:1}]},unknown:42};
  const next=deleteTransferEntries('world',source,['0']);assert.deepEqual(next,{entries:{1:{uid:1}},originalData:{entries:[{uid:1}]},unknown:42});assert.ok(source.entries[0]);
  const scripts=[rule('a'),rule('b')];assert.deepEqual(deleteTransferEntries('preset',scripts,['b']),[scripts[0]]);assert.equal(scripts.length,2);
  for(const ids of [[],['missing']])assert.throws(()=>deleteTransferEntries('world',source,ids));
+});
+
+
+test('preset prompt moves preserve order and enable flags and keep built-ins out of mutations', () => {
+    const source = {
+        prompts: [
+            { identifier: 'first', name: 'First', injection_depth: 4 },
+            { identifier: 'main', name: 'Built-in' },
+            { identifier: 'second', name: 'Second' },
+        ],
+        prompt_order: [{ character_id: 100001, order: [
+            { identifier: 'main', enabled: true },
+            { identifier: 'second', enabled: false },
+            { identifier: 'first', enabled: true },
+        ] }, { character_id: 2, order: [{ identifier: 'second', enabled: true }] }],
+    };
+    const target = {
+        prompts: [{ identifier: 'main' }],
+        prompt_order: [{ character_id: '100001', order: [{ identifier: 'main', enabled: true }] }],
+    };
+    const before = clone([source, target]);
+    let id = 0;
+    const result = planTransfer('prompt', source, target, ['first', 'second'], () => `new-${++id}`);
+    assert.deepEqual([source, target], before);
+    assert.deepEqual(transferItems('prompt', result.nextTarget).map(item => [item.id, item.enabled]), [
+        ['main', true], ['new-1', false], ['new-2', true],
+    ]);
+    assert.equal(result.nextTarget.prompts[2].injection_depth, 4);
+    assert.deepEqual(result.nextSource.prompts.map(prompt => prompt.identifier), ['main']);
+    assert.deepEqual(result.nextSource.prompt_order[1].order, []);
+    assert.throws(() => planTransfer('prompt', source, target, ['main']), /内置/);
+    assert.throws(() => deleteTransferEntries('prompt', source, ['main']), /内置/);
+    assert.throws(() => planTransfer('prompt', source, { ...target, prompt_order: [] }, ['first']), /初始化/);
+});
+
+test('preset prompt writes update a selected preset after persistence without switching it', async () => {
+    const preset = { temperature: .6, extensions: { keep: true }, prompts: [{ identifier: 'one', name: 'One', content: 'saved' }], prompt_order: [] };
+    const settings = { ...clone(preset), prompts: [{ identifier: 'one', name: 'One', content: 'live' }] };
+    const saves = [];
+    let fail = true, active = 'Current', rendered = 0;
+    const manager = {
+        getAllPresets: () => ['Current'],
+        getCompletionPresetByName: () => preset,
+        getPresetList: () => ({ settings }),
+        getSelectedPresetName: () => active,
+        async savePreset(name, data, options) {
+            saves.push({ name, data, options });
+            if (fail) throw Error('offline');
+        },
+    };
+    const repo = new NativeTransferRepository({
+        scriptApi: {}, presetApi: { getPresetManager: () => manager },
+        openaiApi: { promptManager: { render: () => rendered++ } },
+    });
+    const [ref] = repo.list('prompt');
+    const expected = await repo.read(ref);
+    assert.equal(expected.prompts[0].content, 'live');
+    const next = editTransferEntry('prompt', expected, 'one', { content: 'changed' });
+    await assert.rejects(repo.write(ref, next, expected), /offline/);
+    assert.equal(settings.prompts[0].content, 'live');
+    assert.equal(preset.prompts[0].content, 'saved');
+    fail = false;
+    await repo.write(ref, next, expected);
+    assert.equal(active, 'Current');
+    assert.equal(rendered, 1);
+    assert.equal(preset.prompts[0].content, 'changed');
+    assert.equal(settings.prompts[0].content, 'changed');
+    assert.deepEqual(saves.at(-1), { name: 'Current', data: preset, options: { skipUpdate: true } });
 });

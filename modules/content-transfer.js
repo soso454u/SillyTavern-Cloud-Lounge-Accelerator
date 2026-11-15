@@ -1,8 +1,35 @@
 import { getRegexCollectionName } from '../utils/regex-collections.js';
 const clone = value => structuredClone(value);
 export const fingerprint = value => JSON.stringify(value);
-const itemsOf = (kind, data) => kind === 'world' ? Object.entries(data.entries).map(([id, value]) => ({ id, value }))
-    : data.map(value => ({ id: String(value.id), value }));
+const OPENAI_ORDER_ID = 100001;
+const builtinPromptIds = new Set([
+    'main', 'nsfw', 'jailbreak', 'enhanceDefinitions', 'chatHistory', 'dialogueExamples',
+    'worldInfoBefore', 'worldInfoAfter', 'charDescription', 'charPersonality', 'scenario', 'personaDescription',
+]);
+const isProtectedPrompt = prompt => prompt.marker || prompt.system_prompt || builtinPromptIds.has(prompt.identifier);
+
+function promptOrder(data) {
+    return data.prompt_order.find(group => String(group?.character_id) === String(OPENAI_ORDER_ID))?.order || [];
+}
+
+export function transferItems(kind, data) {
+    if (kind === 'world') return Object.entries(data.entries).map(([id, value]) => ({ id, value }));
+    if (kind !== 'prompt') return data.map(value => ({ id: String(value.id), value }));
+    const order = promptOrder(data);
+    const positions = new Map(order.map((item, index) => [item?.identifier, index]));
+    return data.prompts.filter(Boolean).map(value => ({ id: value.identifier, value,
+        enabled: order[positions.get(value.identifier)]?.enabled === true,
+        protected: Boolean(isProtectedPrompt(value)),
+    })).sort((a, b) => (positions.get(a.id) ?? Infinity) - (positions.get(b.id) ?? Infinity));
+}
+
+function removePresetPrompts(data, ids) {
+    data.prompts = data.prompts.filter(prompt => !ids.has(prompt?.identifier));
+    for (const group of data.prompt_order) {
+        if (Array.isArray(group?.order)) group.order = group.order.filter(item => !ids.has(item?.identifier));
+    }
+    return data;
+}
 
 export function transferScopeKey(ref) {
     return ref.kind === 'character' ? JSON.stringify(['SCOPED', ref.avatar])
@@ -17,7 +44,7 @@ export function transferCollection(ref, value, settings = {}) {
 
 export function editTransferEntry(kind, data, id, patch) {
     const next = clone(data);
-    const entry = itemsOf(kind, next).find(item => item.id === String(id))?.value;
+    const entry = transferItems(kind, next).find(item => item.id === String(id))?.value;
     if (!entry) throw new Error('条目已不存在，请重新加载');
     if (kind === 'world') {
         entry.comment = String(patch.name ?? entry.comment ?? '');
@@ -50,6 +77,12 @@ export function editTransferEntry(kind, data, id, patch) {
                 owner[path.at(-1)] = key === 'disable' ? !value : clone(value);
             }
         }
+    } else if (kind === 'prompt') {
+        if (isProtectedPrompt(entry)) throw new Error('请在酒馆原生编辑器管理内置条目');
+        const name = String(patch.name ?? entry.name ?? '').trim();
+        if (!name) throw new Error('条目名称不能为空');
+        entry.name = name;
+        entry.content = String(patch.content ?? entry.content ?? '');
     } else {
         const name = String(patch.name ?? entry.scriptName ?? '').trim();
         if (!name) throw new Error('正则名称不能为空');
@@ -62,8 +95,12 @@ export function editTransferEntry(kind, data, id, patch) {
 
 export function deleteTransferEntries(kind, data, ids) {
     const wanted = new Set(ids.map(String));
-    if (!wanted.size || itemsOf(kind, data).filter(item => wanted.has(item.id)).length !== wanted.size) throw new Error('所选条目已改变，请重新加载');
+    if (!wanted.size || transferItems(kind, data).filter(item => wanted.has(item.id)).length !== wanted.size) throw new Error('所选条目已改变，请重新加载');
     const next = clone(data);
+    if (kind === 'prompt') {
+        if (next.prompts.some(prompt => wanted.has(prompt?.identifier) && isProtectedPrompt(prompt))) throw new Error('内置条目不能删除');
+        return removePresetPrompts(next, wanted);
+    }
     if (kind !== 'world') return next.filter(item => !wanted.has(String(item.id)));
     for (const id of wanted) delete next.entries[id];
     if (Array.isArray(next.originalData?.entries)) next.originalData.entries = next.originalData.entries.filter(item => !wanted.has(String(item.uid)));
@@ -73,7 +110,7 @@ export function deleteTransferEntries(kind, data, ids) {
 // Plans detached copies only: source/target objects are never mutated here.
 export function planTransfer(kind, source, target, ids, uuid = () => crypto.randomUUID()) {
     const wanted = new Set(ids.map(String));
-    const entries = itemsOf(kind, source).filter(item => wanted.has(item.id));
+    const entries = transferItems(kind, source).filter(item => wanted.has(item.id));
     if (!wanted.size || entries.length !== wanted.size) throw new Error('所选条目已改变，请重新加载来源');
     const nextTarget = clone(target), nextSource = clone(source), created = [];
     if (kind === 'world') {
@@ -89,6 +126,23 @@ export function planTransfer(kind, source, target, ids, uuid = () => crypto.rand
             created.push(String(uid++));
         }
         if (Array.isArray(nextSource.originalData?.entries)) nextSource.originalData.entries = nextSource.originalData.entries.filter(entry => !wanted.has(String(entry.uid)));
+    } else if (kind === 'prompt') {
+        const order = promptOrder(nextTarget);
+        if (!order.length) throw new Error('请先在酒馆启用目标预设，让原生提示词顺序初始化后重试');
+        if (entries.some(item => item.protected)) throw new Error('内置条目不能转移');
+        const existing = new Set(nextTarget.prompts.filter(Boolean).map(prompt => prompt.identifier));
+        for (const group of nextTarget.prompt_order) {
+            for (const item of group?.order || []) existing.add(item?.identifier);
+        }
+        for (const { value, enabled } of entries) {
+            const identifier = uuid();
+            if (!identifier || existing.has(identifier)) throw new Error('无法分配新的提示词 ID，请重新操作');
+            existing.add(identifier);
+            nextTarget.prompts.push({ ...value, identifier, system_prompt: false, marker: false });
+            order.push({ identifier, enabled });
+            created.push(identifier);
+        }
+        removePresetPrompts(nextSource, wanted);
     } else {
         const existing = new Set(nextTarget.map(item => String(item.id)));
         for (const { value } of entries) {
@@ -107,7 +161,8 @@ export class ContentTransferService {
     constructor(repository) { this.repository = repository; this.busy = false; }
 
     async prepare(kind, source, target, ids) {
-        if ((source.kind === 'world') !== (target.kind === 'world')) throw new Error('世界书与正则不能混合转移');
+        if ((source.kind === 'world') !== (target.kind === 'world')) throw new Error('世界书与其他类型不能混合转移');
+        if ((source.kind === 'prompt') !== (target.kind === 'prompt')) throw new Error('预设提示词只能在提示词预设之间转移');
         if (source.kind === target.kind && source.id === target.id) throw new Error('来源和目标不能相同');
         const sourceData = await this.repository.read(source);
         const targetData = await this.repository.read(target);
@@ -147,8 +202,8 @@ export class ContentTransferService {
 }
 
 export class NativeTransferRepository {
-    constructor({ scriptApi, worldApi, presetApi, fetchImpl = (...args) => fetch(...args) }) {
-        Object.assign(this, { scriptApi, worldApi, presetApi, fetchImpl });
+    constructor({ scriptApi, worldApi, presetApi, openaiApi, fetchImpl = (...args) => fetch(...args) }) {
+        Object.assign(this, { scriptApi, worldApi, presetApi, openaiApi, fetchImpl });
     }
 
     async post(url, data) {
@@ -161,6 +216,13 @@ export class NativeTransferRepository {
         if (kind === 'world') return (this.worldApi.world_names || []).map(name => ({ kind, id: name, name, label: name }));
         if (kind === 'character') return (this.scriptApi.characters || []).filter(character => character?.avatar)
             .map(character => ({ kind, id: character.avatar, avatar: character.avatar, label: `${character.name || '未命名角色'} · ${character.avatar}` }));
+        if (kind === 'prompt') {
+            const manager = this.presetApi.getPresetManager('openai');
+            if (!['getAllPresets', 'getCompletionPresetByName', 'getPresetList', 'getSelectedPresetName', 'savePreset']
+                .every(key => typeof manager?.[key] === 'function')) return [];
+            return manager.getAllPresets().filter(name => Array.isArray(manager.getCompletionPresetByName(name)?.prompts))
+                .map(name => ({ kind, id: JSON.stringify(['openai', name]), apiId: 'openai', name, label: name }));
+        }
         return ['openai', 'textgenerationwebui', 'kobold', 'novel'].flatMap(apiId => {
             const manager = this.presetApi.getPresetManager(apiId);
             if (!['getAllPresets', 'getCompletionPresetByName', 'getPresetList', 'getSelectedPresetName',
@@ -186,6 +248,14 @@ export class NativeTransferRepository {
             return clone(scripts);
         }
         const manager = this.presetApi.getPresetManager(ref.apiId);
+        if (ref.kind === 'prompt') {
+            const preset = manager.getCompletionPresetByName(ref.name);
+            const current = manager.getSelectedPresetName() === ref.name ? manager.getPresetList().settings : null;
+            const { prompts, prompt_order = [] } = current && Array.isArray(current.prompts) ? current : preset;
+            if (!Array.isArray(prompts) || !Array.isArray(prompt_order)
+                || prompt_order.some(group => !Array.isArray(group?.order))) throw new Error('预设提示词数据格式不正确');
+            return clone({ prompts, prompt_order });
+        }
         const scripts = manager.readPresetExtensionField({ name: ref.name, path: 'regex_scripts' }) ?? [];
         if (!Array.isArray(scripts)) throw new Error('预设正则数据格式不正确');
         return clone(scripts);
@@ -222,9 +292,28 @@ export class NativeTransferRepository {
         this.worldApi.reloadEditor?.(name);
     }
 
+    async writePresetPrompts(ref, data, expected) {
+        const manager = this.presetApi.getPresetManager(ref.apiId);
+        const preset = manager.getCompletionPresetByName(ref.name);
+        const patch = clone(data);
+        await manager.savePreset(ref.name, { ...preset, ...patch }, { skipUpdate: true });
+        if (manager.getCompletionPresetByName(ref.name) !== preset) {
+            throw new Error('预设在保存期间发生变化，请检查后重新加载两侧');
+        }
+        const liveChanged = fingerprint(await this.read(ref)) !== fingerprint(expected);
+        if (liveChanged) throw new Error('预设在保存期间发生变化，请检查后重新加载两侧');
+        Object.assign(preset, patch);
+        if (manager.getSelectedPresetName() === ref.name) {
+            Object.assign(manager.getPresetList().settings, clone(data));
+            this.scriptApi.saveSettingsDebounced?.();
+            this.openaiApi?.promptManager?.render?.(false);
+        }
+    }
+
     async write(ref, data, expected) {
         if (!this.exists(ref) || fingerprint(await this.read(ref)) !== fingerprint(expected)) throw new Error('保存前数据已改变，已停止覆盖');
         if (ref.kind === 'world') return this.writeWorld(ref.name, data);
+        if (ref.kind === 'prompt') return this.writePresetPrompts(ref, data, expected);
         if (ref.kind === 'character') {
             await this.post('/api/characters/merge-attributes', { avatar: ref.avatar, data: { extensions: { regex_scripts: data } } });
             if (fingerprint(await this.read(ref)) !== fingerprint(data)) throw new Error('角色正则保存未确认，来源会保留');
