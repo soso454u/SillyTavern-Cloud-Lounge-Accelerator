@@ -126,7 +126,7 @@ export class TransferTools {
         const item = node('div', undefined, 'list-group-item flex-container flexGap5 interactable');
         item.id = 'cla-transfer-menu'; item.tabIndex = 0;
         item.setAttribute('role', 'button');
-        item.append(node('i', undefined, 'fa-solid fa-copy'), node('span', '世界书 / 正则 / 预设转移'));
+        item.append(node('i', undefined, 'fa-solid fa-copy'), node('span', '条目转移'));
         menu.append(item);
         this.menu = item;
     }
