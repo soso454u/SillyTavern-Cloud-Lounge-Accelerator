@@ -8,10 +8,12 @@ import { createRequire } from 'node:module';
 const { chromium } = createRequire(import.meta.url)('playwright');
 const themeStyles = process.env.CLA_REGEX_THEME_CSS ? await readFile(process.env.CLA_REGEX_THEME_CSS,'utf8') : '';
 const pluginRoot = '/scripts/extensions/third-party/cloud-lounge-accelerator/';
+const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url), 'utf8'));
 const assets = new Map(await Promise.all((await readdir(new URL('../dist/', import.meta.url))).map(async name => [
     `${pluginRoot}dist/${name}`, await readFile(new URL(`../dist/${name}`, import.meta.url), 'utf8'),
 ])));
-assets.set('/style.css',await readFile(new URL('../style.css',import.meta.url),'utf8'));
+const styleUrl = pluginRoot + manifest.css;
+assets.set(styleUrl, await readFile(new URL('../' + manifest.css.split('?')[0], import.meta.url), 'utf8'));
 assets.set('/script.js', `
     export const chat = [];
     export const main_api='openai'; export let online_status='no_connection';
@@ -72,7 +74,7 @@ assets.set('/scripts/extensions/regex/engine.js', `
 let deferredDelay = 0;
 const server = createServer((request, response) => {
     if (assets.has(request.url)) {
-        response.setHeader('Content-Type', request.url.endsWith('.css')?'text/css':'text/javascript');
+        response.setHeader('Content-Type', request.url.split('?')[0].endsWith('.css')?'text/css':'text/javascript');
         const send = () => response.end(assets.get(request.url));
         if (request.url.includes('/dist/deferred-runtime-') && deferredDelay) setTimeout(send, deferredDelay);
         else send();
@@ -81,7 +83,7 @@ const server = createServer((request, response) => {
         response.end('{"ok":false}');
     } else if (request.url === '/') {
         response.setHeader('Content-Type', 'text/html');
-        response.end('<!doctype html><html><head><link rel="stylesheet" href="/style.css"><style>:root{--im-bubble-filter:blur(8px)}#chat .mes_block::before{content:"";backdrop-filter:var(--im-bubble-filter)}</style></head><body><div id="extensionsMenu"></div><input id="custom_api_url_text" hidden value="https://example.invalid/v1"><button id="api_button_openai" class="api_button" hidden>连接</button><script>window.apiConnections=0;document.querySelector("#api_button_openai").onclick=async()=>{window.apiConnections++;(await import("/script.js")).markConnected()};</script><div id="chat"></div><div id="extensions_settings2"></div><div id="regex_container"><div class="regex_settings"><div class="inline-drawer-content"><div class="flex-container"></div><div id="saved_regex_scripts"></div><div id="saved_preset_scripts"></div><div id="saved_scoped_scripts"></div></div></div></div></body></html>');
+        response.end('<!doctype html><html><head><link rel="stylesheet" href="' + styleUrl + '"><style>:root{--im-bubble-filter:blur(8px)}#chat .mes_block::before{content:"";backdrop-filter:var(--im-bubble-filter)}</style></head><body><div id="extensionsMenu"></div><input id="custom_api_url_text" hidden value="https://example.invalid/v1"><button id="api_button_openai" class="api_button" hidden>连接</button><script>window.apiConnections=0;document.querySelector("#api_button_openai").onclick=async()=>{window.apiConnections++;(await import("/script.js")).markConnected()};</script><div id="chat"></div><div id="extensions_settings2"></div><div id="regex_container"><div class="regex_settings"><div class="inline-drawer-content"><div class="flex-container"></div><div id="saved_regex_scripts"></div><div id="saved_preset_scripts"></div><div id="saved_scoped_scripts"></div></div></div></div></body></html>');
     } else {
         response.writeHead(404);
         response.end('missing fixture');
@@ -106,7 +108,7 @@ try {
             window.accelerator = await import(entry);
             accelerator.onActivate();
         }, `${pluginRoot}dist/index.js`);
-        assert.equal(requests.filter(url => url.includes('/dist/')).length, 2);
+        assert.equal(requests.filter(url => url.includes('/dist/') && url.endsWith('.js')).length, 2);
         assert.equal(requests.some(url => url.includes('deferred-runtime-')), false);
         await page.evaluate(async () => {
             const {eventSource} = await import('/script.js');
@@ -122,7 +124,7 @@ try {
         });
         await page.locator('#cloud-lounge-accelerator-settings').waitFor({state:'attached'});
         await page.waitForFunction(() => document.querySelector('.cla-regex-reorder-toggle'));
-        assert.equal(requests.filter(url => url.includes('/dist/')).length, 3);
+        assert.equal(requests.filter(url => url.includes('/dist/') && url.endsWith('.js')).length, 4);
         assert.equal(await page.evaluate(() => window.settingsSaves || 0), 0);
         assert.equal(await page.locator('#cla-transfer-menu').count(),1);
         assert.equal(await page.locator('[data-cla-setting="autoConnect"]').isChecked(),true);

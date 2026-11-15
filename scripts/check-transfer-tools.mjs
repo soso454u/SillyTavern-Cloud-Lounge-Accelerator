@@ -9,7 +9,8 @@ const assets=new Map(await Promise.all(['modules/transfer-menu.js','modules/tran
 const manifest=JSON.parse(await readFile(new URL('../manifest.json',import.meta.url),'utf8'));
 // Emulate a browser with the old unversioned CSS cached. The native manifest
 // loader must request the new versioned URL to get the matching four controls.
-assets.set('/'+manifest.css,assets.get('/style.css'));
+assets.set('/'+manifest.css,await readFile(new URL('../'+manifest.css.split('?')[0],import.meta.url),'utf8'));
+assets.set('/transfer.css','export default '+JSON.stringify(await readFile(new URL('../transfer.css',import.meta.url),'utf8'))+';');
 assets.set('/style.css','.cla-transfer-item{display:grid;grid-template-columns:18px minmax(0,1fr) 28px}');
 assets.set('/world-info.js',`
 export const world_names=['世界书 A','世界书 B'];export const worldInfoCache=new Map();
@@ -76,7 +77,7 @@ const server=createServer(async(req,res)=>{
   else{res.writeHead(404);res.end('{}')};return;
  }
  const pathname=new URL(req.url,'http://localhost').pathname;
- res.setHeader('Content-Type',pathname.endsWith('.js')?'text/javascript':pathname.endsWith('.css')?'text/css':'text/html');res.end(assets.get(req.url)??html);
+ res.setHeader('Content-Type',(pathname.endsWith('.js')||pathname==='/transfer.css')?'text/javascript':pathname.endsWith('.css')?'text/css':'text/html');res.end(assets.get(req.url)??html);
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));let browser;
 try{
@@ -115,6 +116,7 @@ try{
     if(mobile){await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{...start,id:9}]});await page.waitForTimeout(480);for(let i=1;i<=6;i++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:start.x+(end.x-start.x)*i/6,y:start.y+(end.y-start.y)*i/6,id:9}]});await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});}
     else{await page.mouse.move(start.x,start.y);await page.mouse.down();await page.mouse.move(end.x,end.y,{steps:6});await page.mouse.up();}
   };
+  assert.equal(await page.locator('#cla-transfer-styles').count(),0);
   assert.equal(transferRequests.length,0,'the wand entry does not download the transfer implementation');
   await press(page.locator('#cla-transfer-menu'));await selected('0').waitFor();
   assert.equal(transferRequests.length,1,'the first click loads the transfer implementation once');assert.equal(await page.locator('.cla-transfer-item img').count(),0);
@@ -313,7 +315,8 @@ await page.screenshot({path:'/private/tmp/cla-world-editor-'+(mobile?'touch':'de
   await page.waitForFunction(()=>tools===null);
   await press(page.locator('#cla-transfer-menu'));await selected('0').waitFor();
   assert.equal(transferRequests.length,1,'reopening reuses the already loaded module');
-  await page.evaluate(()=>{transferMenu.stop();auto.stop()});assert.equal(await page.locator('#cla-transfer-menu,.cla-transfer-tool').count(),0);assert.equal(await page.locator('dialog').count(),0);assert.deepEqual(errors,[]);
+  assert.equal(await page.locator('#cla-transfer-styles').count(),1);
+  await page.evaluate(()=>{transferMenu.stop();auto.stop()});assert.equal(await page.locator('#cla-transfer-menu,.cla-transfer-tool').count(),0);assert.equal(await page.locator('dialog').count(),0);await page.locator('#cla-transfer-styles').waitFor({state:'detached'});assert.deepEqual(errors,[]);
   console.log((mobile?'Touch':'Desktop')+': wand entry, cross-pane mouse/touch and batch drag, canceled/outside drops, world copy/move, character/preset regex copies, partial failure, IDs/metadata, layout, startup/key connection, manual cancel and cleanup passed');await page.close();
  }
 }finally{await browser?.close();await new Promise(resolve=>server.close(resolve))}

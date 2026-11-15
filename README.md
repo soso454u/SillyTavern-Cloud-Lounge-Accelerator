@@ -1,4 +1,4 @@
-# 云酒馆加速器 2.1.65
+# 云酒馆加速器 2.1.66
 
 让云端 SillyTavern 打开更快、长聊天更流畅，同时避免重复接管预设、正则和世界书的原生交互。安装后大部分功能都会自动工作，不需要手动调整复杂参数。
 
@@ -237,7 +237,7 @@ AGPL-3.0-only。
 
 ## 开发与发布检查
 
-可读源码仍在 `index.js`、`modules/`、`ui/` 等目录，`manifest.json` 使用已提交的 `dist/index.js`。维护时修改源码，再生成发布文件；不要直接编辑 `dist/`。
+可读源码仍在 `index.js`、`modules/`、`ui/` 等目录，`manifest.json` 使用已提交的 `dist/index.js` 和 `dist/style.css`。条目转移样式维护在 `transfer.css`，随按需模块发布。维护时修改源码并重新生成发布文件。
 
 ```bash
 npm ci

@@ -1,5 +1,5 @@
 // The published bundle is committed: installing/updating in SillyTavern needs no build step.
-import { build } from 'esbuild';
+import { build, transform } from 'esbuild';
 import { readFile, readdir, mkdir, writeFile, unlink } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -7,7 +7,14 @@ import path from 'node:path';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const outputDirectory = path.join(root, 'dist');
 const check = process.argv.includes('--check');
+const analyze = process.argv.includes('--analyze');
 const { version } = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+async function compactCss(file) {
+    const input = await readFile(file, 'utf8');
+    // Keep declaration values and rule order. Only strip formatting whitespace.
+    return (await transform(input, { loader: 'css', minifyWhitespace: true })).code;
+}
+
 const result = await build({
     absWorkingDir: root,
     entryPoints: { index: 'index.js' },
@@ -22,7 +29,16 @@ const result = await build({
     banner: { js: `/* Cloud Lounge Accelerator ${version} | AGPL-3.0-only | Source: ../index.js */` },
     chunkNames: '[name]-[hash]',
     write: false,
+    metafile: analyze,
     plugins: [{
+        name: 'transfer-style-text',
+        setup(build) {
+            build.onLoad({ filter: /transfer\.css$/ }, async args => ({
+                contents: await compactCss(args.path),
+                loader: 'text',
+            }));
+        },
+    }, {
         name: 'keep-native-sillytavern-modules',
         setup(build) {
             build.onResolve({ filter: /^\./ }, args => {
@@ -38,6 +54,13 @@ const result = await build({
     }],
 });
 const outputs = new Map(result.outputFiles.map(file => [path.basename(file.path), file.contents]));
+outputs.set('style.css', Buffer.from(await compactCss(path.join(root, 'style.css'))));
+if (analyze) {
+    for (const [name, output] of Object.entries(result.metafile.outputs)) {
+        console.log(name, output.bytes, output.imports.map(({ kind, path }) => ({ kind, path })));
+        console.log(Object.entries(output.inputs).sort((a, b) => b[1].bytesInOutput - a[1].bytesInOutput));
+    }
+}
 const existing = await readdir(outputDirectory).catch(error => {
     if (error.code === 'ENOENT') return [];
     throw error;

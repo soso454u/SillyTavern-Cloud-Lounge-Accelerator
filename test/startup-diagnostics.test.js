@@ -305,3 +305,21 @@ test('phase observation preserves return identity, arguments, receiver and rejec
     diagnostics.stop();
     assert.equal(eventSource.emit, originalEmit);
 });
+
+test('finishing diagnostics replaces a queued partial write with the final snapshot', () => {
+    const writes = [];
+    const timers = new Map();
+    const diagnostics = new StartupDiagnostics({
+        storage: { setItem: (key, value) => writes.push(JSON.parse(value)) },
+        eventTypes: {}, documentRef: { querySelector: () => null },
+        PerformanceObserverRef: null, MutationObserverRef: null,
+        setTimer(callback) { timers.set(1, callback); return 1; },
+        clearTimer(handle) { timers.delete(handle); },
+    });
+    diagnostics.start();
+    assert.equal(timers.size, 1);
+    diagnostics.finish();
+    assert.equal(timers.size, 0);
+    assert.equal(writes.length, 1);
+    assert.ok(Number.isFinite(writes[0].markers.APP_READY));
+});

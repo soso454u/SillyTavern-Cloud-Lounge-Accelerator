@@ -1,3 +1,4 @@
+export { default as transferStyles } from '../transfer.css';
 import { WORLD_FILTERS, PRESET_FILTERS, entryStatus, countReaderTokens } from '../utils/transfer-reader-stats.js';
 import { ensureTransferEditorStyles } from '../utils/transfer-editor-style.js';
 import { PressSweepSelection } from '../utils/press-sweep-selection.js';
@@ -120,11 +121,12 @@ export class TransferTools {
             if (popup.buttonControls) this.view.querySelector('.cla-transfer-heading').append(popup.buttonControls);
             this.popup = popup;
             this.chooseKind();
-            await popup.show();
+            this.windowClosed = popup.show();
+            await this.windowClosed;
         } catch (error) {
             if (this.started) globalThis.toastr?.error?.(error.message || '转移工具暂时不可用', '云酒馆加速器');
         } finally {
-            this.stop();
+            await this.stop();
         }
     }
 
@@ -626,7 +628,7 @@ export class TransferTools {
             popup.dlg?.classList.add('cla-transfer-dialog');
             if (popup.buttonControls) heading.append(popup.buttonControls);
             this.readerPopup = popup;
-            const closed = popup.show();
+            const closed = this.readerClosed = popup.show();
             const active = () => this.started && this.view === view && this.readerPopup === popup;
             void Promise.resolve().then(() => this.loadTokenizer()).then(({ getTokenCountAsync }) => {
                 return countReaderTokens(ref.kind, items, getTokenCountAsync, active);
@@ -752,7 +754,8 @@ export class TransferTools {
                 },
             });
             this.editorPopup = popup; this.updateControls();
-            await popup.show();
+            this.editorClosed = popup.show();
+            await this.editorClosed;
         } catch (error) { if (valid()) this.status.textContent = error.message; }
         finally {
             this.previewLoading = false;
@@ -861,15 +864,20 @@ export class TransferTools {
     }
 
     stop() {
-        if (!this.started) return;
+        if (!this.started) return this.closing;
         this.started = false; this.generation++;
         this.nameSelection?.destroy(); this.nameSelection = null;
         this.dragger?.destroy(); this.dragger = null;
         this.closeExpandedEditor?.();
-        void this.readerPopup?.complete?.(0);
-        void this.editorPopup?.complete?.(0);
+        const popups = [
+            [this.readerPopup, this.readerClosed],
+            [this.editorPopup, this.editorClosed],
+            [this.popup, this.windowClosed],
+        ];
         this.view?.remove(); this.view = null;
-        void this.popup?.complete?.(0);
         this.popup = null;
+        this.closing = Promise.allSettled(popups.map(([popup, closed]) =>
+            popup?.dlg?.hasAttribute('closing') ? closed : popup?.complete?.(0)));
+        return this.closing;
     }
 }

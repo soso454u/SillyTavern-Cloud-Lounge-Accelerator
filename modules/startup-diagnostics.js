@@ -410,6 +410,8 @@ export class StartupDiagnostics {
     }
 
     persist() {
+        if (this.persistTimer !== null) this.clearTimer(this.persistTimer);
+        this.persistTimer = null;
         if (!this.report) return;
         try {
             this.storage?.setItem?.(STORAGE_KEY, JSON.stringify(this.report));
@@ -493,8 +495,6 @@ export class StartupDiagnostics {
         this.overlayObserver = null;
         this.longTaskObserver?.disconnect?.();
         this.longTaskObserver = null;
-        if (this.persistTimer !== null) this.clearTimer(this.persistTimer);
-        this.persistTimer = null;
         this.persist();
     }
 }

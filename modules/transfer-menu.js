@@ -1,3 +1,21 @@
+const BASE_STYLESHEET = new URL('../dist/style.css', import.meta.url).href;
+let styleNode;
+let styleOwner;
+
+function mountStyles(css, owner) {
+    if (!styleNode?.isConnected) {
+        const base = Array.from(document.querySelectorAll('link[rel~="stylesheet"]'))
+            .find(link => link.href.split('?')[0] === BASE_STYLESHEET);
+        styleNode = document.createElement('style');
+        styleNode.id = 'cla-transfer-styles';
+        styleNode.textContent = css;
+        // Preserve the manifest sheet's position relative to native theme CSS.
+        if (base) base.after(styleNode);
+        else document.head.append(styleNode);
+    }
+    styleOwner = owner;
+}
+
 // The native wand menu is appended to body. Keep the entry available while
 // leaving the transfer, reader and editor implementations off the ready path.
 export class TransferMenu {
@@ -43,8 +61,9 @@ export class TransferMenu {
         if (!this.observer || this.opening) return;
         const open = this.opening = {};
         try {
-            const { TransferTools } = await import('./transfer-tools.js');
+            const { TransferTools, transferStyles } = await import('./transfer-tools.js');
             if (this.opening !== open) return;
+            mountStyles(transferStyles, this);
             const tools = this.tools = new TransferTools(this.options);
             await tools.open();
         } catch (error) {
@@ -62,7 +81,14 @@ export class TransferMenu {
         this.menu?.remove();
         this.menu = null;
         this.opening = null;
-        this.tools?.stop();
+        const closing = this.tools?.stop();
         this.tools = null;
+        const releaseStyles = () => {
+            if (styleOwner !== this || this.observer) return;
+            styleNode?.remove();
+            styleNode = styleOwner = null;
+        };
+        if (closing) void closing.then(releaseStyles);
+        else releaseStyles();
     }
 }
