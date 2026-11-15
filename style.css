@@ -550,7 +550,11 @@
     text-align: right;
 }
 
-.cla-copy-diagnostics {
+.cla-advanced-body > .cla-copy-diagnostics {
+    justify-self: start;
+    width: max-content;
+    max-width: 100%;
+    white-space: nowrap;
     margin-top: 0.35rem;
 }
 
