@@ -250,6 +250,20 @@ npm test
 
 可选的 `scripts/check-client-bundle.mjs` 使用 Playwright 及本机 Chromium，加载实际发布文件，验证桌面/手机环境的启动依赖数量、原生模块路径、就绪后加载、聊天显示条数、正则整理和停用清理；测试使用模拟酒馆接口。
 
+## 只读分析启动设置体积
+
+在可以访问酒馆实例数据的电脑或服务器上，用 Node.js 20+ 运行。指定实际用户 handle，单用户模式通常使用 `default-user`。
+
+```bash
+node scripts/analyze-settings-size.mjs --root "/path/to/SillyTavern" --user default-user
+```
+
+默认数据根目录为 `<root>/data`。如果实例通过配置、环境变量、启动参数或容器挂载使用其他位置，追加 `--data-root "/path/to/data"`，指向包含用户目录的路径。目录和预设文件内部的符号链接会导致分析停止，请在可直接读取实际目录和文件的环境运行。
+
+工具按 SillyTavern 1.18.0 的接口布局统计磁盘字节和响应 JSON 字节，输出顶层、设置和扩展排行榜、按类型汇总及最大的 20 项。估算使用紧凑 JSON 和上游默认服务端配置值。可选参数 `--decoded-bytes`、`--encoded-bytes`、`--transfer-bytes` 分别接受同一次请求的 `decodedBodySize`、`encodedBodySize` 和 `transferSize`，便于对照浏览器实测。请在实例没有同时保存设置或预设时运行。
+
+工具只读取指定用户的数据，逐个解析预设文件，结果只包含统计、已知字段名和匿名编号。嵌套 JSON 探测限一层，单项最多 2 MB，累计最多 32 MB。重复文本和预设相同性按实际文本统计，分别索引最多 20,000 个不同指纹。历史类统计只匹配固定键名。
+
 ## 版本更新记录
 
 [查看完整更新记录](CHANGELOG.md)
