@@ -55,7 +55,7 @@ async function fixture(t, previous) {
                     autoConnect:{async start(){state.autoStarts++;await state.autoGate;},stop(){state.autoStops++;}},
                 };
                 return {
-                    ...modules,regexUiAdapter,miniFeatures:new MiniFeatures({modules,regexUiAdapter}),
+                    ...modules,regexUiAdapter,miniFeatures:new MiniFeatures({factories:Object.fromEntries(Object.entries(modules).map(([key,module])=>[key,()=>module])),regexUiAdapter}),
                     interactionOptimizer: {async start() { state.interactionStarts++; await state.interactionGate; }, stop() {}},
                     regexRefresh: {async start() { return true; }, stop() {}},
                     streamingRender: {start() {}, stop() {}},

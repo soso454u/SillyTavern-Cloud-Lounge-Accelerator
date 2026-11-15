@@ -96,48 +96,9 @@ export class TransferTools {
         import('../../../../world-info.js'), import('../../../../preset-manager.js'), import('../../../../popup.js'), import('../../../../openai.js').catch(() => null),
     ]), loadTokenizer = () => import('../../../../tokenizers.js') } = {}) {
         Object.assign(this, { scriptApi, extensionSettings, isGenerating, onRegexSaved, loadApis, loadTokenizer });
-        this.started = false;
+        this.started = true;
         this.generation = 0;
         this.busy = false;
-        this.onClick = this.onClick.bind(this);
-        this.onKey = event => {
-            if (event.target?.closest?.('#cla-transfer-menu') && ['Enter', ' '].includes(event.key)) {
-                event.preventDefault(); this.onClick(event);
-            }
-        };
-    }
-
-    start() {
-        if (this.started) return;
-        this.started = true;
-        document.addEventListener('click', this.onClick);
-        document.addEventListener('keydown', this.onKey);
-        this.observer = new MutationObserver(records => {
-            const menuAdded = records.some(record => {
-                if (!record.addedNodes.length || record.target.closest?.('#chat')) return false;
-                return Array.from(record.addedNodes).some(node =>
-                    node.matches?.('#extensionsMenu') || node.querySelector?.('#extensionsMenu'));
-            });
-            if (menuAdded) this.mount();
-        });
-        this.observer.observe(document.body, { childList: true, subtree: true });
-        this.mount();
-    }
-
-    mount() {
-        if (!this.started || document.getElementById('cla-transfer-menu')) return;
-        const menu = document.getElementById('extensionsMenu');
-        if (!menu) return;
-        const item = node('div', undefined, 'list-group-item flex-container flexGap5 interactable');
-        item.id = 'cla-transfer-menu'; item.tabIndex = 0;
-        item.setAttribute('role', 'button');
-        item.append(node('i', undefined, 'fa-solid fa-copy'), node('span', '条目转移'));
-        menu.append(item);
-        this.menu = item;
-    }
-
-    onClick(event) {
-        if (event.target?.closest?.('#cla-transfer-menu')) { event.preventDefault(); void this.open(); }
     }
 
     async open() {
@@ -153,7 +114,7 @@ export class TransferTools {
             this.createView();
             const popup = new popupApi.Popup(this.view, popupApi.POPUP_TYPE.TEXT, '', {
                 wide: true, large: true, leftAlign: true, okButton: '关闭',
-                onClose: () => { this.nameSelection?.destroy(); this.nameSelection = null; this.dragger?.destroy(); this.dragger = null; this.generation++; this.view = null; this.loadSequence++; this.targetLoadSequence++; },
+                onClose: () => { this.popup = null; this.nameSelection?.destroy(); this.nameSelection = null; this.dragger?.destroy(); this.dragger = null; this.generation++; this.view = null; this.loadSequence++; this.targetLoadSequence++; },
             });
             popup.dlg?.classList.add('cla-transfer-dialog');
             if (popup.buttonControls) this.view.querySelector('.cla-transfer-heading').append(popup.buttonControls);
@@ -161,9 +122,10 @@ export class TransferTools {
             this.chooseKind();
             await popup.show();
         } catch (error) {
-            globalThis.toastr?.error?.(error.message || '转移工具暂时不可用', '云酒馆加速器');
-            this.view = null;
-        } finally { this.opening = false; }
+            if (this.started) globalThis.toastr?.error?.(error.message || '转移工具暂时不可用', '云酒馆加速器');
+        } finally {
+            this.stop();
+        }
     }
 
     createView() {
@@ -840,8 +802,11 @@ export class TransferTools {
             await this.repository.beforeWrite({ kind: ref.kind });
             if (!valid()) return;
             await this.repository.write(ref, next, data);
-            this.selectionFor(side).clear();
-            if (isRegex(ref.kind)) { this.onRegexSaved(); this.refreshButton.hidden = false; }
+            if (isRegex(ref.kind)) this.onRegexSaved();
+            if (this.view === view) {
+                this.selectionFor(side).clear();
+                if (isRegex(ref.kind)) this.refreshButton.hidden = false;
+            }
             if (valid()) { this.busy = false; await this.reloadPanels(`已删除 ${ids.length} 项。`); }
         } catch (error) { if (this.view === view) { this.status.textContent = `删除未完成或未确认：${error.message}`; this.needsReview = true; } }
         finally { this.busy = false; if (this.view === view) this.updateControls(); }
@@ -866,13 +831,16 @@ export class TransferTools {
             const content = node('p', `将选中的 ${job.ids.length} 项${move ? '移动' : '复制'}：\n来源：${source.label}\n目标：${target.label}\n${move ? '目标保存成功后才移除来源。' : '来源内容保留。'}目标已有内容不会被覆盖。`);
             content.style.whiteSpace = 'pre-wrap';
             const confirmed = await this.popupApi.Popup.show.confirm(null, content, { okButton: move ? '移动所选' : '复制所选', cancelButton: '取消' });
-            if (confirmed !== (this.popupApi.POPUP_RESULT?.AFFIRMATIVE ?? 1)) { this.status.textContent = '已取消，所选内容保留。'; return; }
+            if (confirmed !== (this.popupApi.POPUP_RESULT?.AFFIRMATIVE ?? 1)) {
+                if (this.view === view) this.status.textContent = '已取消，所选内容保留。';
+                return;
+            }
             const result = await this.service.execute(job, { move, valid });
             this.saveTransferGroups(job, result);
-            this.selectionFor(side).clear();
-            if (isRegex(kind)) {
-                this.onRegexSaved();
-                this.refreshButton.hidden = false;
+            if (isRegex(kind)) this.onRegexSaved();
+            if (this.view === view) {
+                this.selectionFor(side).clear();
+                if (isRegex(kind)) this.refreshButton.hidden = false;
             }
             const message = `已${result.moved ? '移动' : '复制'} ${result.count} 项到“${target.label}”。`
                 + (isRegex(kind) ? '正则启用权限沿用目标设置；刷新酒馆可更新原生正则列表显示。' : '');
@@ -893,16 +861,13 @@ export class TransferTools {
     }
 
     stop() {
+        if (!this.started) return;
         this.started = false; this.generation++;
         this.nameSelection?.destroy(); this.nameSelection = null;
         this.dragger?.destroy(); this.dragger = null;
         this.closeExpandedEditor?.();
         void this.readerPopup?.complete?.(0);
         void this.editorPopup?.complete?.(0);
-        this.observer?.disconnect(); this.observer = null;
-        document.removeEventListener('click', this.onClick);
-        document.removeEventListener('keydown', this.onKey);
-        this.menu?.remove(); this.menu = null;
         this.view?.remove(); this.view = null;
         void this.popup?.complete?.(0);
         this.popup = null;

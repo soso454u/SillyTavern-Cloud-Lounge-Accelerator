@@ -46,26 +46,52 @@ export class SecretKeyBatchActions {
             return;
         }
         this.started = true;
-        document.addEventListener('click', this.onClick, true);
-        document.addEventListener('change', this.onChange, true);
         this.observer = new MutationObserver(records => {
-            if (this.root && records.some(record => record.removedNodes.length
-                && !record.target.closest?.('#chat')
-                && Array.from(record.removedNodes).some(node => node.contains?.(this.root)))) {
-                this.generation++;
-                this.mode = false;
-                this.selected.clear();
+            const rootRemoved = this.root && records.some(record =>
+                Array.from(record.removedNodes).some(node => node.contains?.(this.root)));
+            const popupAdded = records.some(record => Array.from(record.addedNodes).some(node =>
+                node.matches?.(ROOT) || (node.matches?.('.popup') && node.querySelector(ROOT))));
+            if (rootRemoved || popupAdded) this.bindRoot(rootRemoved);
+        });
+        this.observer.observe(document.body, { childList: true });
+        this.rootObserver = new MutationObserver(records => {
+            if (records.some(record => Array.from(record.removedNodes).includes(this.root))) {
+                // A popup can detach and reinsert its content in one batch.
+                this.bindRoot(true);
+                return;
             }
             if (records.some(record => {
-                if (record.target?.closest?.(`#chat, ${OWN}`)) return false;
-                const nodes = [...record.addedNodes, ...record.removedNodes];
-                if (nodes.length && nodes.every(node => node.matches?.(OWN))) return false;
-                return record.target?.closest?.(ROOT) || nodes.some(node =>
-                    node.matches?.(ROOT) || node.querySelector?.(ROOT));
+                if (record.target.closest?.(OWN)) return false;
+                return [...record.addedNodes, ...record.removedNodes].some(node => !node.matches?.(OWN));
             })) this.scheduleRefresh();
         });
-        this.observer.observe(document.body, { childList: true, subtree: true });
+        this.bindRoot();
+    }
+
+    bindRoot(rootRemoved = false) {
+        const root = Array.from(document.querySelectorAll(ROOT)).at(-1) || null;
+        if (!rootRemoved && root === this.root) return;
+        this.unbindRoot();
+        this.generation++;
+        this.mode = false;
+        this.selected.clear();
+        this.root = root;
+        this.list = this.key = null;
+        if (!root) return;
+        root.addEventListener('click', this.onClick, true);
+        root.addEventListener('change', this.onChange, true);
+        this.rootObserver.observe(root, { childList: true, subtree: true });
+        if (root.parentElement !== document.body) this.rootObserver.observe(root.parentElement, { childList: true });
         this.refresh();
+    }
+
+    unbindRoot() {
+        clearTimeout(this.timer);
+        this.timer = null;
+        this.rootObserver?.disconnect();
+        this.root?.removeEventListener?.('click', this.onClick, true);
+        this.root?.removeEventListener?.('change', this.onChange, true);
+        this.removeUi();
     }
 
     rows() { return [...(this.list?.querySelectorAll(ROW) || [])]; }
@@ -82,7 +108,7 @@ export class SecretKeyBatchActions {
 
     refresh() {
         if (!this.started) return;
-        const root = [...document.querySelectorAll(ROOT)].at(-1) || null;
+        const root = this.root;
         const list = root?.querySelector('.secretKeyManagerList') || null;
         const key = this.getKey(root);
         if (root !== this.root || list !== this.list || key !== this.key) {
@@ -282,13 +308,10 @@ export class SecretKeyBatchActions {
         this.started = false;
         this.generation++;
         this.mode = false;
-        clearTimeout(this.timer);
-        this.timer = null;
         this.observer?.disconnect();
         this.observer = null;
-        document.removeEventListener('click', this.onClick, true);
-        document.removeEventListener('change', this.onChange, true);
-        this.removeUi();
+        this.unbindRoot();
+        this.rootObserver = null;
         this.root = this.list = this.key = null;
         this.selected.clear();
     }

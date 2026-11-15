@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 const {chromium}=createRequire(import.meta.url)('playwright');
-const assets=new Map(await Promise.all(['modules/transfer-tools.js','modules/content-transfer.js','modules/auto-connect.js','utils/transfer-drag.js','utils/press-sweep-selection.js','utils/regex-collections.js','utils/transfer-editor-style.js','utils/transfer-reader-stats.js','style.css'].map(async path=>['/'+path,await readFile(new URL('../'+path,import.meta.url),'utf8')])));
+const assets=new Map(await Promise.all(['modules/transfer-menu.js','modules/transfer-tools.js','modules/content-transfer.js','modules/auto-connect.js','utils/transfer-drag.js','utils/press-sweep-selection.js','utils/regex-collections.js','utils/transfer-editor-style.js','utils/transfer-reader-stats.js','style.css'].map(async path=>['/'+path,await readFile(new URL('../'+path,import.meta.url),'utf8')])));
 const manifest=JSON.parse(await readFile(new URL('../manifest.json',import.meta.url),'utf8'));
 // Emulate a browser with the old unversioned CSS cached. The native manifest
 // loader must request the new versioned URL to get the matching four controls.
@@ -49,10 +49,11 @@ const html=`<!doctype html><meta charset="utf-8"><meta name="viewport" content="
 *{box-sizing:border-box}body{font:15px sans-serif;background:#c8dbea;color:#202c36;--SmartThemeBorderColor:#7895;--SmartThemeBodyColor:#202c36}.menu_button,.text_pole{font:inherit;color:inherit;border:1px solid #9aabb8;border-radius:8px;background:#eff6facc;padding:6px}.fixture-popup{width:680px;max-width:calc(100vw - 20px);max-height:calc(100vh - 24px);overflow:auto;border:1px solid #bccddd;border-radius:18px;background:#e8f1f9;padding:16px}#confirm-transfer{max-width:calc(100vw - 20px);border-radius:12px}dialog::backdrop{background:#1235}.cla-transfer-list{max-height:35vh}.cla-transfer-editor .menu_button{width:1.5em}.cla-transfer-editor{--SmartThemeBlurTintColor:rgba(151,171,191,.2)}.cla-transfer-keywords{display:block}.cla-transfer-keywords textarea{height:180px}dialog:not(.fixture-popup):not(#confirm-transfer){width:fit-content;height:fit-content;max-width:400px;margin:auto;background:white}.fa-eye::before{content:"◉"}#extensionsMenu{padding:12px}.list-group-item{cursor:pointer;padding:8px}
 </style><div id="extensionsMenu"></div><input id="custom_api_url_text" value="https://example.invalid/v1"><select id="chat_completion_source"><option value="custom">custom</option></select><button id="api_button_openai" class="api_button">连接</button><button class="api_loading">取消连接</button>
 <script type="module">
-import{TransferTools}from'/modules/transfer-tools.js';import{AutoConnectController}from'/modules/auto-connect.js';import*as secrets from'/secrets.js';import*as worlds from'/world-info.js';
+import{TransferMenu}from'/modules/transfer-menu.js';import{AutoConnectController}from'/modules/auto-connect.js';import*as secrets from'/secrets.js';import*as worlds from'/world-info.js';
 window.events=new Map();window.scriptApi={main_api:'openai',online_status:'no_connection',this_chid:0,characters:[{avatar:'A.png',name:'角色 A',data:{extensions:{regex_scripts:[]}}},{avatar:'B.png',name:'角色 B',data:{extensions:{regex_scripts:[]}}}],getRequestHeaders:()=>({'Content-Type':'application/json','X-CSRF-Token':'fixture'}),saveSettingsDebounced(){},event_types:{SECRET_ROTATED:'rotate',SECRET_WRITTEN:'write',SECRET_DELETED:'delete',GENERATION_ENDED:'end',GENERATION_STOPPED:'stop'},eventSource:{on:(e,f)=>events.set(e,f),removeListener:e=>events.delete(e)}};
 window.notices=[];window.confirmations=0;window.connects=0;window.toastr=Object.fromEntries(['success','warning','error'].map(level=>[level,message=>notices.push({level,message})]));
-window.tools=new TransferTools({scriptApi,onRegexSaved:()=>window.regexDirty=(window.regexDirty||0)+1});tools.start();
+window.transferMenu=new TransferMenu({scriptApi,onRegexSaved:()=>window.regexDirty=(window.regexDirty||0)+1});transferMenu.start();
+Object.defineProperty(window,'tools',{get:()=>transferMenu.tools});
 window.auto=new AutoConnectController({scriptApi,delay:40});document.querySelector('#api_button_openai').onclick=()=>{connects++;scriptApi.online_status='online'};
 window.rotate=id=>{secrets.rotate(id);scriptApi.online_status='no_connection';events.get('rotate')?.('custom')};
 window.resetWorldCache=()=>worlds.worldInfoCache.clear();await auto.start();window.ready=true;
@@ -82,6 +83,7 @@ try{
  browser=await chromium.launch({headless:true,...(process.env.CLA_BROWSER_EXECUTABLE?{executablePath:process.env.CLA_BROWSER_EXECUTABLE}:{})});
  for(const mobile of [false,true]){
   reset();const page=await browser.newPage({viewport:mobile?{width:390,height:844}:{width:1100,height:900},hasTouch:mobile,isMobile:mobile});const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  const transferRequests=[];page.on('request',request=>{if(new URL(request.url()).pathname==='/modules/transfer-tools.js')transferRequests.push(request.url());});
   await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForFunction(()=>window.ready&&connects===1);
   await page.evaluate(()=>rotate('b'));await page.waitForFunction(()=>connects===2);await page.evaluate(()=>{scriptApi.online_status='no_connection';rotate('c');document.querySelector('.api_loading').click()});await page.waitForTimeout(100);assert.equal(await page.evaluate(()=>connects),2,'manual cancel stops queued auto connect');
   const press=async locator=>{ if(await locator.getAttribute('role')==='checkbox') locator=locator.locator('.cla-transfer-item-name'); return mobile?locator.tap():locator.click(); };const action=name=>page.locator('[data-cla-transfer-action="'+name+'"]');const field=name=>page.locator('[data-cla-transfer-field="'+name+'"]');
@@ -113,7 +115,9 @@ try{
     if(mobile){await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{...start,id:9}]});await page.waitForTimeout(480);for(let i=1;i<=6;i++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:start.x+(end.x-start.x)*i/6,y:start.y+(end.y-start.y)*i/6,id:9}]});await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});}
     else{await page.mouse.move(start.x,start.y);await page.mouse.down();await page.mouse.move(end.x,end.y,{steps:6});await page.mouse.up();}
   };
-  await press(page.locator('#cla-transfer-menu'));await selected('0').waitFor();assert.equal(await page.locator('.cla-transfer-item img').count(),0);
+  assert.equal(transferRequests.length,0,'the wand entry does not download the transfer implementation');
+  await press(page.locator('#cla-transfer-menu'));await selected('0').waitFor();
+  assert.equal(transferRequests.length,1,'the first click loads the transfer implementation once');assert.equal(await page.locator('.cla-transfer-item img').count(),0);
   const layout = await page.locator('.cla-transfer-tool').evaluate(view => {
     const left = view.querySelector('.cla-transfer-source-list');
     const right = view.querySelector('.cla-transfer-target-list');
@@ -305,7 +309,11 @@ await page.screenshot({path:'/private/tmp/cla-world-editor-'+(mobile?'touch':'de
   assert.equal(s.savedPresets.P1.prompt_order[0].order.at(-1).enabled,true);
 
   await page.screenshot({path:'/private/tmp/cla-transfer-'+(mobile?'touch':'desktop')+'.png'});
-  await page.evaluate(()=>{tools.stop();auto.stop()});assert.equal(await page.locator('#cla-transfer-menu,.cla-transfer-tool').count(),0);assert.equal(await page.locator('dialog').count(),0);assert.deepEqual(errors,[]);
+  await press(page.locator('dialog.fixture-popup #fixture-close'));
+  await page.waitForFunction(()=>tools===null);
+  await press(page.locator('#cla-transfer-menu'));await selected('0').waitFor();
+  assert.equal(transferRequests.length,1,'reopening reuses the already loaded module');
+  await page.evaluate(()=>{transferMenu.stop();auto.stop()});assert.equal(await page.locator('#cla-transfer-menu,.cla-transfer-tool').count(),0);assert.equal(await page.locator('dialog').count(),0);assert.deepEqual(errors,[]);
   console.log((mobile?'Touch':'Desktop')+': wand entry, cross-pane mouse/touch and batch drag, canceled/outside drops, world copy/move, character/preset regex copies, partial failure, IDs/metadata, layout, startup/key connection, manual cancel and cleanup passed');await page.close();
  }
 }finally{await browser?.close();await new Promise(resolve=>server.close(resolve))}

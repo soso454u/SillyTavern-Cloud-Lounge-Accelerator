@@ -83,6 +83,7 @@ export class CacheController {
         this.stats = null;
         this.idleHandle = null;
         this.generation = 0;
+        this.pendingMessages = new Set();
     }
 
     isSupported() {
@@ -159,18 +160,34 @@ export class CacheController {
     }
 
     async message(type, payload = {}, timeout = 20000) {
+        const generation = this.generation;
         const registration = await this.findRegistration();
+        if (generation !== this.generation) throw new DOMException('页面缓存操作已取消', 'AbortError');
         if (!registration || !this.isOurs(registration)) throw new Error('页面缓存尚未启用');
         const worker = this.workerFor(registration);
         if (!worker) throw new Error('页面缓存尚未激活');
         return new Promise((resolve, reject) => {
             const channel = new MessageChannel();
-            const timer = setTimeout(() => reject(new Error('页面缓存响应超时')), timeout);
-            channel.port1.onmessage = event => {
+            const finish = (error, result) => {
                 clearTimeout(timer);
-                event.data?.ok ? resolve(event.data) : reject(new Error(event.data?.error || '页面缓存操作失败'));
+                channel.port1.close();
+                this.pendingMessages.delete(cancel);
+                if (error) reject(error);
+                else resolve(result);
             };
-            worker.postMessage({ type, ...payload }, [channel.port2]);
+            const cancel = () => finish(new DOMException('页面缓存操作已取消', 'AbortError'));
+            const timer = setTimeout(() => finish(new Error('页面缓存响应超时')), timeout);
+            this.pendingMessages.add(cancel);
+            channel.port1.onmessage = event => {
+                if (event.data?.ok) finish(null, event.data);
+                else finish(new Error(event.data?.error || '页面缓存操作失败'));
+            };
+            try {
+                worker.postMessage({ type, ...payload }, [channel.port2]);
+            } catch (error) {
+                channel.port2.close();
+                finish(error);
+            }
         });
     }
 
@@ -193,25 +210,32 @@ export class CacheController {
             : CLIENT_VERSION;
     }
 
-    async startAfterLogin({ force = false } = {}) {
+    async startAfterLogin({ force = false, warmup = true } = {}) {
         const generation = ++this.generation;
-        if (!await this.probe({ force })) {
+        const health = await this.probe({ force });
+        if (generation !== this.generation) return null;
+        if (!health) {
             this.onStatus?.('cache', this.state === 'unsupported' ? '需要 HTTPS' : '仅 UI 模式');
             return null;
         }
         if (this.state === 'version-mismatch') {
             await this.retireIncompatibleWorker();
+            if (generation !== this.generation) return null;
             this.onStatus?.('cache', '已停用（服务端需更新）');
             return null;
         }
         if (this.detectIOSStandalone() && this.health?.basicAuthMode === true) {
             await this.retireIncompatibleWorker();
+            if (generation !== this.generation) return null;
             this.state = 'ios-basic-auth';
             this.onStatus?.('cache', '已停用（iOS 主屏幕 + Basic Auth）');
             return null;
         }
-        if (await this.probeNativeHttpCache()) {
+        const nativeCache = await this.probeNativeHttpCache();
+        if (generation !== this.generation) return null;
+        if (nativeCache) {
             await this.retireIncompatibleWorker();
+            if (generation !== this.generation) return null;
             this.state = 'native-http-cache';
             this.onStatus?.('cache', '原生缓存');
             return null;
@@ -222,9 +246,13 @@ export class CacheController {
             return null;
         }
         const signature = this.readVersionSignature();
+        try {
+            await this.message('VERSION_SIGNATURE', { signature });
+        } catch (error) {
+            if (generation === this.generation) throw error;
+        }
         if (generation !== this.generation) return null;
-        await this.message('VERSION_SIGNATURE', { signature });
-        this.scheduleWarmup(signature, force);
+        if (warmup) this.scheduleWarmup(signature, force);
         this.onStatus?.('cache', '正常');
         return this.registration;
     }
@@ -233,13 +261,14 @@ export class CacheController {
         this.cancelWarmup();
         if (!force && localStorage.getItem(WARM_KEY) === signature) return;
         if (document.hidden || !connectionAllowsWarmup(navigator.connection)) return;
+        const generation = this.generation;
         this.idleHandle = requestIdle(async () => {
             this.idleHandle = null;
             try {
                 await this.message('WARM', { urls: this.collectWarmUrls() }, 30000);
-                localStorage.setItem(WARM_KEY, signature);
+                if (generation === this.generation) localStorage.setItem(WARM_KEY, signature);
             } catch (error) {
-                console.debug('[Cloud Lounge Accelerator] 自动预热未完成', error);
+                if (generation === this.generation) console.debug('[Cloud Lounge Accelerator] 自动预热未完成', error);
             }
         }, 2500);
     }
@@ -278,6 +307,7 @@ export class CacheController {
     async stop({ clear = true } = {}) {
         this.generation += 1;
         this.cancelWarmup();
+        for (const cancel of this.pendingMessages) cancel();
         const registration = await this.findRegistration({ refresh: true });
         if (registration && this.isOurs(registration)) await registration.unregister();
         this.registration = undefined;
@@ -288,10 +318,14 @@ export class CacheController {
         this.cancelWarmup();
         await this.stop({ clear: true });
         localStorage.removeItem(WARM_KEY);
-        const registration = await this.startAfterLogin({ force: true });
+        const registration = await this.startAfterLogin({ force: true, warmup: false });
         if (!registration) return { warmed: 0, skipped: true, state: this.state };
+        const generation = this.generation;
         const result = await this.message('WARM', { urls: this.collectWarmUrls() }, 30000);
-        await this.refreshStats();
+        if (generation === this.generation) {
+            localStorage.setItem(WARM_KEY, this.readVersionSignature());
+            await this.refreshStats();
+        }
         return result;
     }
 

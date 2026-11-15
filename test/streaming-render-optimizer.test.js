@@ -201,6 +201,7 @@ test('stop, end and chat switch restore native ownership without delayed DOM wor
         await f.token('preview', 0);
         await f.token('coalesced', 10);
         f.emit(name);
+        assert.equal(f.inputs.size, 0, 'no document input listeners between streams');
         assert.equal(f.processor.onProgressStreaming, f.original);
         assert.equal(Object.hasOwn(f.processor, 'onProgressStreaming'), false);
         await f.processor.finalizeIntermediaryMessage(7, `final after ${name}`);

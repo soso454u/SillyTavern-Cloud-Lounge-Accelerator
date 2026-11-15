@@ -32,3 +32,15 @@ test('coalesces overlapping panel refreshes and never updates a removed panel', 
     await afterRemoval;
     assert.equal(updates, 1);
 });
+
+test('a collapsed panel waits until opening to read status', async () => {
+    let calls = 0;
+    const panel = new SettingsPanel({ getStatus: async () => { calls++; return {}; } });
+    panel.root = { isConnected: true, dataset: {}, querySelector: () => null };
+    panel.drawerIcon = { classList: { contains: name => name === 'down' } };
+
+    await panel.refresh();
+    assert.equal(calls, 0);
+    await panel.refresh({ opening: true });
+    assert.equal(calls, 1);
+});

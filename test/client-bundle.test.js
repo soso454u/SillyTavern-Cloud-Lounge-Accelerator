@@ -27,7 +27,7 @@ async function graph(entry, { staticOnly = false } = {}) {
 test('published client preserves native module locations across bundling', async () => {
     const [source, bundled] = await Promise.all([graph('index.js'), graph('dist/index.js')]);
     assert.deepEqual([...bundled.native].sort(), [...source.native].sort());
-    assert.ok(bundled.own.size <= 3, 'all own modules should fit in entry, shared and deferred bundles');
+    assert.ok(bundled.own.size <= 5, 'keep the split limited to the transfer entry and shared helpers');
 });
 
 test('manifest loads the published bundle and keeps optional runtime off the initial request path', async () => {
@@ -40,4 +40,19 @@ test('manifest loads the published bundle and keeps optional runtime off the ini
     assert.ok(![...own.keys()].some(path => path.includes('deferred-runtime')));
     const entry = own.get(manifest.js);
     for (const hook of Object.values(manifest.hooks)) assert.match(entry, new RegExp(`\\b${hook}\\b`));
+});
+
+test('the ready runtime requests the transfer implementation only through a dynamic import', async () => {
+    const { own: ready } = await graph('modules/deferred-runtime.js', { staticOnly: true });
+    const { own: full } = await graph('modules/deferred-runtime.js');
+    assert.equal(ready.has('modules/transfer-menu.js'), true);
+    assert.equal(ready.has('modules/transfer-tools.js'), false);
+    assert.equal(full.has('modules/transfer-tools.js'), true);
+
+    const { own: output } = await graph('dist/index.js');
+    const deferred = [...output.keys()].find(path => path.startsWith('dist/deferred-runtime-'));
+    const transfer = [...output.keys()].find(path => path.startsWith('dist/transfer-tools-'));
+    assert.ok(deferred && transfer);
+    const { own: readyOutput } = await graph(deferred, { staticOnly: true });
+    assert.equal(readyOutput.has(transfer), false);
 });

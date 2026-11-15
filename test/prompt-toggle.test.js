@@ -336,3 +336,16 @@ test('restores the current row and token display when an instant save fails', as
         else globalThis.Element = originalElement;
     }
 });
+
+test('disabling during the native import prevents late listener registration', async () => {
+    let finishImport;
+    const adapter = new PromptToggleAdapter({
+        importOpenAI: () => new Promise(resolve => { finishImport = resolve; }),
+        documentRef: { addEventListener: () => assert.fail('stopped adapter must not add a listener') },
+    });
+    const starting = adapter.start();
+    adapter.stop();
+    finishImport({});
+    assert.equal(await starting, false);
+    assert.equal(adapter.started, false);
+});

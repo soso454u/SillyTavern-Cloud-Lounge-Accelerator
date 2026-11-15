@@ -1,8 +1,8 @@
 // Convenience tools have independent preferences and do not inherit the three
 // performance switches. Serialize startup; disabling cancels imports at once.
 export class MiniFeatures {
-    constructor({ modules, regexUiAdapter }) {
-        Object.assign(this, { modules, regexUiAdapter }); this.queue = Promise.resolve(); this.generation = 0;
+    constructor({ factories, regexUiAdapter }) {
+        Object.assign(this, { factories, regexUiAdapter }); this.modules = {}; this.queue = Promise.resolve(); this.generation = 0;
     }
     apply(settings) {
         const previous = this.desired;
@@ -12,13 +12,16 @@ export class MiniFeatures {
         const desired = this.desired = { ...settings }, generation = ++this.generation;
         this.stopped = false;
         this.regexUiAdapter.setCollectionsEnabled(desired.regexCollections !== false);
-        for (const [key, module] of Object.entries(this.modules)) if (desired[key] === false) module.stop();
+        for (const [key, module] of Object.entries(this.modules)) {
+            if (desired[key] === false && previous?.[key] !== false) module.stop();
+        }
         const current = () => !this.stopped && this.generation === generation;
         const run = async () => {
             if (!current()) return;
-            for (const [key, module] of Object.entries(this.modules)) {
+            for (const [key, create] of Object.entries(this.factories)) {
                 if (!current()) return;
                 if (desired[key] === false) continue;
+                const module = this.modules[key] ??= create();
                 await module.start();
                 if (!current() && (this.stopped || this.desired[key] === false)) module.stop();
             }
@@ -32,7 +35,7 @@ export class MiniFeatures {
     }
     stop() {
         this.stopped = true; this.generation++;
-        for (const module of Object.values(this.modules).reverse()) module.stop();
+        for (const key of Object.keys(this.factories).reverse()) this.modules[key]?.stop();
         this.regexUiAdapter.stop();
     }
 }

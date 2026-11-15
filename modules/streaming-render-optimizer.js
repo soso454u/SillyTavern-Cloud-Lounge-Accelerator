@@ -52,8 +52,9 @@ export class StreamingRenderOptimizer {
         };
         this.onScroll = event => {
             // Native autoscroll must not put an idle preview in the scroll tier.
+            if (event.target?.id !== 'chat' || !this.scrollingUntil) return;
             const now = this.now();
-            if (event.target?.id === 'chat' && now < this.scrollingUntil) {
+            if (now < this.scrollingUntil) {
                 this.scrollingUntil = Math.min(this.scrollDeadline, now + SCROLL_SETTLE_MS);
             }
         };
@@ -85,9 +86,6 @@ export class StreamingRenderOptimizer {
             if (!name) continue;
             this.eventSource?.on(name, handler);
             this.handlers.push([name, handler]);
-        }
-        for (const [type, handler] of this.inputHandlers()) {
-            this.document?.addEventListener(type, handler, { passive: true, capture: true });
         }
         this.attach();
     }
@@ -131,7 +129,7 @@ export class StreamingRenderOptimizer {
             // Do not retain skipped text/DOM or schedule a delayed replay that
             // could overwrite a final render, tool call, stop or new chat.
             const result = await state.original.apply(this, args);
-            if (preview) {
+            if (preview && optimizer.current === state) {
                 state.messageId = messageId;
                 const finishedAt = optimizer.now();
                 const cost = Math.max(0, finishedAt - now);
@@ -157,6 +155,9 @@ export class StreamingRenderOptimizer {
             return;
         }
         this.current = state;
+        for (const [type, handler] of this.inputHandlers()) {
+            this.document?.addEventListener(type, handler, { passive: true, capture: true });
+        }
     }
 
     detach() {
@@ -166,6 +167,12 @@ export class StreamingRenderOptimizer {
             else delete state.processor.onProgressStreaming;
         }
         this.current = null;
+        if (!state) return;
+        for (const [type, handler] of this.inputHandlers()) this.document?.removeEventListener(type, handler, true);
+        this.touch = null;
+        this.scrollingUntil = 0;
+        this.scrollDeadline = 0;
+        this.interactingUntil = 0;
     }
 
     getReport() {
@@ -178,10 +185,6 @@ export class StreamingRenderOptimizer {
         this.detach();
         for (const [name, handler] of this.handlers) this.eventSource?.removeListener(name, handler);
         this.handlers = [];
-        for (const [type, handler] of this.inputHandlers()) this.document?.removeEventListener(type, handler, true);
-        this.touch = null;
-        this.scrollingUntil = 0;
-        this.scrollDeadline = 0;
-        this.interactingUntil = 0;
+
     }
 }

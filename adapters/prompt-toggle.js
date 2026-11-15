@@ -5,15 +5,19 @@ const TOUCH_CLICK_SUPPRESS_MS = 900;
 const TAP_DISTANCE = 10;
 
 export class PromptToggleAdapter {
-    constructor({ isGenerating = () => false, eventSource, eventTypes, documentRef = globalThis.document }) {
+    constructor({ isGenerating = () => false, eventSource, eventTypes, documentRef = globalThis.document,
+        importOpenAI = () => import('../../../../openai.js') }) {
         this.document = documentRef;
+        this.importOpenAI = importOpenAI;
         this.isGenerating = isGenerating;
         this.eventSource = eventSource;
         this.eventTypes = eventTypes;
         this.openai = null;
         this.started = false;
+        this.generation = 0;
         this.pendingManagers = new Set();
         this.flushTimer = null;
+        this.flushFrame = null;
         this.suppressClickUntil = 0;
         this.suppressedToggle = null;
         this.touchGesture = null;
@@ -27,8 +31,11 @@ export class PromptToggleAdapter {
 
     async start() {
         if (this.started) return true;
+        const generation = ++this.generation;
         try {
-            this.openai = await import('../../../../openai.js');
+            const openai = await this.importOpenAI();
+            if (generation !== this.generation) return false;
+            this.openai = openai;
         } catch (error) {
             console.debug(LOG_PREFIX, '生成期间预设开关适配不可用', error);
             return false;
@@ -188,6 +195,7 @@ export class PromptToggleAdapter {
     }
 
     queueFlush(delay = 80) {
+        if (!this.pendingManagers.size || this.flushFrame !== null) return;
         clearTimeout(this.flushTimer);
         this.flushTimer = setTimeout(() => this.flushWhenUnlocked(), delay);
     }
@@ -199,10 +207,15 @@ export class PromptToggleAdapter {
             this.queueFlush(80);
             return;
         }
-        const managers = [...this.pendingManagers];
-        this.pendingManagers.clear();
-        requestAnimationFrame(() => {
+        this.flushFrame = requestAnimationFrame(() => {
+            this.flushFrame = null;
             if (!this.started) return;
+            if (this.isGenerating?.()) {
+                this.queueFlush();
+                return;
+            }
+            const managers = [...this.pendingManagers];
+            this.pendingManagers.clear();
             for (const manager of managers) {
                 if (typeof manager.renderDebounced === 'function') manager.renderDebounced();
                 else manager.render?.(true);
@@ -211,6 +224,7 @@ export class PromptToggleAdapter {
     }
 
     stop() {
+        this.generation++;
         if (!this.started) return;
         this.started = false;
         this.document.removeEventListener('pointerdown', this.onPointerDown, true);
@@ -223,6 +237,8 @@ export class PromptToggleAdapter {
         }
         clearTimeout(this.flushTimer);
         this.flushTimer = null;
+        if (this.flushFrame !== null) cancelAnimationFrame(this.flushFrame);
+        this.flushFrame = null;
         this.pendingManagers.clear();
         this.suppressClickUntil = 0;
         this.suppressedToggle = null;

@@ -10,7 +10,7 @@ import { RegexUiAdapter } from './regex-ui-adapter.js';
 import { StreamingRenderOptimizer } from './streaming-render-optimizer.js';
 import { ChatHistoryBatchActions } from './chat-history-batch.js';
 import { SecretKeyBatchActions } from './secret-key-batch.js';
-import { TransferTools } from './transfer-tools.js';
+import { TransferMenu } from './transfer-menu.js';
 import { AutoConnectController } from './auto-connect.js';
 export { copyDiagnosticText } from './interaction-diagnostics.js';
 export { repairAccelerator } from './repair.js';
@@ -26,14 +26,14 @@ export function createDeferredRuntime({
     const regexRefresh = new RegexRefreshController({
         chat, eventSource, eventTypes, getCurrentChatId, isGenerating, scheduler, onStatus,
     });
-    const secretKeyBatch = new SecretKeyBatchActions();
     const regexUiAdapter = new RegexUiAdapter({ onSaved: () => regexRefresh.noteChange(), extensionSettings });
-    const transferTools = new TransferTools({ scriptApi, extensionSettings, isGenerating, onRegexSaved: () => regexRefresh.noteChange() });
-    const chatHistoryBatch = new ChatHistoryBatchActions({ scriptApi });
-    const autoConnect = new AutoConnectController({ scriptApi, isGenerating, isSecretBusy: () => secretKeyBatch.busy });
-    const miniFeatures = new MiniFeatures({ regexUiAdapter, modules: {
-        presetEntryActions: new PresetEntryActions({ isGenerating }), presetTokenPreview: new PresetTokenPreview({ sentOptions: { eventSource, eventTypes, getCurrentChatId, getRequestHeaders } }),
-        chatHistoryBatch, secretKeyBatch, transferTools, autoConnect,
+    const miniFeatures = new MiniFeatures({ regexUiAdapter, factories: {
+        presetEntryActions: () => new PresetEntryActions({ isGenerating }),
+        presetTokenPreview: () => new PresetTokenPreview({ sentOptions: { eventSource, eventTypes, getCurrentChatId, getRequestHeaders } }),
+        chatHistoryBatch: () => new ChatHistoryBatchActions({ scriptApi }),
+        secretKeyBatch: () => new SecretKeyBatchActions(),
+        transferTools: () => new TransferMenu({ scriptApi, extensionSettings, isGenerating, onRegexSaved: () => regexRefresh.noteChange() }),
+        autoConnect: () => new AutoConnectController({ scriptApi, isGenerating, isSecretBusy: () => miniFeatures.modules.secretKeyBatch?.busy }),
     } });
     return {
         miniFeatures,
@@ -43,9 +43,5 @@ export function createDeferredRuntime({
         regexRefresh,
         streamingRender: new StreamingRenderOptimizer({ eventSource, eventTypes, getStreamingProcessor }),
         regexUiAdapter,
-        chatHistoryBatch,
-        secretKeyBatch,
-        transferTools,
-        autoConnect,
     };
 }

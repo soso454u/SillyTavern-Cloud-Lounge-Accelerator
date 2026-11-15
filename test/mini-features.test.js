@@ -7,7 +7,7 @@ function fixture(){
  const events=[],modules={};
  for(const key of keys.filter(key=>key!=='regexCollections'))modules[key]={started:false,async start(){if(this.started)return;this.started=true;events.push(key+':start');await this.gate},stop(){this.started=false;events.push(key+':stop')}};
  const regexUiAdapter={started:false,collections:true,setCollectionsEnabled(value){this.collections=value},async start(){this.started=true},stop(){this.started=false}};
- return {events,modules,regexUiAdapter,features:new MiniFeatures({modules,regexUiAdapter})};
+ return {events,modules,regexUiAdapter,features:new MiniFeatures({factories:Object.fromEntries(Object.entries(modules).map(([key, module]) => [key, () => module])),regexUiAdapter})};
 }
 test('all mini features default on, preserve explicit off, and are independent of performance switches',()=>{
  const defaults=normalizeSettings({pageAcceleration:false,chatOptimization:false,interactionOptimization:false});
@@ -42,4 +42,12 @@ test('a newer off preference wins while the previous apply is pending',async()=>
  const f=fixture();let release;f.modules.transferTools.gate=new Promise(resolve=>release=resolve);
  const settings=normalizeSettings({});const first=f.features.apply(settings);await new Promise(resolve=>setImmediate(resolve));const second=f.features.apply({...settings,transferTools:false});release();await Promise.all([first,second]);
  assert.equal(f.modules.transferTools.started,false);assert.equal(f.modules.autoConnect.started,true);
+});
+
+test('disabled tools are not constructed until enabled', async () => {
+    const f = fixture();
+    await f.features.apply(normalizeSettings({ transferTools: false }));
+    assert.equal(Object.hasOwn(f.features.modules, 'transferTools'), false);
+    await f.features.apply(normalizeSettings({ transferTools: true }));
+    assert.equal(f.features.modules.transferTools, f.modules.transferTools);
 });

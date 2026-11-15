@@ -73,8 +73,11 @@ export class PresetTokenPreview {
             }
             this.wrap('renderPromptManagerListItems', async (original, args) => {
                 const result = await original(...args);
-                this.sent?.render();
-                this.schedule(); return result;
+                if (this.started && this.generation === generation) {
+                    this.sent?.render();
+                    this.schedule();
+                }
+                return result;
             });
             for (const type of ['input', 'change']) this.document.addEventListener(type, this.onInput);
             this.document.addEventListener('compositionend', this.onComposition);
@@ -119,7 +122,11 @@ export class PresetTokenPreview {
     schedule() {
         this.revision++;
         clearTimeout(this.timer);
-        if (this.started) this.timer = setTimeout(() => { this.timer = null; void this.refresh(); }, this.delay);
+        this.timer = null;
+        if (this.started && (this.draft || this.tracked.get(this.scope())?.size
+            || this.previewCells.size || this.sent?.snapshot)) {
+            this.timer = setTimeout(() => { this.timer = null; void this.refresh(); }, this.delay);
+        }
     }
 
     async refresh() {

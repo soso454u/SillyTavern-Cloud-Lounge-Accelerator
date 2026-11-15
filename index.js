@@ -245,7 +245,7 @@ async function changeSetting(key, value) {
     const handler = settingHandlers[key];
     settings[key] = value;
     if (handler) await handler(value, getRuntime());
-    if (appReady) await getRuntime().miniFeatures?.apply(settings);
+    if (appReady && (!handler || key === 'chatOptimization')) await getRuntime().miniFeatures?.apply(settings);
     persistSettings();
     await panel?.refresh();
 }

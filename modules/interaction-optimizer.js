@@ -30,11 +30,13 @@ export class InteractionOptimizer {
         this.lastRecovery = null;
         this.recoveryCount = 0;
         this.started = false;
+        this.generation = 0;
     }
 
     async start() {
         if (this.started) return;
         this.started = true;
+        const generation = ++this.generation;
         this.diagnostics.start();
         const presetDragGuardActive = this.presetDragGuard.start();
         restoreNativeInputLayout();
@@ -45,10 +47,7 @@ export class InteractionOptimizer {
             this.inputReveal.start(),
             this.uiRender.start(),
         ]);
-        if (!this.started) {
-            this.stopFeatures();
-            return;
-        }
+        if (!this.started || generation !== this.generation) return;
         this.features = { promptToggleActive, presetDragGuardActive, recoveryGuardActive, mobileGuardActive, inputRevealActive, renderProfile };
         this.emitStatus();
     }

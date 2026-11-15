@@ -209,3 +209,42 @@ test('uses the server app signature without probing the authenticated root page'
     controller.health = {};
     assert.equal(controller.readVersionSignature(), CLIENT_VERSION);
 });
+
+test('stop releases a pending worker message without waiting for its timeout', async () => {
+    const controller = new CacheController();
+    let sent;
+    const requestSent = new Promise(resolve => { sent = resolve; });
+    const worker = {
+        scriptURL: 'https://example.test/api/plugins/cloud-lounge-accelerator/service-worker.js',
+        postMessage(payload, [port]) { port.close(); sent(payload.type); },
+    };
+    controller.findRegistration = async () => ({ active: worker, unregister: async () => {} });
+    const pending = controller.message('WARM');
+    assert.equal(await requestSent, 'WARM');
+    const cancelled = assert.rejects(pending, { name: 'AbortError' });
+    await controller.stop({ clear: false });
+    await cancelled;
+    assert.equal(controller.pendingMessages.size, 0);
+});
+
+test('repair performs one immediate warmup without scheduling an idle one', async t => {
+    const controller = new CacheController({ detectIOSStandalone: () => false });
+    const oldStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { removeItem() {}, setItem() {} } });
+    t.after(() => {
+        if (oldStorage) Object.defineProperty(globalThis, 'localStorage', oldStorage);
+        else delete globalThis.localStorage;
+    });
+    controller.collectWarmUrls = () => ['/style.css'];
+    controller.findRegistration = async () => null;
+    controller.clearOwnCaches = async () => {};
+    controller.probe = async () => ({ ok: true });
+    controller.probeNativeHttpCache = async () => false;
+    controller.register = async () => (controller.registration = {});
+    controller.scheduleWarmup = () => assert.fail('repair already warms immediately');
+    const messages = [];
+    controller.message = async type => { messages.push(type); return { warmed: 1 }; };
+
+    assert.deepEqual(await controller.repair(), { warmed: 1 });
+    assert.deepEqual(messages, ['VERSION_SIGNATURE', 'WARM', 'STATS']);
+});

@@ -20,6 +20,7 @@ export function entryStatus(kind, item) {
 }
 
 export async function countReaderTokens(kind, items, countText, active = () => true) {
+    if (!active()) return new Map();
     const definitions = kind === 'world' ? WORLD_FILTERS : PRESET_FILTERS;
     const groups = new Map(definitions.slice(1).map(([key]) => [key, []]));
     for (const item of items) {

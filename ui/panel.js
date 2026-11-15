@@ -163,6 +163,11 @@ export class SettingsPanel {
         const title = document.createElement('div');
         title.className = 'inline-drawer-toggle inline-drawer-header';
         title.innerHTML = '<b>云酒馆加速器</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>';
+        this.drawerIcon = title.querySelector('.inline-drawer-icon');
+        // SillyTavern toggles the icon in its delegated document click handler.
+        title.addEventListener('click', () => {
+            if (this.drawerIcon?.classList.contains('down')) void this.refresh({ opening: true });
+        });
         const body = document.createElement('div');
         body.className = 'inline-drawer-content';
         const content = document.createElement('div');
@@ -234,12 +239,11 @@ export class SettingsPanel {
         root.append(header);
         host.append(root);
         this.root = root;
-        void this.refresh();
         return true;
     }
 
-    refresh() {
-        if (!this.root) return;
+    refresh({ opening = false } = {}) {
+        if (!this.root || (!opening && this.drawerIcon?.classList.contains('down'))) return;
         if (this.refreshPromise) return this.refreshPromise;
         const root = this.root;
         const promise = this.refreshStatus(root).finally(() => {
@@ -262,6 +266,6 @@ export class SettingsPanel {
 
     remove() {
         this.root?.remove();
-        this.root = null;
+        this.root = this.drawerIcon = this.advanced = this.performance = null;
     }
 }

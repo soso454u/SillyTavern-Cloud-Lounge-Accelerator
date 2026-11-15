@@ -172,10 +172,11 @@ export class RegexUiAdapter {
         }
         this.autoCollapseCollections = true;
         this.started = true;
+        const regexRoot = this.regexRoot = document.getElementById('regex_container');
         document.addEventListener('click', this.onClick, true);
-        document.addEventListener('input', this.onInput, true);
-        document.addEventListener('change', this.onChange, true);
-        document.addEventListener('pointerdown', this.onPointerDown, true);
+        regexRoot?.addEventListener('input', this.onInput, true);
+        regexRoot?.addEventListener('change', this.onChange, true);
+        regexRoot?.addEventListener('pointerdown', this.onPointerDown, true);
         this.observer = new MutationObserver(records => {
             if (this.collectionsEnabled && records.some(record =>
                 record.target !== document.body && mutationAffectsRegexUi(record))) this.scheduleOrganizerRefresh();
@@ -185,7 +186,6 @@ export class RegexUiAdapter {
             if (document.querySelector('.regex_editor')) this.editorContext.opened = true;
             else if (this.editorContext.opened) this.editorContext = null;
         });
-        const regexRoot = document.getElementById('regex_container');
         if (regexRoot) this.observer.observe(regexRoot, { childList: true, subtree: true });
         this.observer.observe(document.body, { childList: true });
         if (this.collectionsEnabled) this.startNameSelection();
@@ -909,6 +909,8 @@ export class RegexUiAdapter {
     onClick(event) {
         if (!this.started || !(event.target instanceof Element)) return;
         const target = event.target;
+        if (this.regexRoot && !this.regexRoot.contains(target)
+            && !target.closest('.popup-button-ok, .cla-regex-organizer-toggle')) return;
         if (target.closest('.cla-regex-cancel-selection')) {
             event.preventDefault(); event.stopImmediatePropagation();
             this.nameSelection?.cancel(); this.finishPointerGesture(false);
@@ -978,6 +980,7 @@ export class RegexUiAdapter {
                     if(this.failedEditorDrafts.get(key)===entry)this.failedEditorDrafts.delete(key);
                 } catch(error) {
                     await entry.closing;
+                    if (!this.started || entry.generation !== this.generation) return;
                     if(!this.failedEditorDrafts.has(key) || this.failedEditorDrafts.get(key)===entry)this.failedEditorDrafts.set(key,entry);
                     this.restoreEditorDraft(entry);
                     throw new Error(`保存失败，草稿已保留；可再次打开该正则继续编辑。${error.message||error}`);
@@ -1005,7 +1008,7 @@ export class RegexUiAdapter {
             void (async () => {
                 try {
                     const confirmed = await this.popupApi.Popup.show.confirm('删除正则', `确定删除选中的 ${labels.length} 条正则吗？`);
-                    if (!confirmed || !this.started) return;
+                    if (!confirmed || this.deletePending !== pending) return;
                     const optimistic=this.detachDeleteRows(labels,contexts);
                     restore();
                     if(this.deletePending===pending)this.deletePending=false;
@@ -1313,7 +1316,7 @@ export class RegexUiAdapter {
         this.editorContext={...context,opened:true};
         this.failedEditorDrafts.delete(this.editorDraftKey(context));
         void popupInstance.show().catch(error=>{
-            this.failedEditorDrafts.set(this.editorDraftKey(context),entry);
+            if (this.started && generation === this.generation) this.failedEditorDrafts.set(this.editorDraftKey(context),entry);
             console.debug('[Cloud Lounge Accelerator] 草稿恢复窗口不可用',error);
         });
         return true;
@@ -1498,10 +1501,12 @@ export class RegexUiAdapter {
         }
         this.orderPreviews.clear();
         this.pendingEditorWrites.clear();
+        this.failedEditorDrafts.clear();
         document.removeEventListener('click', this.onClick, true);
-        document.removeEventListener('input', this.onInput, true);
-        document.removeEventListener('change', this.onChange, true);
-        document.removeEventListener('pointerdown', this.onPointerDown, true);
+        this.regexRoot?.removeEventListener('input', this.onInput, true);
+        this.regexRoot?.removeEventListener('change', this.onChange, true);
+        this.regexRoot?.removeEventListener('pointerdown', this.onPointerDown, true);
+        this.regexRoot = null;
         this.observer?.disconnect();
         this.observer = null;
         clearTimeout(this.organizerTimer);

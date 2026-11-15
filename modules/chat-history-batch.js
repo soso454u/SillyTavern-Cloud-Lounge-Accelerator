@@ -35,7 +35,7 @@ export class ChatHistoryBatchActions {
             if (event.target?.id === 'select_chat_search') {
                 this.generation++;
                 this.selected.clear();
-                this.refresh();
+                this.scheduleRefresh();
             }
         };
         this.onChatChanged = () => { this.generation++; this.mode = false; this.selected.clear(); this.scheduleRefresh(); };
@@ -54,22 +54,40 @@ export class ChatHistoryBatchActions {
             return;
         }
         this.started = true;
-        document.addEventListener('click', this.onClick, true);
-        document.addEventListener('change', this.onChange, true);
-        document.addEventListener('input', this.onInput, true);
+        this.root = document.getElementById('select_chat_popup');
+        this.shadow = document.getElementById('shadow_select_chat_popup') || this.root;
+        if (this.root) {
+            this.visible = getComputedStyle(this.shadow).display !== 'none';
+            this.root.addEventListener('click', this.onClick, true);
+            this.root.addEventListener('change', this.onChange, true);
+            this.root.addEventListener('input', this.onInput, true);
+            this.observer = new MutationObserver(records => {
+                if (records.some(record => record.type === 'attributes' && record.target === this.shadow)) {
+                    const visible = this.shadow.style.display !== 'none';
+                    if (visible !== this.visible) {
+                        this.visible = visible;
+                        if (visible) this.scheduleRefresh();
+                        else {
+                            this.generation++;
+                            this.mode = false;
+                            this.selected.clear();
+                            this.removeUi();
+                            this.scope = null;
+                        }
+                    }
+                }
+                if (this.visible && records.some(record => record.type === 'childList'
+                    && (record.target === this.list || !this.list?.isConnected))) this.scheduleRefresh();
+            });
+            this.observer.observe(this.root, {
+                childList: true,
+                subtree: true,
+                ...(this.shadow === this.root && { attributes: true, attributeFilter: ['style'] }),
+            });
+            if (this.shadow !== this.root) this.observer.observe(this.shadow, { attributes: true, attributeFilter: ['style'] });
+        }
         const event = this.scriptApi.event_types?.CHAT_CHANGED;
         if (event) this.scriptApi.eventSource?.on(event, this.onChatChanged);
-        this.observer = new MutationObserver(records => {
-            if (records.some(record => {
-                const target = record.target;
-                if (target?.closest?.('#chat, .cla-chat-batch-toolbar, .cla-chat-batch-choice')) return false;
-                const nodes = [...record.addedNodes, ...record.removedNodes];
-                if (nodes.length && nodes.every(node => node.matches?.('.cla-chat-batch-toolbar, .cla-chat-batch-choice'))) return false;
-                return target?.closest?.('#select_chat_popup') || nodes.some(node =>
-                    node.matches?.('#select_chat_popup') || node.querySelector?.('#select_chat_popup'));
-            })) this.scheduleRefresh();
-        });
-        this.observer.observe(document.body, { childList: true, subtree: true });
         this.refresh();
     }
 
@@ -96,17 +114,16 @@ export class ChatHistoryBatchActions {
     rows() { return [...(this.list?.querySelectorAll(ROW) || [])]; }
 
     scheduleRefresh() {
-        if (!this.started || this.timer !== null) return;
+        if (!this.started || !this.visible || this.timer !== null) return;
         this.timer = setTimeout(() => { this.timer = null; this.refresh(); }, 0);
     }
 
     refresh() {
-        if (!this.started) return;
-        const root = document.getElementById('select_chat_popup');
+        if (!this.started || !this.visible) return;
+        const root = this.root;
         const list = root?.querySelector('#select_chat_div');
-        if (root !== this.root || list !== this.list) {
+        if (list !== this.list) {
             this.removeUi();
-            this.root = root;
             this.list = list;
             this.mode = false;
             this.selected.clear();
@@ -127,10 +144,11 @@ export class ChatHistoryBatchActions {
             this.toolbar.append(status);
             list.before(this.toolbar);
         }
-        const names = new Set(this.rows().map(row => row.getAttribute('file_name')));
+        const rows = this.rows();
+        const names = new Set(rows.map(row => row.getAttribute('file_name')));
         for (const name of this.selected) if (!names.has(name) || this.isActive(name, scope)) this.selected.delete(name);
         list.classList.toggle('cla-chat-batch-mode', this.mode);
-        for (const row of this.rows()) {
+        for (const row of rows) {
             const name = row.getAttribute('file_name');
             const active = this.isActive(name, scope);
             let label = row.querySelector('.cla-chat-batch-choice');
@@ -312,13 +330,13 @@ export class ChatHistoryBatchActions {
         this.timer = null;
         this.observer?.disconnect();
         this.observer = null;
-        document.removeEventListener('click', this.onClick, true);
-        document.removeEventListener('change', this.onChange, true);
-        document.removeEventListener('input', this.onInput, true);
+        this.root?.removeEventListener('click', this.onClick, true);
+        this.root?.removeEventListener('change', this.onChange, true);
+        this.root?.removeEventListener('input', this.onInput, true);
         const event = this.scriptApi.event_types?.CHAT_CHANGED;
         if (event) this.scriptApi.eventSource?.removeListener(event, this.onChatChanged);
         this.removeUi();
-        this.root = this.list = this.scope = null;
+        this.root = this.shadow = this.list = this.scope = null;
         this.selected.clear();
     }
 }

@@ -21,7 +21,7 @@ const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content
 dialog{max-width:calc(100vw - 32px);border:1px solid #bac3d4;border-radius:14px;padding:20px}dialog::backdrop{background:#0003}
 @media(max-width:600px){#select_chat_popup{inset:8px;padding:10px}}
 </style>
-<div id="select_chat_popup"><div name="selectChatPopupHeader"><div id="selectChatPopupHeaderText">聊天记录</div><button id="newChatFromManageScreenButton" class="menu_button">新聊天</button><button class="menu_button">导入聊天</button><input id="select_chat_search" placeholder="搜索…"><button id="select_chat_cross">×</button></div><div id="select_chat_div"></div></div>
+<div id="shadow_select_chat_popup" style="display:none"><div id="select_chat_popup"><div name="selectChatPopupHeader"><div id="selectChatPopupHeaderText">聊天记录</div><button id="newChatFromManageScreenButton" class="menu_button">新聊天</button><button class="menu_button">导入聊天</button><input id="select_chat_search" placeholder="搜索…"><button id="select_chat_cross">×</button></div><div id="select_chat_div"></div></div></div>
 <script type="module">
 import {ChatHistoryBatchActions} from '/modules/chat-history-batch.js';
 window.calls=[];window.notices=[];window.nativeOpens=0;window.nativeDeletes=0;window.confirms=0;window.failAt=0;
@@ -35,7 +35,7 @@ window.renderRows=(names=['active','one','two','three'])=>{
  const preview=document.createElement('div');preview.className='select_chat_block_mes';preview.textContent='聊天内容预览，用于批量选择的隔离检查。';row.append(title,actions,preview);wrap.append(row);list.append(wrap);}
 };renderRows();
 document.addEventListener('click',event=>{if(event.target.closest('.PastChat_cross'))nativeDeletes++;else if(event.target.closest('.select_chat_block'))nativeOpens++;});
-document.querySelector('#select_chat_cross').onclick=()=>document.querySelector('#select_chat_popup').style.display='none';
+document.querySelector('#select_chat_cross').onclick=()=>document.querySelector('#shadow_select_chat_popup').style.display='none';
 const handlers=new Map();window.deletedEvents=[];
 window.api={characters:[{avatar:'fixture.png',chat:'active'}],this_chid:0,getCurrentChatId:()=>api.characters[api.this_chid]?.chat,getRequestHeaders:()=>({'X-CSRF-Token':'fixture'}),isGenerating:()=>false,
 event_types:{CHAT_CHANGED:'changed',CHAT_DELETED:'deleted',GROUP_CHAT_DELETED:'group-deleted'},eventSource:{on:(n,f)=>handlers.set(n,f),removeListener:n=>handlers.delete(n),emit:async(n,id)=>{deletedEvents.push([n,id]);handlers.get(n)?.();}}};
@@ -65,6 +65,9 @@ try {
         await page.waitForFunction(() => window.ready);
         const press = async locator => mobile ? await locator.tap() : await locator.click();
         const action = name => page.locator('[data-cla-chat-action="' + name + '"]');
+        assert.equal(await page.locator('.cla-chat-batch-toolbar').count(), 0, 'closed native history performs no row decoration');
+        await page.evaluate(() => { document.querySelector('#shadow_select_chat_popup').style.display = 'block'; });
+        await action('toggle').waitFor();
         const row = name => page.locator('.select_chat_block[file_name="' + name + '"]');
         await press(row('one').locator('.select_chat_block_filename'));
         assert.equal(await page.evaluate(() => nativeOpens), 1, 'ordinary native open still works');
@@ -123,6 +126,8 @@ try {
         await press(page.locator('#confirm-delete'));
         await page.waitForFunction(() => !adapter.busy);
         assert.equal(await page.evaluate(() => calls.length), before, 'a changed character invalidates the confirmed queue');
+        await press(page.locator('#select_chat_cross'));
+        await page.locator('.cla-chat-batch-toolbar').waitFor({ state: 'detached' });
         await page.evaluate(() => adapter.stop());
         assert.equal(await page.locator('.cla-chat-batch-toolbar').count(), 0);
         assert.equal(await page.locator('[data-cla-chat-select]').count(), 0);

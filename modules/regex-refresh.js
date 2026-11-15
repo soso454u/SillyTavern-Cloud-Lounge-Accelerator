@@ -114,6 +114,7 @@ export class RegexRefreshController {
     }
 
     queueSnapshotCheck(delay = 400, requestRefresh = false) {
+        if (!this.started) return;
         this.refreshCheckRequested ||= requestRefresh;
         clearTimeout(this.checkTimer);
         this.checkTimer = setTimeout(() => {

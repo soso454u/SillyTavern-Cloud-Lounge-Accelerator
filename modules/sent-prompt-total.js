@@ -21,6 +21,7 @@ export class SentPromptTotal {
     }
 
     start() {
+        if (this.started) return;
         const types = this.eventTypes;
         if (!types?.CHAT_COMPLETION_SETTINGS_READY || !this.eventSource?.on || !this.eventSource.removeListener
             || !this.tokenizerModel || typeof this.fetchTarget.fetch !== 'function') return;
