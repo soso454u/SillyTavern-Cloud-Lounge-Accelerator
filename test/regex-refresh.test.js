@@ -26,7 +26,7 @@ test('stops a queued regex refresh when another chat becomes active', async () =
         chat: [{ mes: 'a' }],
         getCurrentChatId: () => chatId,
         importChatApi: async () => ({ updateMessageBlock: () => { updates += 1; } }),
-        scheduler: { yield: () => new Promise(resolve => { resume = resolve; }) },
+        scheduler: { schedule: callback => new Promise(resolve => { resume = () => resolve(callback(Infinity)); }) },
     });
     controller.getDescriptors = () => [{ messageId: 0, visible: true, complexity: 1 }];
     const pending = controller.reapply();
@@ -59,8 +59,8 @@ test('automatic refresh queries chat once and measures only matched messages', a
     const element = {
         getAttribute: () => '1',
         getBoundingClientRect: () => rect,
-        querySelectorAll: () => [],
-        innerHTML: '<p>needle</p>',
+        querySelectorAll: () => assert.fail('matched message must not need a subtree scan'),
+        get innerHTML() { assert.fail('matched message must not be serialized'); },
     };
     const unrelated = {
         getAttribute: () => '0',
@@ -75,7 +75,7 @@ test('automatic refresh queries chat once and measures only matched messages', a
     const controller = new RegexRefreshController({
         chat: [{ mes: 'other' }, { mes: 'needle' }],
         importChatApi: async () => ({ updateMessageBlock: id => updated.push(id) }),
-        scheduler: { yield: async () => {} },
+        scheduler: { schedule: callback => callback(Infinity) },
     });
     controller.compileRegex = source => new RegExp(source);
     const snapshot = scripts => createRegexSnapshot([{ type: 0, scripts }]);

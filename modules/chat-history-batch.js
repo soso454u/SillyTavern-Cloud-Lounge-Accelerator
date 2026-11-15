@@ -29,6 +29,7 @@ export class ChatHistoryBatchActions {
         this.list = null;
         this.scope = null;
         this.timer = null;
+        this.hasChoices = false;
         this.onClick = this.onClick.bind(this);
         this.onChange = this.onChange.bind(this);
         this.onInput = event => {
@@ -144,15 +145,32 @@ export class ChatHistoryBatchActions {
             this.toolbar.append(status);
             list.before(this.toolbar);
         }
-        const rows = this.rows();
-        const names = new Set(rows.map(row => row.getAttribute('file_name')));
-        for (const name of this.selected) if (!names.has(name) || this.isActive(name, scope)) this.selected.delete(name);
         list.classList.toggle('cla-chat-batch-mode', this.mode);
+        if (this.mode) this.refreshChoices(scope);
+        else this.removeChoices();
+        for (const control of this.toolbar.querySelectorAll('button')) {
+            const action = control.dataset.claChatAction;
+            control.hidden = action !== 'toggle' && !this.mode;
+            control.disabled = this.busy || !scope || (action === 'delete' && !this.selected.size);
+            if (action === 'toggle') control.textContent = this.mode ? '退出批量' : '批量操作';
+            if (action === 'delete') control.textContent = `删除所选（${this.selected.size}）`;
+        }
+        this.toolbar.querySelector('[role="status"]').textContent = this.busy
+            ? this.progress || '等待确认…'
+            : this.mode ? `已选 ${this.selected.size} 条 · 当前聊天受保护，搜索后重新选择` : '';
+    }
+
+    refreshChoices(scope) {
+        const rows = this.rows();
+        if (this.selected.size) {
+            const names = new Set(rows.map(row => row.getAttribute('file_name')));
+            for (const name of this.selected) if (!names.has(name) || this.isActive(name, scope)) this.selected.delete(name);
+        }
         for (const row of rows) {
             const name = row.getAttribute('file_name');
             const active = this.isActive(name, scope);
             let label = row.querySelector('.cla-chat-batch-choice');
-            if (this.mode && !label) {
+            if (!label) {
                 label = document.createElement('label');
                 label.className = 'cla-chat-batch-choice';
                 const input = document.createElement('input');
@@ -164,25 +182,14 @@ export class ChatHistoryBatchActions {
                 label.append(input, hint);
                 row.prepend(label);
             }
-            if (label) {
-                label.hidden = !this.mode;
-                label.title = active ? '当前打开的聊天不参与批量删除，请先切换到其他聊天' : name;
-                label.querySelector('input').checked = this.selected.has(name);
-                label.querySelector('input').disabled = this.busy || active || !scope;
-                label.querySelector('span').textContent = active ? '当前聊天' : '选择';
-            }
-            row.classList.toggle('cla-chat-batch-selected', this.mode && this.selected.has(name));
+            label.title = active ? '当前打开的聊天不参与批量删除，请先切换到其他聊天' : name;
+            const input = label.querySelector('input');
+            input.checked = this.selected.has(name);
+            input.disabled = this.busy || active || !scope;
+            label.querySelector('span').textContent = active ? '当前聊天' : '选择';
+            row.classList.toggle('cla-chat-batch-selected', this.selected.has(name));
         }
-        for (const control of this.toolbar.querySelectorAll('button')) {
-            const action = control.dataset.claChatAction;
-            control.hidden = action !== 'toggle' && !this.mode;
-            control.disabled = this.busy || !scope || (action === 'delete' && !this.selected.size);
-            if (action === 'toggle') control.textContent = this.mode ? '退出批量' : '批量操作';
-            if (action === 'delete') control.textContent = `删除所选（${this.selected.size}）`;
-        }
-        this.toolbar.querySelector('[role="status"]').textContent = this.busy
-            ? this.progress || '等待确认…'
-            : this.mode ? `已选 ${this.selected.size} 条 · 当前聊天受保护，搜索后重新选择` : '';
+        this.hasChoices ||= rows.length > 0;
     }
 
     onClick(event) {
@@ -316,10 +323,16 @@ export class ChatHistoryBatchActions {
         this.toolbar?.remove();
         this.toolbar = null;
         this.list?.classList.remove('cla-chat-batch-mode');
-        for (const row of this.rows()) {
-            row.querySelector('.cla-chat-batch-choice')?.remove();
-            row.classList.remove('cla-chat-batch-selected');
+        this.removeChoices();
+    }
+
+    removeChoices() {
+        if (!this.hasChoices) return;
+        for (const label of this.list?.querySelectorAll('.cla-chat-batch-choice') || []) {
+            label.closest(ROW)?.classList.remove('cla-chat-batch-selected');
+            label.remove();
         }
+        this.hasChoices = false;
     }
 
     stop() {

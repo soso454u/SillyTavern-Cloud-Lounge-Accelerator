@@ -1,4 +1,4 @@
-import { estimateRenderComplexity, getAdaptiveBatchSize, prioritizeMessageDescriptors } from '../client-core.js';
+import { getAdaptiveBatchSize, prioritizeMessageDescriptors } from '../client-core.js';
 import { createRegexSnapshot, diffRegexSnapshots, planRegexRefresh } from './regex-impact.js';
 
 const CONTROL_SELECTOR = [
@@ -182,14 +182,6 @@ export class RegexRefreshController {
         }));
     }
 
-    measureBatchLead({ element }) {
-        return estimateRenderComplexity({
-            domNodes: element.querySelectorAll('*').length,
-            htmlLength: element.innerHTML.length,
-            richElements: element.querySelectorAll('details, table, pre, svg, iframe').length,
-        });
-    }
-
     async reapply({ automatic = false, before = null, after = null } = {}) {
         if (this.refreshing) return { skipped: true };
         if (this.isGenerating()) return { skipped: true };
@@ -244,48 +236,44 @@ export class RegexRefreshController {
             }
             const descriptors = this.getDescriptors(displayed);
             if (!descriptors.length) return { completed: 0, failed: 0, elapsedMs: 0, mode: 'none' };
-            let batch = 4;
+            let batch = 1;
             let previousFrameMs = 0;
             for (let cursor = 0; cursor < descriptors.length;) {
-                await this.scheduler.yield(descriptors[cursor].visible ? 0 : (descriptors[cursor].recent ? 1 : 2), job.signal);
-                if (!isCurrent()) return { cancelled: true, completed, failed };
-                const frameStart = performance.now();
-                const updateEvents = [];
-                batch = getAdaptiveBatchSize({
-                    complexity: this.measureBatchLead(descriptors[cursor]),
-                    previousFrameMs,
-                    currentBatch: batch,
-                });
-                for (let count = 0; cursor < descriptors.length && count < batch; count += 1, cursor += 1) {
-                    const descriptor = descriptors[cursor];
-                    try {
-                        api.updateMessageBlock(descriptor.messageId, this.chat[descriptor.messageId], { rerenderMessage: true });
-                        if (this.eventTypes?.MESSAGE_UPDATED) {
-                            updateEvents.push({
-                                messageId: descriptor.messageId,
-                                promise: Promise.resolve().then(() => this.eventSource?.emit?.(
-                                    this.eventTypes.MESSAGE_UPDATED,
-                                    descriptor.messageId,
-                                )),
-                            });
+                const lead = descriptors[cursor];
+                const priority = lead.visible ? 0 : (lead.recent ? 1 : 2);
+                await this.scheduler.schedule(async deadline => {
+                    const frameStart = performance.now();
+                    const updateEvents = [];
+                    batch = getAdaptiveBatchSize({ previousFrameMs, currentBatch: batch });
+                    for (let count = 0; cursor < descriptors.length && count < batch && isCurrent(); count++) {
+                        const { messageId } = descriptors[cursor++];
+                        if (!this.chat[messageId]) continue;
+                        try {
+                            api.updateMessageBlock(messageId, this.chat[messageId], { rerenderMessage: true });
+                            if (this.eventTypes?.MESSAGE_UPDATED) {
+                                updateEvents.push({
+                                    messageId,
+                                    promise: Promise.resolve().then(() => this.eventSource?.emit?.(
+                                        this.eventTypes.MESSAGE_UPDATED, messageId,
+                                    )),
+                                });
+                            }
+                        } catch (error) {
+                            failed += 1;
+                            console.debug(LOG_PREFIX, '局部刷新消息失败', messageId, error);
                         }
-                    } catch (error) {
+                        completed += 1;
+                        if (performance.now() >= deadline) break;
+                    }
+                    previousFrameMs = performance.now() - frameStart;
+                    const eventResults = await Promise.allSettled(updateEvents.map(item => item.promise));
+                    eventResults.forEach((result, index) => {
+                        if (result.status === 'fulfilled') return;
                         failed += 1;
-                        console.debug(LOG_PREFIX, '局部刷新消息失败', descriptor.messageId, error);
-                    }
-                    completed += 1;
-                    if (performance.now() - frameStart >= 11) {
-                        cursor += 1;
-                        break;
-                    }
-                }
-                const eventResults = await Promise.allSettled(updateEvents.map(item => item.promise));
-                eventResults.forEach((result, index) => {
-                    if (result.status === 'fulfilled') return;
-                    failed += 1;
-                    console.debug(LOG_PREFIX, '消息更新事件失败', updateEvents[index].messageId, result.reason);
-                });
-                previousFrameMs = performance.now() - frameStart;
+                        console.debug(LOG_PREFIX, '消息更新事件失败', updateEvents[index].messageId, result.reason);
+                    });
+                }, { priority, signal: job.signal });
+                if (!isCurrent()) return { cancelled: true, completed, failed };
             }
             this.onStatus?.('chat', failed ? `${failed} 条刷新失败` : '自动');
             return { completed, failed, elapsedMs: performance.now() - startedAt, automatic, ...plan };

@@ -36,13 +36,9 @@ function loadSettings() {
     const previous = extension_settings[MODULE_ID];
     legacyTruncation ??= getLegacyChatTruncation(previous);
     settings = normalizeSettings(previous);
+    // Defaults and normalized plugin options ride along on the next native or
+    // explicit save. Initialization alone must not upload the shared payload.
     extension_settings[MODULE_ID] = settings;
-    // A version-only upgrade must not upload the entire SillyTavern settings payload.
-    const previousKeys = previous && typeof previous === 'object' ? Object.keys(previous) : [];
-    const changed = !previous
-        || Object.entries(settings).some(([key, value]) => key !== 'settingsVersion' && previous[key] !== value)
-        || previousKeys.some(key => key !== 'settingsVersion' && !(key in settings));
-    if (changed) requestSettingsSave();
     return settings;
 }
 
@@ -87,7 +83,7 @@ function createRuntime() {
     });
     return {
         scheduler, chatOptimizer, startupOptimizer,
-        generation: 0, deferredPromise: null, readyStart: null, chatStart: null,
+        generation: 0, deferredPromise: null, readyStart: null, chatStart: null, cacheRefresh: null,
     };
 }
 
@@ -103,7 +99,6 @@ async function loadDeferredRuntime(current) {
             onStatus: updateRuntimeStatus,
         }), {
             SettingsPanel: module.SettingsPanel,
-            copyDiagnosticText: module.copyDiagnosticText,
             repairAccelerator: module.repairAccelerator,
         });
     }).catch(error => {
@@ -135,59 +130,74 @@ async function startEnabledModules({ skipCache = false, forceCache = false } = {
         legacyTruncation = null;
     }
     if (!appReady || !isCurrent()) return;
-    await loadDeferredRuntime(current);
-    if (!isCurrent()) return;
-    if (current.readyStart) {
-        await current.readyStart;
-        if (!forceCache || !isCurrent()) return;
-    }
-    const pending = (async () => {
-        if (settings.interactionOptimization) await current.interactionOptimizer.start();
-        if (!isCurrent()) return;
-        if (settings.chatOptimization) {
-            current.streamingRender.start();
-            await current.regexRefresh.start();
-            if (!isCurrent()) {
-                current.regexRefresh.stop();
-                return;
-            }
-        }
-        await current.miniFeatures?.apply(settings);
-        if (!isCurrent()) { current.miniFeatures?.stop(); return; }
+    const afterFrame = callback => current.scheduler.schedule(() => {
+        if (isCurrent()) return callback();
+    }, { priority: 3 });
+    const startCache = force => afterFrame(async () => {
         if (settings.pageAcceleration && !skipCache) {
             try {
-                await current.cacheController.startAfterLogin({ force: forceCache });
+                await current.cacheController.startAfterLogin({ force });
             } catch (error) {
                 console.debug(LOG_PREFIX, '页面缓存增强未启用', error);
             }
         }
+    });
+    if (current.readyStart) {
+        await current.readyStart;
+        if (!forceCache || skipCache || !isCurrent()) return;
+        current.cacheRefresh ??= startCache(true).finally(() => {
+            if (isCurrent()) current.cacheRefresh = null;
+        });
+        await current.cacheRefresh;
+        return;
+    }
+    const pending = (async () => {
+        await afterFrame(() => loadDeferredRuntime(current));
         if (!isCurrent()) return;
-        ensurePanel();
-        await panel?.refresh();
+        await afterFrame(() => {
+            if (settings.interactionOptimization) return current.interactionOptimizer.start();
+        });
+        if (!isCurrent()) return;
+        await afterFrame(() => {
+            if (!settings.chatOptimization) return;
+            current.streamingRender.start();
+            return current.regexRefresh.start();
+        });
+        if (!isCurrent()) return;
+        await current.miniFeatures.apply(settings, { scheduleStart: afterFrame });
+        if (!isCurrent()) return;
+        await startCache(forceCache);
+        if (!isCurrent()) return;
+        await afterFrame(ensurePanel);
     })();
     current.readyStart = pending;
     try {
         await pending;
-    } finally {
+    } catch (error) {
         if (current.readyStart === pending) current.readyStart = null;
+        throw error;
     }
 }
 
 function scheduleEnabledModules(options) {
-    void startEnabledModules(options).catch(error => console.debug(LOG_PREFIX, '后台优化启动失败', error));
+    void startEnabledModules(options).catch(error => {
+        if (error?.name !== 'AbortError') console.debug(LOG_PREFIX, '后台优化启动失败', error);
+    });
 }
 
 async function stopOptimizationModules({ stopCache = false } = {}) {
     if (!runtime) return;
     runtime.generation += 1;
     runtime.chatStart = null;
+    runtime.readyStart = null;
+    runtime.cacheRefresh = null;
+    runtime.scheduler.cancelAll('优化模块正在重启');
     runtime.miniFeatures?.stop();
     runtime.startupOptimizer.stop();
     runtime.regexRefresh?.stop();
     runtime.streamingRender?.stop();
     await runtime.chatOptimizer.stop();
     runtime.interactionOptimizer?.stop();
-    runtime.scheduler.cancelAll('优化模块正在重启');
     if (stopCache) await runtime.cacheController?.stop({ clear: true });
 }
 
@@ -250,51 +260,6 @@ async function changeSetting(key, value) {
     await panel?.refresh();
 }
 
-async function getPanelStatus() {
-    const { cacheController, interactionOptimizer, performanceConfig, startupOptimizer } = getRuntime();
-    // A confirmed /health 404 means there is no backend /performance route either.
-    const backendMissing = cacheController.backendMissing === true;
-    const unavailablePerformance = {
-        available: false,
-        settings: { keepAlive: null, lazyCharacters: null, chatCompression: null },
-        error: '服务端插件未安装或接口不存在',
-    };
-    const [, performance] = await Promise.all([
-        appReady && cacheController?.state === 'available' ? cacheController.refreshStats() : null,
-        backendMissing ? unavailablePerformance : (appReady ? performanceConfig.refresh() : (performanceConfig.status || { pending: true })),
-    ]);
-    return {
-        ...cacheController?.getStatus(),
-        chat: settings.chatOptimization ? runtimeStatus.chat : '关闭',
-        interaction: settings.interactionOptimization ? runtimeStatus.interaction : '关闭',
-        startupDiagnostic: startupOptimizer.getDiagnosticSummary(),
-        interactionDiagnostic: interactionOptimizer.getDiagnosticSummary(),
-        performance: backendMissing ? performance : (performanceConfig.status || performance),
-    };
-}
-
-async function copyDiagnostics() {
-    const { interactionOptimizer, startupOptimizer, copyDiagnosticText } = getRuntime();
-    const report = {
-        schema: 1,
-        pluginVersion: settings?.settingsVersion || 'unknown',
-        exportedAt: new Date().toISOString(),
-        sillyTavernVersion: document.querySelector('#version_display')?.textContent?.match(
-            /SillyTavern \d+\.\d+\.\d+(?: '[\w./-]{1,48}' \([a-f\d]{4,40}\))?/i,
-        )?.[0] || 'unknown',
-        chatState: {
-            active: getCurrentChatId() != null,
-            messages: chat.length,
-            renderedMessages: document.querySelectorAll('#chat .mes[mesid]').length,
-            generating: Boolean(isGenerating()),
-        },
-        startup: startupOptimizer.getDiagnosticReport(),
-        interaction: interactionOptimizer.getDiagnosticReport(),
-        streaming: getRuntime().streamingRender?.getReport?.() || null,
-    };
-    await copyDiagnosticText(JSON.stringify(report, null, 2));
-}
-
 async function changePerformanceSetting(key, enabled) {
     const { performanceConfig } = getRuntime();
     const result = await performanceConfig.set(key, enabled);
@@ -314,8 +279,8 @@ function mountPanel() {
         onRepair: () => settings.pageAcceleration
             ? repairAccelerator({ cacheController: getRuntime().cacheController, restartModules })
             : restartModules().then(() => ({ warmed: 0 })),
-        onCopyDiagnostics: copyDiagnostics,
-        getStatus: getPanelStatus,
+        onCopyDiagnostics: () => getRuntime().copyDiagnostics(settings),
+        getStatus: () => getRuntime().getPanelStatus(settings, runtimeStatus),
     });
     return panel.mount();
 }

@@ -21,6 +21,35 @@ test('runs higher-priority queued work first', async () => {
     scheduler.destroy();
 });
 
+test('a delayed animation frame leaves remaining background work for the next frame', async t => {
+    let now = 0;
+    t.mock.method(performance, 'now', () => now);
+    const callbacks = [];
+    globalThis.requestAnimationFrame = callback => {
+        callbacks.push(callback);
+        return callbacks.length;
+    };
+    globalThis.cancelAnimationFrame = () => {};
+    const scheduler = new FrameScheduler();
+    t.after(() => scheduler.destroy());
+    const order = [];
+    const background = scheduler.schedule(() => order.push('background'), { priority: 3 });
+    const chat = scheduler.schedule(deadline => {
+        order.push('chat');
+        assert.ok(deadline - now < 5);
+        now += 5;
+    }, { priority: 1 });
+
+    now = 45;
+    callbacks.shift()(45);
+    await chat;
+    assert.deepEqual(order, ['chat']);
+    now = 62;
+    callbacks.shift()(62);
+    await background;
+    assert.deepEqual(order, ['chat', 'background']);
+});
+
 test('calculates a single DOM insertion point from item midpoints', () => {
     const rects = [
         { top: 0, height: 40 },

@@ -70,7 +70,7 @@ export class ChatOptimizer {
         this.highlightPointerId = null;
         this.highlightObserver = null;
         this.codeScanTimer = null;
-        this.codeScanFrame = null;
+        this.codeScanJob = null;
         this.generationEndTimer = null;
         this.touchState = null;
         this.swipeSuppressUntil = 0;
@@ -197,8 +197,8 @@ export class ChatOptimizer {
         this.scanAllCode = false;
         clearTimeout(this.codeScanTimer);
         this.codeScanTimer = null;
-        if (this.codeScanFrame !== null) cancelAnimationFrame(this.codeScanFrame);
-        this.codeScanFrame = null;
+        this.codeScanJob?.abort();
+        this.codeScanJob = null;
     }
 
     resumeCodeObservation() {
@@ -219,13 +219,19 @@ export class ChatOptimizer {
         if (!this.started || this.isGenerating?.()) return;
         this.scanAllCode ||= scanAll;
         if (!this.scanAllCode && !this.deferredHighlights.size) return;
-        if (this.codeScanTimer !== null || this.codeScanFrame !== null) return;
+        if (this.codeScanTimer !== null || this.codeScanJob) return;
         this.codeScanTimer = setTimeout(() => {
             this.codeScanTimer = null;
-            this.codeScanFrame = requestAnimationFrame(() => {
-                this.codeScanFrame = null;
+            const job = this.codeScanJob = new AbortController();
+            void this.scheduler.schedule(deadline => {
                 if (!this.started || this.isGenerating?.() || this.highlightBlocked()) return;
-                this.observeCodeBlocks();
+                this.observeCodeBlocks(deadline);
+            }, { priority: 3, signal: job.signal }).catch(error => {
+                if (error?.name !== 'AbortError') console.debug(LOG_PREFIX, '代码块扫描失败', error);
+            }).finally(() => {
+                if (this.codeScanJob !== job) return;
+                this.codeScanJob = null;
+                if (!this.highlightBlocked()) this.queueCodeScan(0);
             });
         }, delay);
     }
@@ -562,17 +568,17 @@ export class ChatOptimizer {
         pre.addEventListener('click', expand, { once: true });
     }
 
-    observeCodeBlocks() {
+    observeCodeBlocks(deadline) {
         if (this.scanAllCode) {
             this.scanAllCode = false;
             for (const element of this.chatElement?.querySelectorAll(CODE_SELECTOR) || []) {
                 if (!element.dataset.claHighlighted) this.deferHighlight(element);
             }
         }
-        const pending = this.deferredHighlights;
-        this.deferredHighlights = new Map();
-        for (const [element, force] of pending) {
+        for (const [element, force] of this.deferredHighlights) {
+            this.deferredHighlights.delete(element);
             if (this.chatElement?.contains(element)) this.queueHighlight(element, force);
+            if (performance.now() >= deadline) break;
         }
     }
 

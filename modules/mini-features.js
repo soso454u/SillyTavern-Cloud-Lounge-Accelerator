@@ -4,7 +4,7 @@ export class MiniFeatures {
     constructor({ factories, regexUiAdapter }) {
         Object.assign(this, { factories, regexUiAdapter }); this.modules = {}; this.queue = Promise.resolve(); this.generation = 0;
     }
-    apply(settings) {
+    apply(settings, { scheduleStart = callback => callback() } = {}) {
         const previous = this.desired;
         if (previous && (previous.presetEntryActions !== settings.presetEntryActions || previous.presetTokenPreview !== settings.presetTokenPreview)) {
             this.modules.presetTokenPreview?.stop(); this.modules.presetEntryActions?.stop();
@@ -21,14 +21,20 @@ export class MiniFeatures {
             for (const [key, create] of Object.entries(this.factories)) {
                 if (!current()) return;
                 if (desired[key] === false) continue;
-                const module = this.modules[key] ??= create();
-                await module.start();
-                if (!current() && (this.stopped || this.desired[key] === false)) module.stop();
+                await scheduleStart(async () => {
+                    if (!current()) return;
+                    const module = this.modules[key] ??= create();
+                    await module.start();
+                    if (!current() && (this.stopped || this.desired[key] === false)) module.stop();
+                });
             }
             if (!current()) return;
-            if (desired.chatOptimization || desired.regexCollections !== false) await this.regexUiAdapter.start();
-            else this.regexUiAdapter.stop();
-            if (!current() && (this.stopped || (!this.desired.chatOptimization && this.desired.regexCollections === false))) this.regexUiAdapter.stop();
+            await scheduleStart(async () => {
+                if (!current()) return;
+                if (desired.chatOptimization || desired.regexCollections !== false) await this.regexUiAdapter.start();
+                else this.regexUiAdapter.stop();
+                if (!current() && (this.stopped || (!this.desired.chatOptimization && this.desired.regexCollections === false))) this.regexUiAdapter.stop();
+            });
         };
         this.queue = this.queue.then(run, run);
         return this.queue;

@@ -202,3 +202,20 @@ test('stopping during native API import prevents attaching observers or handlers
     assert.equal(f.adapter.started, false);
     assert.equal(f.adapter.observer, null);
 });
+
+test('opening history in regular mode updates the toolbar without scanning native rows', async t => {
+    const { adapter } = fixture(t);
+    adapter.mode = false;
+    adapter.visible = true;
+    adapter.root = { querySelector: () => adapter.list };
+    adapter.list.classList.toggle = () => {};
+    adapter.rows = () => assert.fail('regular history should not scan all rows');
+    const toggle = { dataset: { claChatAction: 'toggle' } };
+    adapter.toolbar = {
+        isConnected: true, querySelectorAll: () => [toggle], querySelector: () => ({}),
+    };
+
+    ChatHistoryBatchActions.prototype.refresh.call(adapter);
+    assert.equal(toggle.disabled, false);
+    assert.equal(toggle.textContent, '批量操作');
+});

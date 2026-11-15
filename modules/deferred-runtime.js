@@ -12,7 +12,7 @@ import { ChatHistoryBatchActions } from './chat-history-batch.js';
 import { SecretKeyBatchActions } from './secret-key-batch.js';
 import { TransferMenu } from './transfer-menu.js';
 import { AutoConnectController } from './auto-connect.js';
-export { copyDiagnosticText } from './interaction-diagnostics.js';
+import { copyDiagnosticText } from './interaction-diagnostics.js';
 export { repairAccelerator } from './repair.js';
 export { SettingsPanel } from '../ui/panel.js';
 
@@ -43,5 +43,45 @@ export function createDeferredRuntime({
         regexRefresh,
         streamingRender: new StreamingRenderOptimizer({ eventSource, eventTypes, getStreamingProcessor }),
         regexUiAdapter,
+        async getPanelStatus(settings, runtimeStatus) {
+            const { cacheController, interactionOptimizer, performanceConfig, startupOptimizer } = this;
+            const backendMissing = cacheController.backendMissing === true;
+            const [, performance] = await Promise.all([
+                cacheController.state === 'available' ? cacheController.refreshStats() : null,
+                backendMissing ? {
+                    available: false,
+                    settings: { keepAlive: null, lazyCharacters: null, chatCompression: null },
+                    error: '服务端插件未安装或接口不存在',
+                } : performanceConfig.refresh(),
+            ]);
+            return {
+                ...cacheController.getStatus(),
+                chat: settings.chatOptimization ? runtimeStatus.chat : '关闭',
+                interaction: settings.interactionOptimization ? runtimeStatus.interaction : '关闭',
+                startupDiagnostic: startupOptimizer.getDiagnosticSummary(),
+                interactionDiagnostic: interactionOptimizer.getDiagnosticSummary(),
+                performance: backendMissing ? performance : (performanceConfig.status || performance),
+            };
+        },
+        async copyDiagnostics(settings) {
+            const report = {
+                schema: 1,
+                pluginVersion: settings.settingsVersion,
+                exportedAt: new Date().toISOString(),
+                sillyTavernVersion: document.querySelector('#version_display')?.textContent?.match(
+                    /SillyTavern \d+\.\d+\.\d+(?: '[\w./-]{1,48}' \([a-f\d]{4,40}\))?/i,
+                )?.[0] || 'unknown',
+                chatState: {
+                    active: getCurrentChatId() != null,
+                    messages: chat.length,
+                    renderedMessages: document.querySelectorAll('#chat .mes[mesid]').length,
+                    generating: Boolean(isGenerating()),
+                },
+                startup: this.startupOptimizer.getDiagnosticReport(),
+                interaction: this.interactionOptimizer.getDiagnosticReport(),
+                streaming: this.streamingRender.getReport(),
+            };
+            await copyDiagnosticText(JSON.stringify(report, null, 2));
+        },
     };
 }

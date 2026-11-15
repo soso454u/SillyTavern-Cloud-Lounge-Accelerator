@@ -10,7 +10,7 @@ const sources = new Map(await Promise.all([
     'index.js', 'client-core.js', 'settings.js', 'ui/panel.js', 'ui/advanced-panel.js',
     'ui/performance-panel.js', 'modules/performance-config.js', 'modules/startup-optimizer.js',
     'utils/device-profile.js', 'modules/deferred-runtime.js', 'modules/startup-diagnostics.js', 'modules/interaction-diagnostics.js', 'modules/ui-render-optimizer.js',
-    'modules/native-input.js', 'modules/interaction-recovery-guard.js',
+    'modules/native-input.js', 'modules/interaction-recovery-guard.js', 'modules/mini-features.js',
 ].map(async path => [`/${path}`, await readFile(new URL(`../${path}`, import.meta.url), 'utf8')])));
 sources.set('/script.js', `
     export const chat = [];
@@ -43,6 +43,9 @@ sources.set('/modules/cache-controller.js', `
 for (const [path, name] of [
     ['chat-optimizer', 'ChatOptimizer'], ['interaction-optimizer', 'InteractionOptimizer'],
     ['regex-refresh', 'RegexRefreshController'], ['regex-ui-adapter', 'RegexUiAdapter'],
+    ['streaming-render-optimizer', 'StreamingRenderOptimizer'], ['preset-entry-actions', 'PresetEntryActions'],
+    ['preset-token-preview', 'PresetTokenPreview'], ['chat-history-batch', 'ChatHistoryBatchActions'],
+    ['secret-key-batch', 'SecretKeyBatchActions'], ['transfer-menu', 'TransferMenu'], ['auto-connect', 'AutoConnectController'],
 ]) {
     sources.set(`/modules/${path}.js`, `
         export class ${name} {
@@ -50,12 +53,13 @@ for (const [path, name] of [
             async start() { for (let i = 0; i < 4; i++) this.onStatus?.('chat', '自动'); return true; }
             getDiagnosticSummary() { return "自动"; }
             getDiagnosticReport() { return {}; }
+            setCollectionsEnabled() {}
             stop() {}
         }
     `);
 }
 sources.set('/modules/repair.js', 'export const repairAccelerator = async () => ({});');
-sources.set('/utils/scheduler.js', 'export class FrameScheduler { cancelAll() {} destroy() {} }');
+sources.set('/utils/scheduler.js', await readFile(new URL('../utils/scheduler.js', import.meta.url), 'utf8'));
 let performanceReads = 0;
 const moduleRequests = [];
 let deferredDelay = 0;
@@ -103,9 +107,13 @@ try {
         const { eventSource } = await import('/script.js');
         eventSource.emit('ready');
     });
+    const panelSelector = '#cloud-lounge-accelerator-settings';
+    await page.locator(panelSelector).waitFor();
+    assert.equal(performanceReads, 0, 'closed settings drawer must leave cloud settings unread');
+    await page.locator(`${panelSelector} .inline-drawer-toggle`).click();
     await page.waitForFunction(() => document.querySelector('[data-cla-performance="lazyCharacters"]')?.disabled === false);
-    assert.equal(performanceReads, 1, 'startup status bursts must share one cloud-settings read');
-    assert.equal(await page.evaluate(() => window.settingsSaves), 1, 'flush one pending migration after readiness');
+    assert.equal(performanceReads, 1, 'opening the drawer must request cloud settings once');
+    assert.equal(await page.evaluate(() => window.settingsSaves || 0), 0, 'default initialization must not upload the shared settings');
     assert.equal(moduleRequests.filter(path => path === '/modules/deferred-runtime.js').length, 1);
     assert.equal(await page.locator('[data-cla-performance="lazyCharacters"]').isChecked(), true);
     const panel = await page.locator('#cloud-lounge-accelerator-settings').elementHandle();

@@ -76,7 +76,7 @@ try{
         await page.waitForFunction(()=>late.dataset.claHighlighted==='1');
         await page.evaluate(async()=>{
             window.popupScans=0;const old=guard.scheduleScan.bind(guard);guard.scheduleScan=()=>{popupScans++;old();};
-            window.codeScans=0;const scan=optimizer.observeCodeBlocks.bind(optimizer);optimizer.observeCodeBlocks=()=>{codeScans++;scan();};
+            window.codeScans=0;const scan=optimizer.observeCodeBlocks.bind(optimizer);optimizer.observeCodeBlocks=deadline=>{codeScans++;scan(deadline);};
             generating=true;emit('start');
             const tail=document.querySelector('.mes:last-child .mes_text');
             for(let i=0;i<25;i++){tail.innerHTML='<p>'+Array.from({length:120},(_,n)=>'<span class="text_segment">'+n+'</span>').join('')+'</p>';await new Promise(requestAnimationFrame);}

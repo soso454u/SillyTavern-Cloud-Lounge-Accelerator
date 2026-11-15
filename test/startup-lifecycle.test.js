@@ -40,7 +40,14 @@ async function fixture(t, previous) {
             }
         `),
         './modules/startup-optimizer.js': stub(`export class StartupOptimizer { start() {} stop() {} }`),
-        './utils/scheduler.js': stub(`export class FrameScheduler {cancelAll() {} destroy() {}}`),
+        './utils/scheduler.js': stub(`
+            const {state} = globalThis.__claStartup;
+            export class FrameScheduler {
+                schedule(callback) { return Promise.resolve(state.frameGate).then(callback); }
+                cancelAll() {}
+                destroy() {}
+            }
+        `),
         './modules/deferred-runtime.js': stub(`
             const {state} = globalThis.__claStartup;
             state.deferredLoads++;
@@ -84,7 +91,7 @@ const oldSettings = {
     autoConnect: true, chatPageSize: 5, settingsVersion: '2.1.30',
 };
 
-test('activation and SETTINGS_LOADED leave optional downloads and settings uploads until APP_READY', async t => {
+test('activation avoids settings uploads and waits for a scheduled frame after APP_READY', async t => {
     const {plugin, state, events} = await fixture(t);
     plugin.onActivate();
     assert.equal(state.saves, 0);
@@ -97,14 +104,19 @@ test('activation and SETTINGS_LOADED leave optional downloads and settings uploa
     assert.equal(state.interactionStarts, 0);
     assert.equal(state.batchStarts, 0);
     assert.equal(state.saves, 0);
+    let allowFrame;
+    state.frameGate = new Promise(resolve => { allowFrame = resolve; });
     events.emit('ready');
+    await tick();
+    assert.equal(state.deferredLoads, 0);
+    allowFrame();
     await tick();
     assert.equal(state.deferredLoads, 1);
     assert.equal(state.cacheStarts, 1);
     assert.equal(state.panels, 1);
     assert.equal(state.batchStarts, 1);
     assert.equal(state.secretStarts, 1);
-    assert.equal(state.saves, 1);
+    assert.equal(state.saves, 0);
 });
 
 test('version-only upgrades do not request a full settings upload', async t => {
@@ -132,6 +144,11 @@ test('overlapping settings and ready events share a pending chat start and optio
     assert.equal(state.interactionStarts, 1);
     releaseInteraction();
     await tick();
+    assert.equal(state.cacheStarts, 1);
+    plugin.onActivate();
+    await tick();
+    assert.equal(state.interactionStarts, 1);
+    assert.equal(state.batchStarts, 1);
     assert.equal(state.cacheStarts, 1);
 });
 
