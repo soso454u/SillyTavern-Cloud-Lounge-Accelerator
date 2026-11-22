@@ -179,3 +179,42 @@ test('collection title sorting persists only display order, including empty grou
     assert.throws(()=>f.adapter.moveCollection(scope,'A','B',false,'stale'),/已切换/);
     assert.equal(f.settingSaves,saves);
 });
+
+test('one-click organization uses the configured collection order and preserves rule order within each collection', async t => {
+    const f = fixture(t);
+    f.adapter.saveCollectionState('PRESET', { groups: [], assignments: { c0: 'B' }, order: ['B', 'A'] });
+    f.adapter.engine.getScriptsByType = scope => scope === 'PRESET' ? f.data.PRESET : [];
+    const repository = { async write(ref, next, expected) {
+        assert.equal(ref.name, 'p1');
+        assert.deepEqual(expected, f.initial.PRESET);
+        f.data.PRESET = next;
+    } };
+    const plans = f.adapter.getOrganizePlans();
+    assert.deepEqual(plans.map(plan => plan.scope), ['PRESET']);
+    await f.adapter.saveOrganizedRules(plans, repository, () => true);
+    const expectedIds = ['b0', 'c0', 'a0', 'a1', 'a2', 'a3'];
+    assert.deepEqual(f.data.PRESET, expectedIds.map(id => f.initial.PRESET.find(rule => rule.id === id)));
+    assert.deepEqual(f.lists.saved_preset_scripts.children.map(row => row.id), expectedIds);
+    assert.equal(f.adapter.getAssignedCollection('PRESET', 'c0', '[C] c0'), 'B');
+    assert.deepEqual(f.adapter.getOrganizePlans(), []);
+    assert.equal(f.changes, 1);
+});
+
+test('one-click organization skips a changed scope and leaves a failed scope visually intact', async t => {
+    const f = fixture(t);
+    const plans = f.adapter.getOrganizePlans();
+    const writes = [];
+    f.state.preset = 'p2';
+    const repository = { async write(ref, next) {
+        writes.push(ref.kind);
+        if (ref.kind === 'global') throw new Error('settings rejected');
+        f.data.SCOPED = next;
+    } };
+    await assert.rejects(f.adapter.saveOrganizedRules(plans, repository, () => true),
+        /已整理 1 个范围.*全局正则.*预设正则/);
+    assert.deepEqual(writes, ['global', 'character']);
+    assert.deepEqual(f.lists.saved_regex_scripts.children.map(row => row.id), f.initial.GLOBAL.map(row => row.id));
+    assert.deepEqual(f.lists.saved_preset_scripts.children.map(row => row.id), f.initial.PRESET.map(row => row.id));
+    assert.deepEqual(f.lists.saved_scoped_scripts.children.map(row => row.id), ['a0', 'a1', 'a2', 'a3', 'b0', 'c0']);
+    assert.equal(f.changes, 1);
+});

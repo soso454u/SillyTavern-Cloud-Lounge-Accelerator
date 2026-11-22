@@ -256,6 +256,7 @@ export class RegexUiAdapter {
         this.clearRowSelection();
         this.cancelSelectionButton?.remove(); this.cancelSelectionButton = null;
         this.reorderButton?.remove(); this.reorderButton = null;
+        this.organizeButton?.remove(); this.organizeButton = null;
         document.querySelectorAll('[data-cla-regex-scope-actions]').forEach(node => node.remove());
         this.clearCollectionFolds();
         for (const row of this.getRows()) {
@@ -604,6 +605,78 @@ export class RegexUiAdapter {
         }
     }
 
+    getOrganizePlans() {
+        const plans = [];
+        for (const scope of Object.keys(SCOPE_NAMES)) {
+            const context = this.getCollectionContext(scope);
+            const type = this.getType(scope);
+            if (!context || type === undefined) continue;
+            const current = this.engine.getScriptsByType(type) || [];
+            const groups = new Map();
+            current.forEach((script, index) => {
+                const name = this.getAssignedCollection(scope, String(script.id), script.scriptName);
+                if (!groups.has(name)) groups.set(name, []);
+                groups.get(name).push(index);
+            });
+            const order = this.getOrderedCollections(scope, groups.keys()).flatMap(name => groups.get(name));
+            if (order.some((original, index) => original !== index)) {
+                plans.push({ scope, context, type, order, snapshot: JSON.stringify(current) });
+            }
+        }
+        return plans;
+    }
+
+    requestOrganizeRules(button) {
+        if (button.disabled || !this.started || !this.collectionsEnabled) return;
+        const restore = this.lockButton(button);
+        const generation = this.generation;
+        const active = () => this.started && this.collectionsEnabled && generation === this.generation;
+        void this.enqueue(async () => {
+            if (!active()) return;
+            const plans = this.getOrganizePlans();
+            if (!plans.length) {
+                globalThis.toastr?.info?.('同合集的正则已排在一起', '一键整理');
+                return;
+            }
+            const scopes = plans.map(({ scope }) => SCOPE_NAMES[scope]).join('、');
+            const confirmed = await this.popupApi.Popup.show.confirm('按合集整理正则',
+                `将整理${scopes}的执行顺序。同一合集的规则会排在一起，组内顺序会保留。跨合集的执行先后可能变化。`,
+                { okButton: '整理并保存', cancelButton: '取消' });
+            if (!confirmed || !active()) return;
+            const { service } = await this.loadScopeMove();
+            await this.saveOrganizedRules(plans, service.repository, active);
+        }).finally(restore);
+    }
+
+    async saveOrganizedRules(plans, repository, active) {
+        let completed = 0;
+        const failures = [];
+        for (const { scope, context, type, order, snapshot } of plans) {
+            if (!active()) break;
+            try {
+                const current = this.engine.getScriptsByType(type) || [];
+                if (context !== this.getCollectionContext(scope) || JSON.stringify(current) !== snapshot) {
+                    throw new Error('列表已变化，请重新整理');
+                }
+                const expected = JSON.parse(snapshot);
+                const next = order.map(index => expected[index]);
+                await repository.write(getTransferRef(context), next, expected);
+                completed++;
+                if (active() && context === this.getCollectionContext(scope)) {
+                    this.syncRuleRows(scope, this.engine.getScriptsByType(type) || [], { refresh: false });
+                }
+            } catch (error) {
+                failures.push(`${SCOPE_NAMES[scope]}${error.message ? `（${error.message}）` : ''}`);
+            }
+        }
+        if (completed && active()) {
+            this.refreshOrganizerRows();
+            this.onSaved?.();
+        }
+        if (failures.length) throw new Error(`已整理 ${completed} 个范围。未确认保存的范围：${failures.join('、')}`);
+        if (completed && active()) globalThis.toastr?.success?.(`已整理 ${completed} 个范围的正则`, '一键整理');
+    }
+
     createReorderButton() {
         const button = document.createElement('button');
         button.type = 'button';
@@ -626,6 +699,13 @@ export class RegexUiAdapter {
         if (!this.reorderButton?.isConnected && primaryActions) {
             this.reorderButton = this.createReorderButton();
             primaryActions.append(this.reorderButton);
+        }
+        if (!this.organizeButton?.isConnected && primaryActions) {
+            const button = createRegexAction('按合集整理原始顺序', 'fa-layer-group', 'menu_button cla-regex-organize-order');
+            button.append('一键整理');
+            button.addEventListener('click', () => this.requestOrganizeRules(button));
+            this.reorderButton.after(button);
+            this.organizeButton = button;
         }
         if (!this.cancelSelectionButton?.isConnected && primaryActions) {
             const button = document.createElement('button');
@@ -727,6 +807,7 @@ export class RegexUiAdapter {
             this.reorderButton.textContent = this.reorderMode ? '返回合集' : '查看原始顺序';
             this.reorderButton.setAttribute('aria-pressed', String(this.reorderMode));
         }
+        if (this.organizeButton) this.organizeButton.hidden = grouped;
         if (!grouped) return;
 
         let order = 0;
@@ -1949,6 +2030,8 @@ export class RegexUiAdapter {
         this.organizerButton?.remove?.();
         document.querySelectorAll('[data-cla-regex-scope-actions]').forEach(actions => actions.remove());
         this.reorderButton?.remove?.();
+        this.organizeButton?.remove();
+        this.organizeButton = null;
         this.clearCollectionFolds();
         this.organizerRoot?.remove?.();
         this.organizerButton = null;

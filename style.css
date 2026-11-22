@@ -197,8 +197,16 @@
 
 #regex_container .regex-script-label[hidden],
 #regex_container .cla-regex-collection-header[hidden],
-.cla-regex-reorder-toggle[hidden] {
+.cla-regex-reorder-toggle[hidden],
+.cla-regex-organize-order[hidden] {
     display: none !important;
+}
+
+#regex_container .cla-regex-organize-order {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    font-size: 0.875em;
 }
 
 #regex_container .cla-regex-grouped-list {
