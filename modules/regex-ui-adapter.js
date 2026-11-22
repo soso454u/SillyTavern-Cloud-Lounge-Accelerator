@@ -9,8 +9,21 @@ const TYPE_BY_LIST_ID = Object.freeze({
 const REGEX_LIST_SELECTOR = '#saved_regex_scripts, #saved_scoped_scripts, #saved_preset_scripts';
 const REGEX_ROW_SELECTOR = `${REGEX_LIST_SELECTOR.split(', ').map(selector => `${selector} .regex-script-label`).join(', ')}`;
 const UNGROUPED_COLLECTION = '未分类';
+const SCOPE_NAMES = { GLOBAL: '全局正则', PRESET: '预设正则', SCOPED: '局部正则' };
+const SCOPE_BY_BLOCK_ID = { global_scripts_block: 'GLOBAL', preset_scripts_block: 'PRESET', scoped_scripts_block: 'SCOPED' };
+const SCOPE_DROP_SELECTOR = [
+    '[data-cla-regex-drop-scope]', '[data-cla-regex-scope-actions]', '.regex-script-label[data-cla-regex-scope]',
+    REGEX_LIST_SELECTOR, ...Object.keys(SCOPE_BY_BLOCK_ID).map(id => `#${id}`),
+].join(', ');
 const AUTO_COLLAPSE_STORAGE_KEY = 'cloud-lounge-accelerator:regex-auto-collapse';
 const COLLECTION_SETTINGS_KEY = 'cloud_lounge_accelerator_regex_collections';
+
+function getTransferRef(context) {
+    const [scope, id, name] = JSON.parse(context);
+    if (scope === 'GLOBAL') return { kind: 'global', id: 'global' };
+    if (scope === 'SCOPED') return { kind: 'character', id, avatar: id };
+    return { kind: 'preset', id: JSON.stringify([id, name]), apiId: id, name };
+}
 
 export function normalizeRegexCollectionName(value) {
     const name = String(value || '').trim();
@@ -669,7 +682,7 @@ export class RegexUiAdapter {
                 handle.type = 'button';
                 handle.className = 'cla-regex-group-handle';
                 handle.textContent = '⠿';
-                handle.title = '同组拖动排序，拖到合集归组；勾选后可一起拖动';
+                handle.title = '拖动排序、归组或移到其他范围；勾选后可一起拖动';
                 handle.setAttribute('aria-label', '拖动排序或归组');
                 label.before(handle);
             }
@@ -745,7 +758,7 @@ export class RegexUiAdapter {
                 orderHandle.type = 'button';
                 orderHandle.className = 'cla-regex-collection-order-handle';
                 orderHandle.textContent = '⠿';
-                orderHandle.title = '拖动调整合集位置';
+                orderHandle.title = '拖动调整合集位置，或把整个合集移到其他范围';
                 orderHandle.setAttribute('aria-label', `拖动调整合集位置：${collection}`);
                 const toggle = document.createElement('button');
                 toggle.type = 'button';
@@ -1201,6 +1214,7 @@ export class RegexUiAdapter {
             if (!scope || header.hidden) return;
             this.groupDrag = { kind: 'collection', pointerId: event.pointerId, source: collectionHandle, scope,
                 context: this.getCollectionContext(scope), collection: header.dataset.claRegexFold, header, rows: [],
+                dropContexts: this.getScopeDropContexts(scope),
                 x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, active: false, target: null,
                 scroller: this.findGestureScroller(header) };
             this.listenForPointerGesture();
@@ -1218,6 +1232,7 @@ export class RegexUiAdapter {
             const rows = selected ? this.getRows().filter(item => getTypeKey(item) === scope && item.querySelector('.regex_bulk_checkbox')?.checked) : [row];
             this.groupDrag = { pointerId: event.pointerId, source: handle, scope, context: this.getCollectionContext(scope), rows,
                 collection: row.dataset.claRegexCollection,
+                dropContexts: this.getScopeDropContexts(scope),
                 x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, active: false, target: null };
             this.groupDrag.scroller = this.findGestureScroller(row);
             this.listenForPointerGesture();
@@ -1227,6 +1242,16 @@ export class RegexUiAdapter {
             return;
         }
 
+    }
+
+    getScopeDropContexts(source) {
+        const contexts = new Map();
+        for (const scope of Object.keys(SCOPE_NAMES)) {
+            if (scope === source) continue;
+            const key = this.getCollectionContext(scope);
+            if (key) contexts.set(scope, key);
+        }
+        return contexts;
     }
 
     listenForPointerGesture() {
@@ -1278,37 +1303,28 @@ export class RegexUiAdapter {
             const drag = this.groupDrag;
             if (!drag.source.isConnected || drag.context !== this.getCollectionContext(drag.scope)) { this.finishPointerGesture(false); return; }
             if (!drag.active && Math.hypot(drag.x - drag.startX, drag.y - drag.startY) < 5) return;
+            if (!drag.active) this.activateRegexDrag(drag);
+            const hit = document.elementFromPoint(drag.x, drag.y);
+            const scopeTarget = hit?.closest?.(SCOPE_DROP_SELECTOR);
+            const scope = scopeTarget && (scopeTarget.dataset.claRegexDropScope || scopeTarget.dataset.claRegexScopeActions
+                || scopeTarget.dataset.claRegexScope || TYPE_BY_LIST_ID[scopeTarget.id] || SCOPE_BY_BLOCK_ID[scopeTarget.id]);
+            const targetKey = drag.dropContexts.get(scope);
+            drag.transfer = targetKey && targetKey === this.getCollectionContext(scope) ? {
+                targetScope: scope, targetKey,
+                targetCollection: scopeTarget.dataset.claRegexDropCollection ?? scopeTarget.dataset.claRegexCollection,
+            } : null;
+            if (drag.transfer) {
+                this.setSortTarget(drag, null);
+                this.setDropTarget(drag, scopeTarget);
+                return;
+            }
             if (drag.kind === 'collection') {
-                drag.active = true;
-                drag.header.classList.add('cla-regex-group-dragging');
-                const target = document.elementFromPoint(drag.x, drag.y)?.closest?.('[data-cla-regex-fold]');
+                const target = hit?.closest?.('[data-cla-regex-fold]');
                 const valid = target?.dataset.claRegexDropScope === drag.scope && target !== drag.header && !target.hidden;
+                this.setDropTarget(drag, null);
                 this.setSortTarget(drag, valid ? target : null);
                 return;
             }
-            if (!drag.active) {
-                drag.active = true;
-                const tray = document.createElement('div');
-                tray.className = 'cla-regex-drop-tray';
-                const label = document.createElement('strong');
-                label.textContent = `拖动 ${drag.rows.length} 条：同组排序，拖到合集归组`;
-                tray.append(label);
-                for (const name of new Set([UNGROUPED_COLLECTION, ...this.getScopeCollections(drag.scope)])) {
-                    const target = document.createElement('button');
-                    target.type = 'button';
-                    target.textContent = name;
-                    target.dataset.claRegexDropCollection = name;
-                    target.dataset.claRegexDropScope = drag.scope;
-                    tray.append(target);
-                }
-                const bounds = document.querySelector('#regex_container').getBoundingClientRect();
-                Object.assign(tray.style, { left: `${Math.max(8, bounds.left)}px`, top: '8px',
-                    width: `${Math.min(bounds.width, innerWidth - Math.max(8, bounds.left) - 8)}px` });
-                document.body.append(tray);
-                drag.tray = tray;
-                drag.rows.forEach(row => row.classList.add('cla-regex-group-dragging'));
-            }
-            const hit = document.elementFromPoint(drag.x, drag.y);
             const target = hit?.closest?.('[data-cla-regex-drop-collection]');
             const valid = target?.dataset.claRegexDropScope === drag.scope ? target : null;
             const row = hit?.closest?.('.regex-script-label');
@@ -1316,11 +1332,7 @@ export class RegexUiAdapter {
                 && row?.dataset.claRegexScope === drag.scope && row.dataset.claRegexCollection === drag.collection
                 && !drag.rows.includes(row) && drag.rows.every(member => member.dataset.claRegexCollection === drag.collection);
             this.setSortTarget(drag, canSort && !valid ? row : null);
-            if (drag.target !== valid) {
-                drag.target?.classList.remove('cla-regex-drop-active');
-                drag.target = valid;
-                valid?.classList.add('cla-regex-drop-active');
-            }
+            this.setDropTarget(drag, valid);
             return;
         }
         const gesture = this.selectionGesture;
@@ -1343,6 +1355,51 @@ export class RegexUiAdapter {
             gesture.changed = null;
         }
         this.updateOrganizerCount();
+    }
+
+    activateRegexDrag(drag) {
+        drag.active = true;
+        drag.header?.classList.add('cla-regex-group-dragging');
+        drag.rows.forEach(row => row.classList.add('cla-regex-group-dragging'));
+        if (drag.kind === 'collection' && !drag.dropContexts.size) return;
+
+        const tray = document.createElement('div');
+        tray.className = 'cla-regex-drop-tray';
+        const label = document.createElement('strong');
+        label.textContent = drag.kind === 'collection'
+            ? '拖动整个合集' : `拖动 ${drag.rows.length} 条：同组排序，拖到合集归组`;
+        tray.append(label);
+        for (const [scope, key] of drag.dropContexts) {
+            const target = document.createElement('button');
+            target.type = 'button';
+            target.className = 'cla-regex-drop-scope';
+            target.textContent = `移到${SCOPE_NAMES[scope]}`;
+            if (scope === 'PRESET') target.title = JSON.parse(key)[2];
+            target.dataset.claRegexDropScope = scope;
+            tray.append(target);
+        }
+        if (drag.kind !== 'collection') {
+            for (const name of new Set([UNGROUPED_COLLECTION, ...this.getScopeCollections(drag.scope)])) {
+                const target = document.createElement('button');
+                target.type = 'button';
+                target.textContent = name;
+                target.dataset.claRegexDropCollection = name;
+                target.dataset.claRegexDropScope = drag.scope;
+                tray.append(target);
+            }
+        }
+        const bounds = this.regexRoot.getBoundingClientRect();
+        const left = Math.max(8, bounds.left);
+        Object.assign(tray.style, { left: `${left}px`, top: '8px', width: `${Math.min(bounds.width, innerWidth - left - 8)}px` });
+        document.body.append(tray);
+        drag.tray = tray;
+    }
+
+    setDropTarget(drag, target) {
+        if (drag.target === target) return;
+        drag.target?.classList.remove('cla-regex-drop-active');
+        drag.target = target;
+        target?.classList.add('cla-regex-drop-active');
     }
 
     setSortTarget(drag, row) {
@@ -1389,7 +1446,13 @@ export class RegexUiAdapter {
             drag.rows.forEach(row => row.classList.remove('cla-regex-group-dragging'));
             drag.header?.classList.remove('cla-regex-group-dragging');
             drag.tray?.remove();
-            if (commit && drag.active && sortTarget && drag.kind === 'collection') this.runCollectionAction(() => {
+            if (commit && drag.active && drag.transfer) {
+                const ids = drag.rows.map(row => row.id);
+                const collection = drag.kind === 'collection' ? drag.collection : null;
+                void this.enqueue(() => this.moveRulesAcrossScopes({
+                    sourceScope: drag.scope, sourceKey: drag.context, ids, collection, ...drag.transfer,
+                }));
+            } else if (commit && drag.active && sortTarget && drag.kind === 'collection') this.runCollectionAction(() => {
                 this.moveCollection(drag.scope, drag.collection, sortTarget.row.dataset.claRegexFold, sortTarget.after, drag.context);
             });
             else if (commit && drag.active && sortTarget) {
@@ -1514,6 +1577,101 @@ export class RegexUiAdapter {
         }).finally(restore);
     }
 
+    async loadScopeMove() {
+        const [{ ContentTransferService, NativeTransferRepository }, presetApi, { uuidv4 }] = await Promise.all([
+            import('./transfer-tools.js'),
+            import('../../../../preset-manager.js'),
+            import('../../../../utils.js'),
+        ]);
+        const repository = new NativeTransferRepository({
+            scriptApi: this.scriptApi, presetApi, extensionSettings: this.extensionSettings, verifyCurrentCharacter: true,
+        });
+        return { service: new ContentTransferService(repository), uuidv4 };
+    }
+
+    async moveRulesAcrossScopes({ sourceScope, sourceKey, targetScope, targetKey, ids, collection = null, targetCollection }) {
+        const generation = this.generation;
+        const valid = () => this.started && this.collectionsEnabled && this.generation === generation
+            && sourceKey === this.getCollectionContext(sourceScope) && targetKey === this.getCollectionContext(targetScope);
+        const checkContext = () => {
+            if (!sourceKey || !targetKey || sourceScope === targetScope || !valid()) throw new Error('正则范围已变化，请重新拖动');
+        };
+        checkContext();
+        const { service, uuidv4 } = await this.loadScopeMove();
+        checkContext();
+        const job = await service.prepare('regex', getTransferRef(sourceKey), getTransferRef(targetKey), ids);
+        checkContext();
+        const selection = new Set(ids);
+        const rules = job.sourceData.filter(rule => collection === null ? selection.has(String(rule.id))
+            : this.getAssignedCollection(sourceScope, String(rule.id), rule.scriptName) === collection);
+        if (collection !== null) job.ids = rules.map(rule => String(rule.id));
+        if (!rules.length && (collection === null || !this.getCollectionState(sourceScope).groups.includes(collection))) {
+            throw new Error('拖动的正则已不存在，请重新操作');
+        }
+        const targetGroups = rules.map(rule => collection ?? targetCollection
+            ?? this.getAssignedCollection(sourceScope, String(rule.id), rule.scriptName));
+        const applyResult = ({ created, moved }) => {
+            const targetState = this.getCollectionState(targetScope, targetKey);
+            for (const group of new Set(collection === null ? targetGroups : [collection])) {
+                if (group !== UNGROUPED_COLLECTION && !targetState.groups.includes(group)) targetState.groups.push(group);
+                if (valid()) this.openCollections.add(getRegexCollectionKey(targetScope, group));
+            }
+            targetState.assignments = { ...targetState.assignments,
+                ...Object.fromEntries(created.map((id, index) => [id, targetGroups[index]])) };
+            this.saveCollectionState(targetScope, targetState, targetKey);
+            if (moved) {
+                const sourceState = this.getCollectionState(sourceScope, sourceKey);
+                for (const rule of rules) delete sourceState.assignments[String(rule.id)];
+                if (collection !== null) {
+                    sourceState.groups = sourceState.groups.filter(group => group !== collection);
+                    sourceState.order = sourceState.order.filter(group => group !== collection);
+                }
+                this.saveCollectionState(sourceScope, sourceState, sourceKey);
+            }
+            this.scriptApi.saveSettingsDebounced?.();
+            if (valid()) {
+                this.refreshMovedRules(sourceScope, targetScope, rules, created, moved);
+                if (created.length) this.onSaved?.();
+            }
+        };
+        if (rules.length) {
+            let result;
+            try {
+                result = await service.execute(job, { move: true, valid, uuid: uuidv4 });
+            } catch (error) {
+                if (error.created?.length) {
+                    applyResult({ created: error.created, moved: false });
+                    throw new Error(`目标已保存副本，来源原件保留：${error.message}`);
+                }
+                throw error;
+            }
+            applyResult(result);
+            globalThis.toastr?.success?.(`已移动 ${result.count} 条到${SCOPE_NAMES[targetScope]}`, '正则分组');
+        } else {
+            applyResult({ created: [], moved: true });
+            globalThis.toastr?.success?.(`已移动空合集到${SCOPE_NAMES[targetScope]}`, '正则分组');
+        }
+    }
+
+    refreshMovedRules(sourceScope, targetScope, rules, created, moved) {
+        const targetList = document.getElementById(Object.keys(TYPE_BY_LIST_ID).find(id => TYPE_BY_LIST_ID[id] === targetScope));
+        const sourceRows = new Map(this.getRows().filter(row => getTypeKey(row) === sourceScope).map(row => [row.id, row]));
+        const targetIds = new Set([...(targetList?.children || [])].map(row => row.id));
+        const removed = [];
+        for (let index = 0; index < rules.length; index++) {
+            const rule = rules[index];
+            const source = sourceRows.get(String(rule.id));
+            if (!source) continue;
+            if (targetList && !targetIds.has(created[index])) {
+                targetList.append(this.createLocalRuleRow(source, { ...rule, id: created[index] }));
+            }
+            if (moved) removed.push(source);
+        }
+        this.setRowsSelected(removed, false);
+        for (const row of removed) row.remove();
+        this.refreshOrganizerRows();
+    }
+
     async duplicateRule(scope, sourceId, scopeKey, createId) {
         if (!scopeKey || scopeKey !== this.getCollectionContext(scope)) throw new Error('预设或角色已切换，请重新操作');
         const generation = this.generation;
@@ -1553,21 +1711,24 @@ export class RegexUiAdapter {
         const rows = [...(list?.children || [])];
         const source = rows.find(row => row.id === sourceId);
         if (!source || rows.some(row => row.id === copy.id)) return;
-        // SillyTavern's renderer is private. Keep the new row usable until its
-        // next native list render without emitting a chat or preset change.
+        source.after(this.createLocalRuleRow(source, copy));
+        this.refreshOrganizerRows();
+    }
+
+    createLocalRuleRow(source, script) {
+        // Native list rendering replaces these rows on the next scope refresh.
         const row = source.cloneNode(true);
-        row.id = copy.id;
+        row.id = script.id;
         row.dataset.claRegexCopyRow = '';
         row.classList.remove('cla-regex-selected');
         const name = row.querySelector('.regex_script_name');
-        name.textContent = name.title = copy.scriptName;
-        row.querySelector('.disable_regex').checked = copy.disabled;
+        name.textContent = name.title = script.scriptName;
+        row.querySelector('.disable_regex').checked = Boolean(script.disabled);
         row.querySelector('.regex_bulk_checkbox').checked = false;
         row.querySelector('input[name="regex_expand"]').checked = false;
         row.querySelector('.cla-regex-copy')?.remove();
         row.querySelectorAll('.move_to_global, .move_to_preset, .move_to_scoped').forEach(button => button.remove());
-        source.after(row);
-        this.refreshOrganizerRows();
+        return row;
     }
 
     async openCopiedRuleEditor(context) {

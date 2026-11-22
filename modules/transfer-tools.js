@@ -881,3 +881,5 @@ export class TransferTools {
         return this.closing;
     }
 }
+
+export { ContentTransferService, NativeTransferRepository };

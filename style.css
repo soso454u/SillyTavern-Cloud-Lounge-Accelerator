@@ -503,6 +503,12 @@
     overflow-wrap: anywhere;
 }
 
+.cla-regex-drop-tray .cla-regex-drop-scope {
+    flex: 1 1 auto;
+    border-color: color-mix(in srgb, currentColor 35%, transparent);
+    background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
 .cla-regex-drop-active {
     outline: 2px solid var(--SmartThemeQuoteColor, #39c777) !important;
     outline-offset: -2px;

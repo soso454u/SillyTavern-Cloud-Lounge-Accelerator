@@ -170,21 +170,23 @@ export class ContentTransferService {
             sourceHash: fingerprint(sourceData), targetHash: fingerprint(targetData) };
     }
 
-    async execute(job, { move = false, valid = () => true } = {}) {
+    async execute(job, { move = false, valid = () => true, uuid } = {}) {
         if (this.busy) throw new Error('已有转移正在保存');
         this.busy = true;
         let targetSaved = false;
+        let created = [];
         try {
             const assertValid = () => { if (!valid()) throw new Error('窗口已关闭或插件已停用，操作已停止'); };
             assertValid();
             if (fingerprint(await this.repository.read(job.source)) !== job.sourceHash
                 || fingerprint(await this.repository.read(job.target)) !== job.targetHash) throw new Error('来源或目标已更改，请重新加载后选择');
             assertValid();
-            const plan = planTransfer(job.kind, job.sourceData, job.targetData, job.ids);
+            const plan = planTransfer(job.kind, job.sourceData, job.targetData, job.ids, uuid);
             await this.repository.beforeWrite?.(job);
             assertValid();
             await this.repository.write(job.target, plan.nextTarget, job.targetData);
             targetSaved = true;
+            created = plan.created;
             if (!move) return { count: plan.count, moved: false, targetSaved, created: plan.created };
             assertValid();
             // A move is two saves, never a delete followed by a copy. Recheck
@@ -195,6 +197,7 @@ export class ContentTransferService {
             await this.repository.write(job.source, plan.nextSource, job.sourceData);
             return { count: plan.count, moved: true, targetSaved, created: plan.created };
         } catch (error) {
+            if (targetSaved) error.created = created;
             error.targetSaved = targetSaved || error.targetSaved === true;
             throw error;
         } finally { this.busy = false; }
@@ -202,8 +205,8 @@ export class ContentTransferService {
 }
 
 export class NativeTransferRepository {
-    constructor({ scriptApi, worldApi, presetApi, openaiApi, fetchImpl = (...args) => fetch(...args) }) {
-        Object.assign(this, { scriptApi, worldApi, presetApi, openaiApi, fetchImpl });
+    constructor({ scriptApi, worldApi, presetApi, openaiApi, extensionSettings, verifyCurrentCharacter = false, fetchImpl = (...args) => fetch(...args) }) {
+        Object.assign(this, { scriptApi, worldApi, presetApi, openaiApi, extensionSettings, verifyCurrentCharacter, fetchImpl });
     }
 
     async post(url, data) {
@@ -213,6 +216,7 @@ export class NativeTransferRepository {
     }
 
     list(kind) {
+        if (kind === 'global') return this.extensionSettings ? [{ kind, id: 'global' }] : [];
         if (kind === 'world') return (this.worldApi.world_names || []).map(name => ({ kind, id: name, name, label: name }));
         if (kind === 'character') return (this.scriptApi.characters || []).filter(character => character?.avatar)
             .map(character => ({ kind, id: character.avatar, avatar: character.avatar, label: `${character.name || '未命名角色'} · ${character.avatar}` }));
@@ -236,6 +240,7 @@ export class NativeTransferRepository {
 
     async read(ref) {
         if (!this.exists(ref)) throw new Error('来源或目标已不存在，请重新打开工具');
+        if (ref.kind === 'global') return clone(this.extensionSettings.regex ?? []);
         if (ref.kind === 'world') {
             const data = await this.worldApi.loadWorldInfo(ref.name);
             if (!data?.entries || Array.isArray(data.entries) || typeof data.entries !== 'object') throw new Error('无法读取世界书');
@@ -310,11 +315,52 @@ export class NativeTransferRepository {
         }
     }
 
+    async writeGlobalRegex(data) {
+        const saveSettings = this.scriptApi.saveSettings;
+        if (typeof saveSettings !== 'function' || !this.scriptApi.settingsReady) throw new Error('酒馆设置尚未就绪');
+        const nativeFetch = window.fetch;
+        const previous = this.extensionSettings.regex;
+        const receipts = [];
+        // The native save reports errors internally. Observe its small acknowledgement,
+        // and treat overlapping settings requests as unconfirmed.
+        const observeSave = (input, init) => {
+            const response = nativeFetch.call(window, input, init);
+            if (input === '/api/settings/save' && init?.method === 'POST') {
+                receipts.push(response.then(async result => result.ok && (await result.clone().json()).result === 'ok')
+                    .catch(() => false));
+            }
+            return response;
+        };
+        window.fetch = observeSave;
+        this.extensionSettings.regex = data;
+        try {
+            await saveSettings();
+            if (receipts.length !== 1 || !await receipts[0] || receipts.length !== 1 || this.extensionSettings.regex !== data) {
+                throw new Error('全局正则保存未确认，请检查两个范围');
+            }
+        } catch (error) {
+            if (this.extensionSettings.regex === data) {
+                if (previous === undefined) delete this.extensionSettings.regex;
+                else this.extensionSettings.regex = previous;
+            }
+            throw error;
+        } finally {
+            if (window.fetch === observeSave) window.fetch = nativeFetch;
+        }
+    }
+
     async write(ref, data, expected) {
         if (!this.exists(ref) || fingerprint(await this.read(ref)) !== fingerprint(expected)) throw new Error('保存前数据已改变，已停止覆盖');
+        if (ref.kind === 'global') return this.writeGlobalRegex(data);
         if (ref.kind === 'world') return this.writeWorld(ref.name, data);
         if (ref.kind === 'prompt') return this.writePresetPrompts(ref, data, expected);
         if (ref.kind === 'character') {
+            if (this.verifyCurrentCharacter) {
+                const character = this.scriptApi.characters?.[this.scriptApi.this_chid];
+                if (character?.avatar !== ref.avatar || fingerprint(character.data?.extensions?.regex_scripts ?? []) !== fingerprint(expected)) {
+                    throw new Error('当前角色正则在保存前发生变化，请重新拖动');
+                }
+            }
             await this.post('/api/characters/merge-attributes', { avatar: ref.avatar, data: { extensions: { regex_scripts: data } } });
             if (fingerprint(await this.read(ref)) !== fingerprint(data)) throw new Error('角色正则保存未确认，来源会保留');
             // Update only this extension field in all matching in-memory cards.
