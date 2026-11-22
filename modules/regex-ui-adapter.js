@@ -75,7 +75,20 @@ function getTypeKey(element) {
     return list ? TYPE_BY_LIST_ID[list.id] : null;
 }
 
-const ORGANIZER_NODE = '[data-cla-regex-fold], [data-cla-regex-scope-actions], .cla-regex-group-handle';
+function createRegexAction(label, icon, className) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `menu_button ${className}`;
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    const symbol = document.createElement('i');
+    symbol.className = `fa-solid ${icon}`;
+    symbol.setAttribute('aria-hidden', 'true');
+    button.append(symbol);
+    return button;
+}
+
+const ORGANIZER_NODE = '[data-cla-regex-fold], [data-cla-regex-scope-actions], .cla-regex-group-handle, .cla-regex-copy';
 
 function mutationAffectsRegexUi(record) {
     const target = record.target instanceof Element ? record.target : record.target?.parentElement;
@@ -228,6 +241,7 @@ export class RegexUiAdapter {
         document.querySelectorAll('[data-cla-regex-scope-actions]').forEach(node => node.remove());
         this.clearCollectionFolds();
         for (const row of this.getRows()) {
+            row.querySelector('.cla-regex-copy')?.remove();
             row.querySelector('.cla-regex-group-handle')?.remove(); row.hidden = false;
             row.classList.remove('cla-regex-selected');
             delete row.dataset.claRegexCollection; delete row.dataset.claRegexScope;
@@ -272,8 +286,7 @@ export class RegexUiAdapter {
         return null;
     }
 
-    getCollectionState(scope) {
-        const key = this.getCollectionContext(scope);
+    getCollectionState(scope, key = this.getCollectionContext(scope)) {
         const state = key && this.extensionSettings[COLLECTION_SETTINGS_KEY]?.[key];
         return {
             groups: Array.isArray(state?.groups) ? state.groups.filter(name => typeof name === 'string') : [],
@@ -282,8 +295,7 @@ export class RegexUiAdapter {
         };
     }
 
-    saveCollectionState(scope, state) {
-        const key = this.getCollectionContext(scope);
+    saveCollectionState(scope, state, key = this.getCollectionContext(scope)) {
         if (!key) throw new Error('请先选择对应的预设或角色');
         this.extensionSettings[COLLECTION_SETTINGS_KEY] = {
             ...this.extensionSettings[COLLECTION_SETTINGS_KEY], [key]: state,
@@ -437,7 +449,10 @@ export class RegexUiAdapter {
                 button.type = 'button';
                 button.className = 'menu_button menu_button_icon';
                 button.dataset.claRegexCreateScope = scope;
-                button.textContent = '+ 新建分组';
+                const icon = document.createElement('i');
+                icon.className = 'fa-solid fa-plus';
+                icon.setAttribute('aria-hidden', 'true');
+                button.append(icon, '新建分组');
                 button.addEventListener('click', () => this.runCollectionAction(() => {
                     if (actions.dataset.claRegexContext !== this.getCollectionContext(scope)) throw new Error('预设或角色已切换，请重新操作');
                     this.createEmptyCollection(scope);
@@ -475,6 +490,50 @@ export class RegexUiAdapter {
         const filter = this.organizerRoot?.querySelector('[data-cla-regex-collection]');
         if (filter?.value === previous) filter.value = 'all';
         this.finishCollectionChange(scope, name);
+    }
+
+    deleteCollection(scope, name, context) {
+        if (!context || context !== this.getCollectionContext(scope)) throw new Error('预设或角色已切换，请重新操作');
+        if (name === UNGROUPED_COLLECTION) throw new Error('“未分类”是系统分组');
+        const state = this.getCollectionState(scope);
+        const reassigned = (this.engine.getScriptsByType(this.getType(scope)) || [])
+            .filter(script => this.getAssignedCollection(scope, String(script.id), script.scriptName) === name)
+            .map(script => [String(script.id), UNGROUPED_COLLECTION]);
+        if (!reassigned.length && !state.groups.includes(name)) return;
+        state.groups = state.groups.filter(group => group !== name);
+        state.order = state.order.filter(group => group !== name);
+        for (const id of Object.keys(state.assignments)) {
+            if (state.assignments[id] === name) state.assignments[id] = UNGROUPED_COLLECTION;
+        }
+        state.assignments = { ...state.assignments, ...Object.fromEntries(reassigned) };
+        this.saveCollectionState(scope, state);
+        this.openCollections.delete(getRegexCollectionKey(scope, name));
+        const filter = this.organizerRoot?.querySelector('[data-cla-regex-collection]');
+        if (filter?.value === name) filter.value = 'all';
+        this.finishCollectionChange(scope, UNGROUPED_COLLECTION);
+    }
+
+    async requestCollectionDeletion(button, scope, name, context) {
+        const generation = this.generation;
+        const members = (this.engine.getScriptsByType(this.getType(scope)) || [])
+            .filter(script => this.getAssignedCollection(scope, String(script.id), script.scriptName) === name);
+        if (!members.length) {
+            this.runCollectionAction(() => this.deleteCollection(scope, name, context));
+            return;
+        }
+        const restore = this.lockButton(button);
+        try {
+            const message = document.createElement('p');
+            message.textContent = `删除“${name}”？组内正则将移到“未分类”。`;
+            const confirmed = await this.popupApi.Popup.show.confirm('删除分组', message);
+            if (confirmed && this.started && generation === this.generation && this.collectionsEnabled) {
+                this.runCollectionAction(() => this.deleteCollection(scope, name, context));
+            }
+        } catch (error) {
+            globalThis.toastr?.error?.(error.message, '正则分组');
+        } finally {
+            restore();
+        }
     }
 
     moveSelectedToCollection(value) {
@@ -588,6 +647,10 @@ export class RegexUiAdapter {
             const collection = this.getAssignedCollection(getTypeKey(row), row.id, name);
             row.dataset.claRegexCollection = collection;
             row.dataset.claRegexScope = getTypeKey(row) || '';
+            const actions = row.querySelector('.regex_script_buttons');
+            if (actions && !actions.querySelector('.cla-regex-copy')) {
+                actions.prepend(createRegexAction('复制到下方', 'fa-copy', 'cla-regex-copy'));
+            }
             collections.set(collection, (collections.get(collection) || 0) + 1);
             row.classList.toggle('cla-regex-selected', Boolean(row.querySelector('.regex_bulk_checkbox')?.checked));
             if (!row.querySelector('.cla-regex-group-handle') && label) {
@@ -690,21 +753,20 @@ export class RegexUiAdapter {
                     else this.openCollections.add(key);
                     this.applyOrganizerFilters();
                 });
-                const selectAll = document.createElement('button');
-                selectAll.type = 'button';
-                selectAll.className = 'menu_button cla-regex-collection-select';
-                selectAll.textContent = '选择此合集';
+                const selectAll = createRegexAction('选择此分组', 'fa-list-check', 'cla-regex-collection-action');
                 selectAll.disabled = rows.length === 0;
                 selectAll.addEventListener('click', () => {
                     this.enableBulkEdit();
                     this.setRowsSelected(rows.filter(row => this.rowMatchesOrganizer(row)), true);
                     this.updateOrganizerCount();
                 });
-                const rename = document.createElement('button');
-                rename.type = 'button';
-                rename.className = 'menu_button cla-regex-collection-rename';
-                rename.textContent = '改名';
-                rename.title = `重命名${collection}`;
+                const rename = createRegexAction('重命名分组', 'fa-pencil', 'cla-regex-collection-action cla-regex-collection-rename');
+                const remove = collection === UNGROUPED_COLLECTION ? null
+                    : createRegexAction('删除分组', 'fa-trash', 'cla-regex-collection-action cla-regex-collection-delete');
+                const actions = document.createElement('div');
+                actions.className = 'cla-regex-collection-actions';
+                actions.append(selectAll, rename);
+                if (remove) actions.append(remove);
                 const form = document.createElement('form');
                 form.className = 'cla-regex-rename-form';
                 form.hidden = true;
@@ -724,7 +786,7 @@ export class RegexUiAdapter {
                 form.append(input, submit, cancel);
                 const showRename = editing => {
                     form.hidden = !editing;
-                    orderHandle.hidden = toggle.hidden = selectAll.hidden = rename.hidden = editing;
+                    orderHandle.hidden = toggle.hidden = actions.hidden = editing;
                     if (editing) { input.focus(); input.select(); }
                 };
                 rename.addEventListener('click', () => showRename(true));
@@ -733,6 +795,13 @@ export class RegexUiAdapter {
                     if (event.key === 'Escape') { event.preventDefault(); showRename(false); }
                 });
                 const context = this.getCollectionContext(scope);
+                remove?.addEventListener('click', () => {
+                    if (context !== this.getCollectionContext(scope)) {
+                        this.runCollectionAction(() => { throw new Error('预设或角色已切换，请重新操作'); });
+                        return;
+                    }
+                    void this.requestCollectionDeletion(remove, scope, collection, context);
+                });
                 form.addEventListener('submit', event => {
                     event.preventDefault();
                     this.runCollectionAction(() => {
@@ -741,7 +810,7 @@ export class RegexUiAdapter {
                         showRename(false);
                     });
                 });
-                header.append(orderHandle, toggle, selectAll, rename, form);
+                header.append(orderHandle, toggle, actions, form);
                 // Headers have no script ID or native drag handle and cannot be saved
                 // as regexes. Grouped mode offers an explicit native-order view.
                 list.insertBefore(header, rows[0] || null);
@@ -927,10 +996,48 @@ export class RegexUiAdapter {
             return;
         }
 
+        const copyButton = target.closest('.cla-regex-copy');
+        if (copyButton && !copyButton.disabled && this.collectionsEnabled) {
+            const row = copyButton.closest('.regex-script-label[id]');
+            const scope = getTypeKey(row);
+            const context = this.getCollectionContext(scope);
+            if (!row || !context) return;
+            const restore = this.lockButton(copyButton);
+            const generation = this.generation;
+            void this.enqueue(async () => {
+                const { uuidv4 } = await import('../../../../utils.js');
+                if (!this.started || generation !== this.generation || !this.collectionsEnabled) return;
+                await this.duplicateRule(scope, row.id, context, uuidv4);
+                const expand = row.querySelector('input[name="regex_expand"]');
+                if (expand) expand.checked = false;
+                globalThis.toastr?.success?.('已复制到下方，副本默认停用', '正则复制');
+            }).finally(restore);
+            return;
+        }
+
+        const localExport = target.closest('[data-cla-regex-copy-row] .export_regex');
+        if (localExport) {
+            const row = localExport.closest('.regex-script-label');
+            const type = this.getType(getTypeKey(row));
+            const script = this.engine.getScriptsByType(type)?.find(item => String(item.id) === row.id);
+            if (script) {
+                void import('../../../../utils.js').then(({ download }) => {
+                    const name = String(script.scriptName).replace(/[^\p{L}\p{N}_-]+/gu, '-');
+                    download(JSON.stringify(script, null, 4), `regex-${name}.json`, 'application/json');
+                }).catch(error => globalThis.toastr?.error?.(error.message, '导出正则'));
+            }
+            return;
+        }
+
         const editButton = target.closest('.edit_existing_regex');
         if (editButton) {
             const label = editButton.closest('.regex-script-label[id]');
             const typeKey = getTypeKey(editButton);
+            if (label?.hasAttribute?.('data-cla-regex-copy-row')) {
+                void this.openCopiedRuleEditor({ id: label.id, typeKey, scopeKey: this.getCollectionContext(typeKey) })
+                    .catch(error => globalThis.toastr?.error?.(error.message, '正则编辑'));
+                return;
+            }
             this.editorContext = label && typeKey ? { id: label.id, typeKey, scopeKey: this.getCollectionContext(typeKey), opened: false } : null;
             const key=this.editorDraftKey(this.editorContext);
             const failed=this.failedEditorDrafts.get(key);
@@ -1375,6 +1482,130 @@ export class RegexUiAdapter {
         // by the official API; permission helpers save only when they change.
     }
 
+    async duplicateRule(scope, sourceId, scopeKey, createId) {
+        if (!scopeKey || scopeKey !== this.getCollectionContext(scope)) throw new Error('预设或角色已切换，请重新操作');
+        const generation = this.generation;
+        const type = this.getType(scope);
+        if (type === undefined) throw new Error('找不到当前正则范围');
+        const current = this.engine.getScriptsByType(type) || [];
+        const index = current.findIndex(script => String(script.id) === sourceId);
+        if (index < 0) throw new Error('找不到原正则');
+        const source = current[index];
+        const id = createId();
+        if (!id || current.some(script => String(script.id) === id)) throw new Error('无法创建副本，请重试');
+        const copy = { ...structuredClone(source), id, disabled: true };
+        const names = new Set(current.map(script => script.scriptName));
+        const copyName = `${source.scriptName}（副本）`;
+        copy.scriptName = copyName;
+        for (let number = 2; names.has(copy.scriptName); number++) {
+            copy.scriptName = `${source.scriptName}（副本 ${number}）`;
+        }
+        const next = [...current];
+        next.splice(index + 1, 0, copy);
+        await this.persistScripts(type, next, { allowScope: false, scopeKey });
+        const state = this.getCollectionState(scope, scopeKey);
+        if (Object.hasOwn(state.assignments, sourceId)) {
+            state.assignments = { ...state.assignments, [copy.id]: state.assignments[sourceId] };
+            this.saveCollectionState(scope, state, scopeKey);
+            this.scriptApi.saveSettingsDebounced?.();
+        }
+        if (this.started && this.generation === generation && scopeKey === this.getCollectionContext(scope)) {
+            this.insertCopiedRow(scope, sourceId, copy);
+        }
+        return copy;
+    }
+
+    insertCopiedRow(scope, sourceId, copy) {
+        const listId = Object.keys(TYPE_BY_LIST_ID).find(id => TYPE_BY_LIST_ID[id] === scope);
+        const list = document.getElementById(listId);
+        const rows = [...(list?.children || [])];
+        const source = rows.find(row => row.id === sourceId);
+        if (!source || rows.some(row => row.id === copy.id)) return;
+        // SillyTavern's renderer is private. Keep the new row usable until its
+        // next native list render without emitting a chat or preset change.
+        const row = source.cloneNode(true);
+        row.id = copy.id;
+        row.dataset.claRegexCopyRow = '';
+        row.classList.remove('cla-regex-selected');
+        const name = row.querySelector('.regex_script_name');
+        name.textContent = name.title = copy.scriptName;
+        row.querySelector('.disable_regex').checked = copy.disabled;
+        row.querySelector('.regex_bulk_checkbox').checked = false;
+        row.querySelector('input[name="regex_expand"]').checked = false;
+        row.querySelector('.cla-regex-copy')?.remove();
+        row.querySelectorAll('.move_to_global, .move_to_preset, .move_to_scoped').forEach(button => button.remove());
+        source.after(row);
+        this.refreshOrganizerRows();
+    }
+
+    async openCopiedRuleEditor(context) {
+        const generation = this.generation;
+        const { renderExtensionTemplateAsync } = await import('../../../../extensions.js');
+        const markup = await renderExtensionTemplateAsync('regex', 'editor');
+        if (!this.started || generation !== this.generation || context.scopeKey !== this.getCollectionContext(context.typeKey)) return;
+        const type = this.getType(context.typeKey);
+        const script = this.engine.getScriptsByType(type)?.find(item => String(item.id) === context.id);
+        if (!script) return;
+        const template = document.createElement('template');
+        template.innerHTML = markup;
+        const editor = template.content.querySelector('.regex_editor');
+        const fields = {
+            '.regex_script_name': script.scriptName,
+            '.find_regex': script.findRegex,
+            '.regex_replace_string': script.replaceString,
+            '.regex_trim_strings': script.trimStrings?.join('\n'),
+            'select[name="substitute_regex"]': script.substituteRegex ?? 0,
+            'input[name="min_depth"]': script.minDepth,
+            'input[name="max_depth"]': script.maxDepth,
+        };
+        for (const [selector, value] of Object.entries(fields)) editor.querySelector(selector).value = value ?? '';
+        for (const [input, property] of Object.entries({
+            disabled: 'disabled', only_format_display: 'markdownOnly', only_format_prompt: 'promptOnly', run_on_edit: 'runOnEdit',
+        })) editor.querySelector(`input[name="${input}"]`).checked = Boolean(script[property]);
+        for (const input of editor.querySelectorAll('input[name="replace_position"]')) {
+            input.checked = script.placement?.includes(Number(input.value)) ?? false;
+        }
+        const testMode = editor.querySelector('#regex_test_mode');
+        const updateTest = () => {
+            if (!testMode || testMode.classList.contains('displayNone')) return;
+            const input = editor.querySelector('#regex_test_input');
+            const output = editor.querySelector('#regex_test_output');
+            if (!input || !output) return;
+            const draft = readEditorDraft(editor, context.id, script);
+            output.value = this.engine?.runRegexScript?.({ ...draft, disabled: false }, input.value) || '';
+        };
+        editor.querySelector('#regex_test_mode_toggle')?.addEventListener('click', () => {
+            testMode?.classList.toggle('displayNone');
+            updateTest();
+        });
+        editor.addEventListener('input', updateTest);
+        let saving = false;
+        this.editorContext = null;
+        const popup = new this.popupApi.Popup(editor, this.popupApi.POPUP_TYPE.CONFIRM, '', {
+            okButton: '保存',
+            cancelButton: '取消',
+            allowVerticalScrolling: true,
+            onClosing: async instance => {
+                if (saving) return false;
+                if (instance.result !== (this.popupApi?.POPUP_RESULT?.AFFIRMATIVE ?? 1)) return true;
+                if (!this.started || generation !== this.generation || context.scopeKey !== this.getCollectionContext(context.typeKey)) return true;
+                const draft = readEditorDraft(editor, context.id, script);
+                if (!draft.scriptName) {
+                    globalThis.toastr?.error?.('正则名称不能为空', '正则编辑');
+                    return false;
+                }
+                let saved = false;
+                saving = true;
+                await this.enqueue(async () => {
+                    await this.saveExistingEditor({ popupInstance: instance, editor, context, draft, closed: true });
+                    saved = true;
+                }).finally(() => { saving = false; });
+                return saved || !this.started || generation !== this.generation;
+            },
+        });
+        await popup.show();
+    }
+
     async saveExistingEditor({ popupInstance, editor, context, draft: capturedDraft = null, closed = false }) {
         const generation=this.generation;
         const type = this.getType(context.typeKey);
@@ -1512,6 +1743,7 @@ export class RegexUiAdapter {
         clearTimeout(this.organizerTimer);
         this.organizerTimer = null;
         this.getRows().forEach(row => {
+            row.querySelector('.cla-regex-copy')?.remove();
             row.querySelector('.cla-regex-group-handle')?.remove();
             row.hidden = false;
             row.classList?.remove?.('cla-regex-selected');

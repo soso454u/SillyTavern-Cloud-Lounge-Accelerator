@@ -220,28 +220,33 @@
     display: none;
 }
 
-.cla-regex-collection-header {
+#regex_container .cla-regex-collection-header {
     display: flex;
     align-items: center;
-    gap: 0.45rem;
-    padding: 0.35rem;
-    margin-top: 0.4rem;
-    border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 13%, transparent);
-    border-radius: 0.5rem;
-    background: color-mix(in srgb, var(--SmartThemeBodyColor) 3%, transparent);
-    flex-wrap: wrap;
+    gap: 0.25rem;
     min-width: 0;
     max-width: 100%;
+    padding: 0.2rem 0.35rem;
+    margin-block: 0.2rem 0.1rem;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 14%, transparent);
+    border-radius: 0.55rem;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 4%, transparent);
     box-sizing: border-box;
 }
 
-.cla-regex-collection-toggle {
+#regex_container .cla-regex-collection-header:has(.cla-regex-collection-toggle[aria-expanded="true"]) {
+    border-color: color-mix(in srgb, var(--SmartThemeBodyColor) 26%, transparent);
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 8%, transparent);
+}
+
+#regex_container .cla-regex-collection-toggle {
     display: flex;
-    flex: 1 1 9rem;
-    min-width: 0;
+    flex: 1 1 auto;
     align-items: center;
-    gap: 0.45rem;
-    padding: 0.45rem 0.3rem;
+    gap: 0.4em;
+    min-width: 0;
+    min-height: 2rem;
+    padding: 0.15rem 0;
     border: 0;
     background: transparent;
     color: inherit;
@@ -252,6 +257,7 @@
 
 .cla-regex-collection-arrow {
     flex-shrink: 0;
+    opacity: 0.7;
 }
 
 .cla-regex-collection-toggle[aria-expanded="true"] .cla-regex-collection-arrow {
@@ -260,20 +266,56 @@
 
 .cla-regex-collection-name {
     min-width: 0;
-    overflow-wrap: anywhere;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
 }
 
 .cla-regex-collection-toggle small {
-    margin-left: auto;
+    padding: 0.15em 0.45em;
+    border-radius: 1em;
+    background: color-mix(in srgb, currentColor 9%, transparent);
     white-space: nowrap;
-    opacity: 0.68;
+    font-size: 0.75em;
+    font-variant-numeric: tabular-nums;
 }
 
-.cla-regex-collection-select {
-    flex-shrink: 1;
+.cla-regex-collection-actions {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 0.15rem;
+}
+
+#regex_container .cla-regex-collection-actions .cla-regex-collection-action {
+    display: inline-grid;
+    place-items: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 0.4rem;
+    background: transparent;
+}
+
+#regex_container .cla-regex-collection-action:enabled:is(:hover, :focus-visible) {
+    background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+#regex_container .cla-regex-collection-delete:enabled:is(:hover, :focus-visible) {
+    color: var(--SmartThemeQuoteColor, #bf625c);
+}
+
+#regex_container .regex_script_buttons .cla-regex-copy {
+    display: inline-grid;
+    place-items: center;
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 0;
     margin: 0;
-    white-space: normal;
-    font-size: 0.85em;
+    color: inherit;
+    font: inherit;
 }
 
 /* Use the actual sidebar width, including desktop columns and large theme fonts. */
@@ -905,10 +947,14 @@ body.cla-preset-drag-guard [id$="prompt_manager_list"] [data-pm-identifier][clas
     justify-content: flex-end;
     min-width: 0;
     max-width: 100%;
-    padding: 0.25rem 0;
+    padding: 0.1rem 0 0.15rem;
     box-sizing: border-box;
 }
 #regex_container .cla-regex-scope-actions .menu_button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    font-size: 0.875em;
     width: auto;
     min-width: 0;
     max-width: 100%;

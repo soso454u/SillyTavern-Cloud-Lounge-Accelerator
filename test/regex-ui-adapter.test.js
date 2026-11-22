@@ -380,3 +380,25 @@ test('queued checkbox changes preserve each input event value', async t => {
     await f.adapter.saveQueue;
     assert.deepEqual(f.saved.map(call => call.next[0].disabled), [false, true]);
 });
+
+test('groups named display and filtering prefixes without overriding explicit brackets', () => {
+    assert.equal(getRegexCollectionName('美化·剧情选项简洁'), '美化');
+    assert.equal(getRegexCollectionName('不发送 ・ 人物分析'), '不发送');
+    assert.equal(getRegexCollectionName('［月下］美化·剧情选项简洁'), '月下');
+    assert.equal(getRegexCollectionName('美化· '), '未分类');
+});
+
+test('removing groups affects only the active scope and keeps every rule', () => {
+    const f = collectionFixture();
+    const scope = 'GLOBAL';
+    const key = f.adapter.getCollectionContext(scope);
+    f.adapter.createCollection(scope, '新分组');
+    f.adapter.deleteCollection(scope, '新分组', key);
+    assert.deepEqual(f.adapter.getCollectionState(scope).groups, []);
+    f.adapter.deleteCollection(scope, '旧组', key);
+    assert.deepEqual(f.scripts, f.original);
+    assert.equal(f.adapter.getAssignedCollection(scope, 'a', f.scripts.GLOBAL[0].scriptName), '未分类');
+    assert.equal(f.adapter.getAssignedCollection('PRESET', 'a', f.scripts.PRESET[0].scriptName), '旧组');
+    assert.throws(() => f.adapter.deleteCollection(scope, '未分类', key), /系统分组/);
+    assert.throws(() => f.adapter.deleteCollection('PRESET', '旧组', key), /已切换/);
+});

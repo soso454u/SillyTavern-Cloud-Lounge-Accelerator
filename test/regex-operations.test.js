@@ -159,3 +159,30 @@ test('typing a newer draft during persistence keeps the editor open instead of l
     assert.equal(f.data.PRESET[0].replaceString,'first save');
     assert.equal(f.closes,0);assert.equal(f.refreshes,1);
 });
+
+test('duplicates a rule directly below its source with independent options and inherited manual assignment', async t => {
+    const f = fixture(t);
+    const scope = 'PRESET';
+    const source = f.data.PRESET[0];
+    f.adapter.saveCollectionState(scope, { groups: ['手动分组'], order: [], assignments: { [source.id]: '手动分组' } });
+    let inserted;
+    f.adapter.insertCopiedRow = (...args) => { inserted = args; };
+    const copy = await f.adapter.duplicateRule(scope, source.id, f.adapter.getCollectionContext(scope), () => 'duplicate-id');
+    assert.deepEqual(f.data.PRESET.slice(0, 2), [source, { ...source, id: 'duplicate-id', scriptName: 'rule-0（副本）', disabled: true }]);
+    assert.notEqual(copy.placement, source.placement);
+    assert.equal(f.adapter.getAssignedCollection(scope, copy.id, copy.scriptName), '手动分组');
+    assert.deepEqual(inserted, [scope, source.id, copy]);
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.refreshes, 0);
+    assert.equal(f.order.includes('allow'), false);
+});
+
+test('failed copy leaves the source, its group and the visible list intact', async t => {
+    const f = fixture(t);
+    const before = structuredClone(f.data.PRESET);
+    f.failScope = 'PRESET';
+    f.adapter.insertCopiedRow = () => assert.fail('a failed copy must not add a row');
+    await assert.rejects(f.adapter.duplicateRule('PRESET', 'PRESET-0', f.adapter.getCollectionContext('PRESET'), () => 'duplicate-id'), /server rejected/);
+    assert.deepEqual(f.data.PRESET, before);
+    assert.deepEqual(f.adapter.getCollectionState('PRESET').assignments, {});
+});
