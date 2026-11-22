@@ -3,7 +3,7 @@ import { WORLD_FILTERS, PRESET_FILTERS, entryStatus, countReaderTokens } from '.
 import { ensureTransferEditorStyles } from '../utils/transfer-editor-style.js';
 import { PressSweepSelection } from '../utils/press-sweep-selection.js';
 import { TransferDrag } from '../utils/transfer-drag.js';
-import { ContentTransferService, NativeTransferRepository, fingerprint, editTransferEntry, deleteTransferEntries, transferItems, transferCollection, transferScopeKey } from './content-transfer.js';
+import { ContentTransferService, NativeTransferRepository, fingerprint, editTransferEntry, deleteTransferEntries, transferItems, transferCollection, transferScopeKey, reorderPresetPrompts } from './content-transfer.js';
 
 const node = (tag, text, className) => {
     const element = document.createElement(tag);
@@ -51,6 +51,7 @@ function iconButton(action, title) {
 
 const itemName = ({ value, id }) => value.comment || value.scriptName || value.name || `条目 ${id}`;
 const isRegex = kind => kind === 'character' || kind === 'preset';
+const oppositeSide = side => side === 'source' ? 'target' : 'source';
 
 const worldStatusText = {
     blue: '蓝灯 · 常驻',
@@ -152,6 +153,12 @@ export class TransferTools {
         this.source = field('左侧内容', 'source');
         this.target = field('右侧内容', 'target');
         this.operation = field('转移方式', 'operation', [['copy', '复制'], ['move', '移动']]);
+        this.insertionMode = field('目标预设的插入位置', 'insert-mode', [
+            ['end', '插到末尾'], ['start', '插到开头'], ['before', '指定条目前'], ['after', '指定条目后'],
+        ]);
+        this.insertionAnchor = field('目标预设中的参照条目', 'insert-anchor');
+        this.insertionMode.addEventListener('change', () => { this.cancelGestures(); this.updateControls(); });
+        this.insertionAnchor.addEventListener('change', () => { this.cancelGestures(); this.updateControls(); });
 
         const searchField = (side, label) => {
             const input = node('input', undefined, 'text_pole');
@@ -167,7 +174,6 @@ export class TransferTools {
         this.targetCount = node('small', '', 'cla-transfer-count');
         this.list = node('div', undefined, 'cla-transfer-list cla-transfer-source-list');
         this.targetList = node('div', undefined, 'cla-transfer-list cla-transfer-target-list cla-transfer-dropzone');
-        this.dropzone = this.targetList;
 
         this.sideButtons = new Map();
         this.readButtons = new Map();
@@ -217,23 +223,35 @@ export class TransferTools {
         const selectionActions = node('div', undefined, 'cla-transfer-selection-actions');
         selectionActions.append(iconButton('all', '全选当前结果'), iconButton('clear', '清空选择'), this.reloadButton, this.refreshButton);
         const transferActions = node('div', undefined, 'cla-transfer-primary-actions');
-        transferActions.append(this.operation, this.executeButton, this.deleteButton);
+        transferActions.append(this.operation, this.insertionMode, this.insertionAnchor, this.executeButton, this.deleteButton);
         const actions = node('div', undefined, 'cla-transfer-actions');
         actions.append(selectionActions, transferActions);
         this.status = node('p', '', 'cla-transfer-status');
         this.status.setAttribute('role', 'status');
         view.append(heading, columns, actions, this.status);
-        this.dragger = new TransferDrag({ root: view, dropzone: handle => handle.dataset.claTransferSide === 'target' ? this.list : this.dropzone,
+        this.dragger = new TransferDrag({
+            root: view,
+            getZones: side => this.dragZones(side),
             valid: () => this.started && this.view === view && view.isConnected && !this.busy && !this.loading
-                && !this.targetLoading && !this.editing && !this.previewLoading && !this.needsReview && !!this.sourceData && !!this.targetData && (this.kind.value !== this.targetKind.value || this.source.value !== this.target.value),
+                && !this.targetLoading && !this.editing && !this.previewLoading && !this.needsReview,
             getIds: (id, handle) => {
                 const side = handle.dataset.claTransferSide;
-                this.activeSide = side;
                 return handle.dataset.claTransferGroup !== undefined
                     ? this.filtered(side).filter(item => this.groupName(item, side) === handle.dataset.claTransferGroup).map(item => item.id)
                     : this.selectionFor(side).has(id) ? [...this.selectionFor(side)] : [id];
             },
-            onDrop: ids => { const selection = this.selectionFor(this.activeSide); selection.clear(); for (const id of ids) selection.add(id); this.updateSelectionChecks(); void this.execute(); },
+            onDrop: ({ ids, side, targetSide, position }) => {
+                this.activeSide = side;
+                if (side === targetSide) {
+                    void this.reorderPreset(side, ids, position);
+                    return;
+                }
+                const selection = this.selectionFor(side);
+                selection.clear();
+                for (const id of ids) selection.add(id);
+                this.updateSelectionChecks();
+                void this.execute(position);
+            },
         });
         this.nameSelection = new PressSweepSelection({ root: view,
             nameSelector: '.cla-transfer-item-name', rowSelector: '.cla-transfer-item',
@@ -278,6 +296,67 @@ export class TransferTools {
 
     cancelGestures() { this.nameSelection?.cancel(); this.dragger?.cancel(); }
     selectionFor(side) { return side === 'source' ? this.selected : this.targetSelected; }
+    dataFor(side) { return side === 'source' ? this.sourceData : this.targetData; }
+    itemsFor(side) { return side === 'source' ? this.items : this.targetItems; }
+    listFor(side) { return side === 'source' ? this.list : this.targetList; }
+
+    canTransfer() {
+        const left = this.refFor('source'), right = this.refFor('target');
+        return Boolean(left && right && this.sourceData && this.targetData && (left.kind !== right.kind || left.id !== right.id));
+    }
+
+    dragZones(side) {
+        const zones = [];
+        if (this.refFor(side)?.kind === 'prompt' && this.dataFor(side)) zones.push(side);
+        if (this.canTransfer()) zones.push(oppositeSide(side));
+        return zones.map(side => {
+            const list = this.listFor(side);
+            return { side, list, rows: this.refFor(side)?.kind === 'prompt' ? [...list.querySelectorAll('[data-cla-transfer-order-anchor]')] : null };
+        });
+    }
+
+    updateInsertionControls(locked) {
+        const other = oppositeSide(this.activeSide);
+        const prompt = this.refFor(other)?.kind === 'prompt' && this.refFor(this.activeSide)?.kind === 'prompt';
+        const needsAnchor = prompt && ['before', 'after'].includes(this.insertionMode.value);
+        this.insertionMode.hidden = !prompt;
+        this.insertionMode.disabled = locked || !this.canTransfer();
+        this.insertionAnchor.hidden = !needsAnchor;
+        if (!needsAnchor) return;
+        const items = this.itemsFor(other);
+        const target = this.refFor(other)?.id;
+        if (this.positionItems !== items || this.positionTarget !== target) {
+            const previous = this.positionTarget === target ? this.insertionAnchor.value : '';
+            this.positionItems = items;
+            this.positionTarget = target;
+            const placeholder = node('option', '选择目标条目');
+            placeholder.value = '';
+            this.insertionAnchor.replaceChildren(placeholder);
+            for (const [index, item] of items.entries()) {
+                if (!item.inOrder) continue;
+                const option = node('option', `${index + 1}. ${itemName(item)}`);
+                option.value = item.id;
+                this.insertionAnchor.append(option);
+            }
+            this.insertionAnchor.value = [...this.insertionAnchor.options].some(option => option.value === previous) ? previous : '';
+        }
+        this.insertionAnchor.disabled = locked || !this.canTransfer() || this.insertionAnchor.options.length < 2;
+    }
+
+    selectedInsertionPosition() {
+        if (this.insertionMode.hidden || this.insertionMode.value === 'end') return null;
+        if (this.insertionMode.value === 'start') return { edge: 'start' };
+        if (!this.insertionAnchor.value) return undefined;
+        return { anchorId: this.insertionAnchor.value, before: this.insertionMode.value === 'before' };
+    }
+
+    positionLabel(position, side) {
+        if (!position || position.edge === 'end') return '插到末尾';
+        if (position.edge === 'start') return '插到开头';
+        const item = this.itemsFor(side).find(item => item.id === position.anchorId && item.inOrder);
+        if (!item) throw new Error('插入位置已变化，请重新选择');
+        return `插到“${itemName(item)}”${position.before ? '前' : '后'}`;
+    }
     refsFor(side) { return side === 'source' ? this.sourceRefs : this.targetRefs; }
     refFor(side) { return this.refsFor(side)?.find(ref => ref.id === (side === 'source' ? this.source.value : this.target.value)); }
     populateTargets() {
@@ -379,6 +458,7 @@ export class TransferTools {
             name.title = `${name.textContent} · ${worldStatusText[status]}`;
             name.setAttribute('aria-label', name.title);
         }
+        if (item.inOrder) row.dataset.claTransferOrderAnchor = '';
         if (item.enabled !== undefined) {
             const state = item.enabled ? '已启用' : '未启用';
             name.title = `${name.textContent} · ${state}`;
@@ -387,7 +467,8 @@ export class TransferTools {
         }
         const handle = button('⠿'); delete handle.dataset.claTransferAction;
         handle.className = 'cla-transfer-drag-handle'; handle.dataset.claTransferDrag = id; handle.dataset.claTransferSide = side;
-        handle.setAttribute('aria-label', `拖动${name.textContent}或已选多项到对面`); row.append(handle);
+        describeControl(handle, item.inOrder ? `拖动${name.textContent}排序或插到另一侧` : `拖动${name.textContent}到另一侧`);
+        row.append(handle);
         row.append(name);
         const eye = button('', undefined); delete eye.dataset.claTransferAction;
         eye.className = 'cla-transfer-eye'; eye.dataset.claTransferView = id; eye.dataset.claTransferSide = side;
@@ -505,7 +586,7 @@ export class TransferTools {
     }
 
     updateControls() {
-        const ready = !!this.sourceData && !!this.targetData && !!this.refFor('source') && !!this.refFor('target') && (this.kind.value !== this.targetKind.value || this.source.value !== this.target.value);
+        const ready = this.canTransfer();
         const locked = this.busy || this.editing || this.previewLoading;
         for (const input of this.view.querySelectorAll('button, select, input')) if (!input.closest('.cla-transfer-heading')) input.disabled = locked;
         const selected = this.selectionFor(this.activeSide);
@@ -516,7 +597,9 @@ export class TransferTools {
         this.executeButton.classList.toggle('cla-transfer-reverse', !right);
         this.actionCount.textContent = String(selected.size);
         describeControl(this.executeButton, `${this.operation.value === 'move' ? '移动' : '复制'}到${right ? '右侧' : '左侧'}（${selected.size} 项）`);
-        this.executeButton.disabled = locked || this.loading || this.targetLoading || this.needsReview || !ready || !selected.size;
+        this.updateInsertionControls(locked);
+        this.executeButton.disabled = locked || this.loading || this.targetLoading || this.needsReview || !ready || !selected.size
+            || this.selectedInsertionPosition() === undefined;
         describeControl(this.deleteButton, `删除${right ? '左侧' : '右侧'}所选（${selected.size} 项）`);
         for (const [side, control] of this.readButtons) {
             const kind = this.refFor(side)?.kind;
@@ -527,8 +610,12 @@ export class TransferTools {
         this.deleteButton.disabled = locked || this.loading || this.targetLoading || this.needsReview || !selected.size;
         this.reloadButton.disabled = locked || !this.source.value;
         this.sourceCount.textContent = `共 ${this.items.length} 项 · 已选 ${this.selected.size}`;
-        for (const handle of this.view.querySelectorAll('[data-cla-transfer-drag]')) handle.disabled = locked || this.loading || this.targetLoading || this.needsReview || !ready;
         this.renderTarget();
+        for (const handle of this.view.querySelectorAll('[data-cla-transfer-drag]')) {
+            const side = handle.dataset.claTransferSide;
+            const canSort = Boolean(this.dataFor(side) && handle.closest('[data-cla-transfer-order-anchor]'));
+            handle.disabled = locked || this.loading || this.targetLoading || this.needsReview || (!ready && !canSort);
+        }
         for (const row of this.view.querySelectorAll('.cla-transfer-item')) { const checked = this.selectionFor(row.dataset.claTransferSide).has(row.dataset.claTransferId); row.classList.toggle('cla-transfer-selected', checked); row.setAttribute('aria-checked', String(checked)); }
     }
 
@@ -815,10 +902,61 @@ export class TransferTools {
         finally { this.busy = false; if (this.view === view) this.updateControls(); }
     }
 
-    async execute() {
-        if (this.busy || this.executeButton.disabled || !this.view) return;
+    async reorderPreset(side, ids, position) {
+        const view = this.view, ref = this.refFor(side), expected = this.dataFor(side);
+        if (!view || this.busy || this.needsReview || ref?.kind !== 'prompt' || !expected) return;
+        if (this.isGenerating()) { this.status.textContent = '请等待生成结束后再排序'; return; }
+        let next;
+        try {
+            next = reorderPresetPrompts(expected, ids, position);
+        } catch (error) {
+            this.status.textContent = error.message;
+            return;
+        }
+        if (!next) return;
+        const generation = this.generation;
+        const current = () => this.started && this.view === view && this.generation === generation
+            && this.refFor(side)?.id === ref.id && this.refFor(side)?.kind === ref.kind;
+        const list = this.listFor(side);
+        const scrollTop = list.scrollTop;
+        this.busy = true;
+        this.updateControls();
+        this.status.textContent = '正在保存条目顺序…';
+        try {
+            const data = await this.repository.read(ref);
+            if (fingerprint(data) !== fingerprint(expected)) throw new Error('预设已变化，请重新加载后排序');
+            if (!current()) return;
+            if (this.isGenerating()) { this.status.textContent = '请等待生成结束后再排序'; return; }
+            await this.repository.write(ref, next, expected);
+            if (!current()) return;
+            const items = transferItems('prompt', next).filter(item => !item.protected);
+            if (side === 'source') {
+                this.sourceData = next;
+                this.items = items;
+                this.renderItems();
+            } else {
+                this.targetData = next;
+                this.targetItems = items;
+                this.renderTarget();
+            }
+            list.scrollTop = scrollTop;
+            this.status.textContent = `已保存“${ref.label}”的条目顺序。`;
+        } catch (error) {
+            if (this.view === view) {
+                this.status.textContent = `排序未完成或未确认：${error.message}`;
+                this.needsReview = true;
+            }
+        } finally {
+            this.busy = false;
+            if (this.view === view) this.updateSelectionChecks();
+        }
+    }
+
+    async execute(position = this.selectedInsertionPosition()) {
+        if (!this.view || this.busy || this.editing || this.previewLoading || this.loading || this.targetLoading || this.needsReview
+            || !this.canTransfer() || !this.selectionFor(this.activeSide).size || position === undefined) return;
         if (this.isGenerating()) { this.status.textContent = '请等待生成结束后再转移'; return; }
-        const view = this.view, generation = this.generation, side = this.activeSide, other = side === 'source' ? 'target' : 'source';
+        const view = this.view, generation = this.generation, side = this.activeSide, other = oppositeSide(side);
         const source = this.refFor(side), target = this.refFor(other), kind = source.kind;
         const move = this.operation.value === 'move';
         const valid = () => this.started && this.view === view && view.isConnected && this.generation === generation
@@ -831,14 +969,16 @@ export class TransferTools {
             if (fingerprint(job.sourceData) !== fingerprint(side === 'source' ? this.sourceData : this.targetData)) throw new Error('来源已更改，请重新加载后选择');
             if (fingerprint(job.targetData) !== fingerprint(side === 'source' ? this.targetData : this.sourceData)) throw new Error('目标已更改，请重新加载两侧后操作');
             if (!valid()) return;
-            const content = node('p', `将选中的 ${job.ids.length} 项${move ? '移动' : '复制'}：\n来源：${source.label}\n目标：${target.label}\n${move ? '目标保存成功后才移除来源。' : '来源内容保留。'}目标已有内容不会被覆盖。`);
+            const positionText = kind === 'prompt' ? this.positionLabel(position, other) : '';
+            const placement = positionText ? `\n${positionText}。` : '';
+            const content = node('p', `将选中的 ${job.ids.length} 项${move ? '移动' : '复制'}：\n来源：${source.label}\n目标：${target.label}${placement}\n${move ? '目标保存成功后才移除来源。' : '来源内容保留。'}目标已有内容不会被覆盖。`);
             content.style.whiteSpace = 'pre-wrap';
             const confirmed = await this.popupApi.Popup.show.confirm(null, content, { okButton: move ? '移动所选' : '复制所选', cancelButton: '取消' });
             if (confirmed !== (this.popupApi.POPUP_RESULT?.AFFIRMATIVE ?? 1)) {
                 if (this.view === view) this.status.textContent = '已取消，所选内容保留。';
                 return;
             }
-            const result = await this.service.execute(job, { move, valid });
+            const result = await this.service.execute(job, { move, valid, position });
             this.saveTransferGroups(job, result);
             if (isRegex(kind)) this.onRegexSaved();
             if (this.view === view) {
@@ -846,8 +986,18 @@ export class TransferTools {
                 if (isRegex(kind)) this.refreshButton.hidden = false;
             }
             const message = `已${result.moved ? '移动' : '复制'} ${result.count} 项到“${target.label}”。`
+                + (positionText ? `${positionText}。` : '')
                 + (isRegex(kind) ? '正则启用权限沿用目标设置；刷新酒馆可更新原生正则列表显示。' : '');
-            if (valid()) { this.busy = false; await this.reloadPanels(message); }
+            if (valid()) {
+                this.busy = false;
+                const keepView = kind === 'prompt';
+                const scroll = keepView ? [this.list.scrollTop, this.targetList.scrollTop] : null;
+                await this.reloadPanels(message, keepView);
+                if (scroll && valid()) {
+                    this.list.scrollTop = scroll[0];
+                    this.targetList.scrollTop = scroll[1];
+                }
+            }
             else globalThis.toastr?.success?.(message, '云酒馆加速器');
         } catch (error) {
             const message = error.targetSaved ? `目标已经保存。来源移除未完成或未确认，请检查来源后再操作：${error.message}`

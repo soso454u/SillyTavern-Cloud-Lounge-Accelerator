@@ -95,6 +95,10 @@ dialog.cla-transfer-dialog .popup-body, dialog.cla-transfer-dialog .popup-conten
 .cla-transfer-actions, .cla-transfer-actions > div { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
 .cla-transfer-actions { justify-content: space-between; padding-top: 6px; border-top: 1px solid var(--SmartThemeBorderColor, #8885); }
 .cla-transfer-tool .cla-transfer-primary-actions select { width: auto; min-width: 60px; }
+.cla-transfer-tool .cla-transfer-primary-actions [data-cla-transfer-field="insert-anchor"] {
+    width: 12em;
+    max-width: min(12em, 100%);
+}
 .cla-transfer-tool .cla-transfer-pane-bar > button,
 .cla-transfer-tool .cla-transfer-actions button {
     box-sizing: border-box;
@@ -185,6 +189,12 @@ dialog.cla-transfer-dialog .popup-body, dialog.cla-transfer-dialog .popup-conten
 .cla-transfer-tool button:is(.cla-transfer-eye, .cla-transfer-drag-handle):disabled { opacity: 0.35; cursor: default; }
 .cla-transfer-dragging { user-select: none; -webkit-user-select: none; }
 .cla-transfer-drop-active { outline: 2px solid var(--SmartThemeQuoteColor, #7594df); outline-offset: -2px; }
+.cla-transfer-tool .cla-transfer-item.cla-transfer-insert-before {
+    box-shadow: 0 -3px 0 var(--SmartThemeQuoteColor, #7594df);
+}
+.cla-transfer-tool .cla-transfer-item.cla-transfer-insert-after {
+    box-shadow: 0 3px 0 var(--SmartThemeQuoteColor, #7594df);
+}
 .cla-transfer-drag-ghost { position: absolute; z-index: 3; pointer-events: none; max-width: 150px; padding: 6px 9px; border-radius: 8px; border: 1px solid var(--SmartThemeBorderColor, #888); background: var(--SmartThemeBlurTintColor, #dbe8f4); color: inherit; font-size: 13px; box-shadow: 0 2px 8px #0003; }
 @media (max-width: 600px) {
     .cla-transfer-tool .cla-transfer-item { grid-template-columns: 16px 18px minmax(0, 1fr) 24px; gap: 3px; padding: 3px; font-size: 0.9em; }

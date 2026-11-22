@@ -9,16 +9,48 @@ const builtinPromptIds = new Set([
 const isProtectedPrompt = prompt => prompt.marker || prompt.system_prompt || builtinPromptIds.has(prompt.identifier);
 
 function promptOrder(data) {
-    return data.prompt_order.find(group => String(group?.character_id) === String(OPENAI_ORDER_ID))?.order || [];
+    const order = data.prompt_order.find(group => String(group?.character_id) === String(OPENAI_ORDER_ID))?.order;
+    return Array.isArray(order) ? order : null;
+}
+
+function promptInsertionIndex(order, position) {
+    if (!position) return order.length;
+    if (position.edge === 'start') return 0;
+    if (position.edge === 'end') return order.length;
+    const index = order.findIndex(item => item?.identifier === position.anchorId);
+    if (index < 0 || order.findLastIndex(item => item?.identifier === position.anchorId) !== index) {
+        throw new Error('插入位置已变化，请重新选择');
+    }
+    return index + (position.before ? 0 : 1);
+}
+
+export function reorderPresetPrompts(data, ids, position) {
+    const next = clone(data);
+    const order = promptOrder(next);
+    if (!order) throw new Error('请先在酒馆启用此预设，让原生提示词顺序初始化后重试');
+    const selected = new Set(ids);
+    const moving = order.filter(item => selected.has(item?.identifier));
+    const prompts = next.prompts.filter(prompt => selected.has(prompt?.identifier));
+    if (!selected.size || moving.length !== selected.size || new Set(moving.map(item => item.identifier)).size !== selected.size
+        || prompts.length !== selected.size || prompts.some(isProtectedPrompt)) {
+        throw new Error('只能排序已在预设列表中的自定义条目');
+    }
+    if (position?.anchorId && selected.has(position.anchorId)) return null;
+    const remaining = order.filter(item => !selected.has(item?.identifier));
+    remaining.splice(promptInsertionIndex(remaining, position), 0, ...moving);
+    if (remaining.every((item, index) => item === order[index])) return null;
+    order.splice(0, order.length, ...remaining);
+    return next;
 }
 
 export function transferItems(kind, data) {
     if (kind === 'world') return Object.entries(data.entries).map(([id, value]) => ({ id, value }));
     if (kind !== 'prompt') return data.map(value => ({ id: String(value.id), value }));
-    const order = promptOrder(data);
+    const order = promptOrder(data) ?? [];
     const positions = new Map(order.map((item, index) => [item?.identifier, index]));
     return data.prompts.filter(Boolean).map(value => ({ id: value.identifier, value,
         enabled: order[positions.get(value.identifier)]?.enabled === true,
+        inOrder: positions.has(value.identifier),
         protected: Boolean(isProtectedPrompt(value)),
     })).sort((a, b) => (positions.get(a.id) ?? Infinity) - (positions.get(b.id) ?? Infinity));
 }
@@ -108,7 +140,7 @@ export function deleteTransferEntries(kind, data, ids) {
 }
 
 // Plans detached copies only: source/target objects are never mutated here.
-export function planTransfer(kind, source, target, ids, uuid = () => crypto.randomUUID()) {
+export function planTransfer(kind, source, target, ids, uuid = () => crypto.randomUUID(), position = null) {
     const wanted = new Set(ids.map(String));
     const entries = transferItems(kind, source).filter(item => wanted.has(item.id));
     if (!wanted.size || entries.length !== wanted.size) throw new Error('所选条目已改变，请重新加载来源');
@@ -128,7 +160,8 @@ export function planTransfer(kind, source, target, ids, uuid = () => crypto.rand
         if (Array.isArray(nextSource.originalData?.entries)) nextSource.originalData.entries = nextSource.originalData.entries.filter(entry => !wanted.has(String(entry.uid)));
     } else if (kind === 'prompt') {
         const order = promptOrder(nextTarget);
-        if (!order.length) throw new Error('请先在酒馆启用目标预设，让原生提示词顺序初始化后重试');
+        if (!order) throw new Error('请先在酒馆启用目标预设，让原生提示词顺序初始化后重试');
+        let index = promptInsertionIndex(order, position);
         if (entries.some(item => item.protected)) throw new Error('内置条目不能转移');
         const existing = new Set(nextTarget.prompts.filter(Boolean).map(prompt => prompt.identifier));
         for (const group of nextTarget.prompt_order) {
@@ -139,7 +172,7 @@ export function planTransfer(kind, source, target, ids, uuid = () => crypto.rand
             if (!identifier || existing.has(identifier)) throw new Error('无法分配新的提示词 ID，请重新操作');
             existing.add(identifier);
             nextTarget.prompts.push({ ...value, identifier, system_prompt: false, marker: false });
-            order.push({ identifier, enabled });
+            order.splice(index++, 0, { identifier, enabled });
             created.push(identifier);
         }
         removePresetPrompts(nextSource, wanted);
@@ -170,7 +203,7 @@ export class ContentTransferService {
             sourceHash: fingerprint(sourceData), targetHash: fingerprint(targetData) };
     }
 
-    async execute(job, { move = false, valid = () => true, uuid } = {}) {
+    async execute(job, { move = false, valid = () => true, uuid, position = null } = {}) {
         if (this.busy) throw new Error('已有转移正在保存');
         this.busy = true;
         let targetSaved = false;
@@ -181,7 +214,7 @@ export class ContentTransferService {
             if (fingerprint(await this.repository.read(job.source)) !== job.sourceHash
                 || fingerprint(await this.repository.read(job.target)) !== job.targetHash) throw new Error('来源或目标已更改，请重新加载后选择');
             assertValid();
-            const plan = planTransfer(job.kind, job.sourceData, job.targetData, job.ids, uuid);
+            const plan = planTransfer(job.kind, job.sourceData, job.targetData, job.ids, uuid, position);
             await this.repository.beforeWrite?.(job);
             assertValid();
             await this.repository.write(job.target, plan.nextTarget, job.targetData);

@@ -1,18 +1,24 @@
-// Cross-pane dragging uses pointer events for mouse, pen and touch. Only the
-// dedicated handle takes capture; normal list gestures retain vertical scroll.
+// Only drag handles take pointer capture. The lists keep their normal touch scroll.
 export class TransferDrag {
-    constructor({ root, dropzone, valid, getIds, onDrop }) {
-        Object.assign(this, { root, dropzone, valid, getIds, onDrop });
-        this.onDown = this.onDown.bind(this); this.onMove = this.onMove.bind(this);
-        this.onUp = this.onUp.bind(this); this.onCancel = this.onCancel.bind(this);
+    constructor({ root, getZones, valid, getIds, onDrop }) {
+        Object.assign(this, { root, getZones, valid, getIds, onDrop });
+        this.onDown = this.onDown.bind(this);
+        this.onMove = this.onMove.bind(this);
+        this.onUp = this.onUp.bind(this);
+        this.onCancel = this.onCancel.bind(this);
         this.onBlur = () => this.cancel();
         this.onKey = event => {
             if (event.key === 'Escape' && this.drag) {
-                event.preventDefault(); event.stopImmediatePropagation(); this.cancel();
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                this.cancel();
             }
         };
         this.onClick = event => {
-            if (event.target.closest?.('[data-cla-transfer-drag]')) { event.preventDefault(); event.stopImmediatePropagation(); }
+            if (event.target.closest?.('[data-cla-transfer-drag]')) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+            }
         };
         root.addEventListener('pointerdown', this.onDown);
         root.addEventListener('click', this.onClick, true);
@@ -21,69 +27,147 @@ export class TransferDrag {
     onDown(event) {
         const handle = event.target.closest?.('[data-cla-transfer-drag]');
         if (!handle || handle.disabled || this.drag || event.button !== 0 || !event.isPrimary || !this.valid()) return;
-        this.activeZone = typeof this.dropzone === 'function' ? this.dropzone(handle) : this.dropzone;
+        const side = handle.dataset.claTransferSide;
         const ids = this.getIds(handle.dataset.claTransferDrag, handle);
-        if (!ids.length) return;
-        event.preventDefault(); event.stopPropagation();
-        this.drag = { handle, ids, pointer: event.pointerId, x: event.clientX, y: event.clientY, active: false };
+        const zones = this.getZones(side);
+        if (!ids.length || !zones.length) return;
+        event.preventDefault();
+        event.stopPropagation();
+        this.drag = { handle, ids, side, zones, pointer: event.pointerId, x: event.clientX, y: event.clientY, active: false };
         handle.setPointerCapture?.(event.pointerId);
         globalThis.addEventListener?.('blur', this.onBlur);
-        for (const [type, fn] of [['pointermove', this.onMove], ['pointerup', this.onUp], ['pointercancel', this.onCancel], ['lostpointercapture', this.onCancel], ['keydown', this.onKey]]) document.addEventListener(type, fn, true);
+        this.listen(document.addEventListener);
     }
 
-    inside(x, y) {
-        const rect = this.activeZone.getBoundingClientRect();
-        return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    listen(method) {
+        for (const [type, handler] of [
+            ['pointermove', this.onMove], ['pointerup', this.onUp], ['pointercancel', this.onCancel],
+            ['lostpointercapture', this.onCancel], ['keydown', this.onKey],
+        ]) method.call(document, type, handler, true);
+    }
+
+    findDrop(x, y) {
+        const hit = document.elementFromPoint(x, y);
+        const list = hit?.closest('.cla-transfer-list');
+        const zone = this.drag.zones.find(zone => zone.list === list);
+        if (!zone) return null;
+        if (!zone.rows) return { zone, row: null, position: null };
+        const row = hit.closest('[data-cla-transfer-order-anchor]');
+        if (row && row.parentElement === list) {
+            const rect = row.getBoundingClientRect();
+            const before = y < rect.top + rect.height / 2;
+            return { zone, row, position: { anchorId: row.dataset.claTransferId, before } };
+        }
+        // Between rows, find the next visible anchor without measuring the entire list.
+        let left = 0;
+        let right = zone.rows.length;
+        while (left < right) {
+            const middle = Math.floor((left + right) / 2);
+            const rect = zone.rows[middle].getBoundingClientRect();
+            if (y < rect.top + rect.height / 2) right = middle;
+            else left = middle + 1;
+        }
+        const anchor = zone.rows[left] ?? zone.rows.at(-1);
+        if (!anchor) return { zone, row: null, position: { edge: 'end' } };
+        return { zone, row: anchor, position: { anchorId: anchor.dataset.claTransferId, before: left < zone.rows.length } };
+    }
+
+    markDrop(drop) {
+        const previous = this.drop;
+        if (previous?.zone === drop?.zone && previous?.row === drop?.row
+            && previous?.position?.before === drop?.position?.before) return;
+        previous?.zone.list.classList.remove('cla-transfer-drop-active');
+        previous?.row?.classList.remove('cla-transfer-insert-before', 'cla-transfer-insert-after');
+        this.drop = drop;
+        drop?.zone.list.classList.add('cla-transfer-drop-active');
+        if (drop?.row) drop.row.classList.add(drop.position.before ? 'cla-transfer-insert-before' : 'cla-transfer-insert-after');
     }
 
     onMove(event) {
         const drag = this.drag;
         if (!drag || event.pointerId !== drag.pointer) return;
-        event.preventDefault(); event.stopImmediatePropagation();
+        event.preventDefault();
+        event.stopImmediatePropagation();
         if (!this.valid() || !drag.handle.isConnected) { this.cancel(); return; }
         if (!drag.active && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 8) return;
         if (!drag.active) {
             drag.active = true;
-            this.ghost = document.createElement('div'); this.ghost.className = 'cla-transfer-drag-ghost';
-            this.ghost.textContent = `${drag.ids.length} 项 ${drag.handle.dataset.claTransferSide === 'target' ? '← 左侧' : '→ 右侧'}`; this.ghost.setAttribute('aria-hidden', 'true');
-            this.root.append(this.ghost); this.root.classList.add('cla-transfer-dragging');
+            this.ghost = document.createElement('div');
+            this.ghost.className = 'cla-transfer-drag-ghost';
+            this.ghost.setAttribute('aria-hidden', 'true');
+            this.root.append(this.ghost);
+            this.root.classList.add('cla-transfer-dragging');
         }
-        const origin = this.root.getBoundingClientRect();
-        this.ghost.style.left = `${Math.max(0, Math.min(event.clientX - origin.left + 10, this.root.clientWidth - this.ghost.offsetWidth))}px`;
-        this.ghost.style.top = `${Math.max(0, Math.min(event.clientY - origin.top + 10, this.root.clientHeight - this.ghost.offsetHeight))}px`;
-        const inside = this.inside(event.clientX, event.clientY);
-        this.activeZone?.classList.toggle('cla-transfer-drop-active', inside);
-        this.activeZone.setAttribute('data-cla-drag-count', String(drag.ids.length));
-        const pane = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('.cla-transfer-pane');
-        const list = pane?.querySelector('.cla-transfer-list');
-        if (list) {
+        drag.point = { x: event.clientX, y: event.clientY };
+        this.queuePaint();
+    }
+
+    queuePaint() {
+        if (this.frame !== undefined) return;
+        this.frame = requestAnimationFrame(() => {
+            this.frame = undefined;
+            this.paintDrag();
+        });
+    }
+
+    paintDrag() {
+        const drag = this.drag;
+        if (!drag || !this.valid() || !drag.handle.isConnected) { this.cancel(); return; }
+        const { x, y } = drag.point;
+        let drop = this.findDrop(x, y);
+        if (drop) {
+            const list = drop.zone.list;
             const rect = list.getBoundingClientRect();
-            if (event.clientY < rect.top + 30) list.scrollTop -= 18;
-            if (event.clientY > rect.bottom - 30) list.scrollTop += 18;
+            const before = list.scrollTop;
+            if (y < rect.top + 30) list.scrollTop -= 18;
+            else if (y > rect.bottom - 30) list.scrollTop += 18;
+            if (before !== list.scrollTop) {
+                drop = this.findDrop(x, y);
+                this.queuePaint();
+            }
         }
+        this.markDrop(drop);
+        const action = drop?.zone.side === drag.side ? ' · 调整顺序'
+            : drop?.zone.side === 'source' ? ' · 插入左侧' : drop ? ' · 插入右侧' : '';
+        const text = `${drag.ids.length} 项${action}`;
+        if (this.ghost.textContent !== text) this.ghost.textContent = text;
+        const origin = this.root.getBoundingClientRect();
+        this.ghost.style.left = `${Math.max(0, Math.min(x - origin.left + 10, this.root.clientWidth - this.ghost.offsetWidth))}px`;
+        this.ghost.style.top = `${Math.max(0, Math.min(y - origin.top + 10, this.root.clientHeight - this.ghost.offsetHeight))}px`;
     }
 
     onUp(event) {
         const drag = this.drag;
         if (!drag || event.pointerId !== drag.pointer) return;
-        event.preventDefault(); event.stopImmediatePropagation();
-        const accepted = drag.active && this.valid() && this.inside(event.clientX, event.clientY);
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const drop = drag.active && this.valid() && drag.handle.isConnected && this.findDrop(event.clientX, event.clientY);
         this.cancel();
-        if (accepted) this.onDrop(drag.ids);
+        if (drop) this.onDrop({ ids: drag.ids, side: drag.side, targetSide: drop.zone.side, position: drop.position });
     }
-    onCancel(event) { if (this.drag && event.pointerId === this.drag.pointer) this.cancel(); }
+
+    onCancel(event) {
+        if (this.drag && event.pointerId === this.drag.pointer) this.cancel();
+    }
+
     cancel() {
-        const drag = this.drag; this.drag = null;
-        this.ghost?.remove(); this.ghost = null;
+        const drag = this.drag;
+        if (!drag) return;
+        this.drag = null;
+        if (this.frame !== undefined) cancelAnimationFrame(this.frame);
+        this.frame = undefined;
+        this.ghost?.remove();
+        this.ghost = null;
+        this.markDrop(null);
         this.root.classList.remove('cla-transfer-dragging');
-        this.activeZone?.classList.remove('cla-transfer-drop-active');
-        this.activeZone?.removeAttribute('data-cla-drag-count');
         globalThis.removeEventListener?.('blur', this.onBlur);
-        for (const [type, fn] of [['pointermove', this.onMove], ['pointerup', this.onUp], ['pointercancel', this.onCancel], ['lostpointercapture', this.onCancel], ['keydown', this.onKey]]) document.removeEventListener(type, fn, true);
-        if (drag?.handle.hasPointerCapture?.(drag.pointer)) drag.handle.releasePointerCapture(drag.pointer);
+        this.listen(document.removeEventListener);
+        if (drag.handle.hasPointerCapture?.(drag.pointer)) drag.handle.releasePointerCapture(drag.pointer);
     }
+
     destroy() {
-        this.cancel(); this.root.removeEventListener('pointerdown', this.onDown);
+        this.cancel();
+        this.root.removeEventListener('pointerdown', this.onDown);
         this.root.removeEventListener('click', this.onClick, true);
     }
 }

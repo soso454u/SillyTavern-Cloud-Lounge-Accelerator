@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ContentTransferService, NativeTransferRepository, planTransfer, editTransferEntry, transferCollection, transferItems, deleteTransferEntries } from '../modules/content-transfer.js';
+import { ContentTransferService, NativeTransferRepository, planTransfer, editTransferEntry, transferCollection, transferItems, deleteTransferEntries, reorderPresetPrompts } from '../modules/content-transfer.js';
 const clone = value => structuredClone(value);
 const rule = (id, extra = {}) => ({ id, scriptName: '同名规则', findRegex: '/abc/g', replaceString: '<div>$1</div>', disabled: true, placement: [1,2], trimStrings:['x'], minDepth:2, maxDepth:8, runOnEdit:true, markdownOnly:true, unknown:{future:true}, ...extra });
 
@@ -202,4 +202,45 @@ test('preset prompt writes update a selected preset after persistence without sw
     assert.equal(preset.prompts[0].content, 'changed');
     assert.equal(settings.prompts[0].content, 'changed');
     assert.deepEqual(saves.at(-1), { name: 'Current', data: preset, options: { skipUpdate: true } });
+});
+
+test('preset transfer inserts at a native anchor in source order and preserves enabled states', () => {
+    const preset = (ids, enabled) => ({
+        prompts: ids.map(identifier => ({ identifier, content: identifier })),
+        prompt_order: [{ character_id: 100001, order: ids.map((identifier, index) => ({ identifier, enabled: enabled[index] })) }],
+    });
+    const source = preset(['one', 'two'], [false, true]);
+    const target = preset(['first', 'anchor', 'last'], [true, false, true]);
+    const before = clone([source, target]);
+    let sequence = 0;
+    const next = planTransfer('prompt', source, target, ['two', 'one'], () => `new-${++sequence}`, {
+        anchorId: 'anchor', before: false,
+    });
+    assert.deepEqual(next.nextTarget.prompt_order[0].order.map(entry => [entry.identifier, entry.enabled]), [
+        ['first', true], ['anchor', false], ['new-1', false], ['new-2', true], ['last', true],
+    ]);
+    assert.deepEqual(next.nextTarget.prompts.slice(-2).map(prompt => prompt.content), ['one', 'two']);
+    assert.deepEqual([source, target], before);
+    assert.throws(() => planTransfer('prompt', source, target, ['one'], () => 'new', { anchorId: 'missing' }), /插入位置已变化/);
+});
+
+test('same-preset reorder preserves definitions, unrelated native orders, and every existing slot field', () => {
+    const first = { identifier: 'first', enabled: false, custom: true };
+    const data = {
+        prompts: ['first', 'chatHistory', 'second', 'third', 'unused'].map(identifier => ({ identifier })),
+        prompt_order: [
+            { character_id: 5, order: [first] },
+            { character_id: 100001, order: [first, { identifier: 'chatHistory', enabled: true }, { identifier: 'second', enabled: true }, { identifier: 'third', enabled: false }] },
+        ],
+    };
+    const before = clone(data);
+    const next = reorderPresetPrompts(data, ['second', 'first'], { anchorId: 'third', before: false });
+    assert.deepEqual(next.prompt_order[1].order.map(slot => slot.identifier), ['chatHistory', 'third', 'first', 'second']);
+    assert.deepEqual(next.prompt_order[1].order[2], first);
+    assert.deepEqual(next.prompt_order[0], before.prompt_order[0]);
+    assert.deepEqual(next.prompts, before.prompts);
+    assert.deepEqual(data, before);
+    assert.equal(reorderPresetPrompts(data, ['first'], { edge: 'start' }), null);
+    assert.throws(() => reorderPresetPrompts(data, ['unused'], { edge: 'end' }), /自定义条目/);
+    assert.throws(() => reorderPresetPrompts(data, ['chatHistory'], { edge: 'start' }), /自定义条目/);
 });

@@ -110,6 +110,31 @@ try{
     if(end==='cancel')await cdp.send('Input.dispatchTouchEvent',{type:'touchCancel',touchPoints:[]});else await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
    }else{await page.mouse.move(start.x,start.y);await page.mouse.down();await page.mouse.move(finish.x,finish.y,{steps:8});if(end==='cancel')await page.keyboard.press('Escape');await page.mouse.up();}
   };
+  const dragPrompt = async (fromSide, id, toSide, anchor, before) => {
+    const handle = page.locator(`.cla-transfer-${fromSide}-list [data-cla-transfer-drag="${id}"]`);
+    const row = page.locator(`.cla-transfer-${toSide}-list [data-cla-transfer-id="${anchor}"]`);
+    await handle.scrollIntoViewIfNeeded();
+    await row.scrollIntoViewIfNeeded();
+    const from = await handle.boundingBox(), to = await row.boundingBox();
+    const start = { x: from.x + from.width / 2, y: from.y + from.height / 2 };
+    const end = { x: to.x + to.width / 2, y: to.y + to.height * (before ? 0.3 : 0.7) };
+    if (mobile) {
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ ...start, id: 7 }] });
+      for (let index = 1; index <= 8; index++) {
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{
+          x: start.x + (end.x - start.x) * index / 8, y: start.y + (end.y - start.y) * index / 8, id: 7,
+        }] });
+      }
+    } else {
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      await page.mouse.move(end.x, end.y, { steps: 8 });
+    }
+    const marker = before ? '.cla-transfer-insert-before' : '.cla-transfer-insert-after';
+    await page.locator(`[data-cla-transfer-id="${anchor}"]${marker}`).waitFor();
+    if (mobile) await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    else await page.mouse.up();
+  };
   const sweep=async(fromId,toId)=>{
     const name=id=>page.locator('.cla-transfer-source-list [data-cla-transfer-id="'+id+'"] .cla-transfer-item-name');
     const a=await name(fromId).boundingBox(),b=await name(toId).boundingBox();const start={x:a.x+a.width/2,y:a.y+a.height/2},end={x:b.x+b.width/2,y:b.y+b.height/2};
@@ -310,6 +335,44 @@ await page.screenshot({path:'/private/tmp/cla-world-editor-'+(mobile?'touch':'de
   assert.equal(s.savedPresets.P1.prompts.filter(prompt=>prompt.content==='preserve').length,2);
   assert.equal(s.savedPresets.P1.prompt_order[0].order.at(-1).enabled,true);
 
+  await dragPrompt('source', 'custom-off', 'source', 'custom-on', true);
+  await page.waitForFunction(() => !tools.busy);
+  s = await state();
+  assert.deepEqual(s.savedPresets.P1.prompt_order[0].order.slice(0, 2), [
+    { identifier: 'custom-off', enabled: false }, { identifier: 'custom-on', enabled: true },
+  ], 'same-pane drag saves native order and keeps disabled entries disabled');
+
+  await field('operation').selectOption('copy');
+  await press(selected('custom-on'));
+  await press(selected('custom-off'));
+  await dragPrompt('source', 'custom-off', 'target', 'target-prompt', true);
+  assert.match(await page.locator('#confirm-transfer').innerText(), /插到.*前/);
+  await press(page.locator('#approve'));
+  await page.waitForFunction(() => !tools.busy && !tools.loading && !tools.targetLoading);
+  s = await state();
+  const positioned = s.savedPresets.P2.prompt_order[0].order;
+  assert.deepEqual(positioned.slice(0, 3).map(slot => slot.enabled), [false, true, true]);
+  assert.equal(positioned[2].identifier, 'target-prompt', 'selected block inserts before the highlighted native anchor');
+
+  const priorWrites = s.writes.length;
+  await dragPrompt('target', 'target-prompt', 'target', positioned[0].identifier, true);
+  await page.waitForFunction(() => !tools.busy);
+  s = await state();
+  assert.deepEqual(s.writes.slice(priorWrites).map(write => write.body.name), ['P2'], 'right-pane sorting writes only its own preset');
+  assert.equal(s.savedPresets.P2.prompt_order[0].order[0].identifier, 'target-prompt');
+  const rightRow = page.locator(`.cla-transfer-target-list [data-cla-transfer-id="${positioned[0].identifier}"]`);
+  await press(rightRow);
+  await field('insert-mode').selectOption('after');
+  await field('insert-anchor').selectOption('custom-on');
+  await press(action('execute'));
+  assert.match(await page.locator('#confirm-transfer').innerText(), /插到“已开启提示词”后/);
+  await press(page.locator('#approve'));
+  await page.waitForFunction(() => !tools.busy && !tools.loading && !tools.targetLoading);
+  s = await state();
+  const leftOrder = s.savedPresets.P1.prompt_order[0].order;
+  const after = leftOrder[leftOrder.findIndex(slot => slot.identifier === 'custom-on') + 1];
+  assert.equal(s.savedPresets.P1.prompts.find(prompt => prompt.identifier === after.identifier).content, 'disabled text');
+  assert.equal(after.enabled, false, 'right-to-left toolbar places the copy at the selected anchor');
   await page.screenshot({path:'/private/tmp/cla-transfer-'+(mobile?'touch':'desktop')+'.png'});
   await press(page.locator('dialog.fixture-popup #fixture-close'));
   await page.waitForFunction(()=>tools===null);
@@ -317,6 +380,6 @@ await page.screenshot({path:'/private/tmp/cla-world-editor-'+(mobile?'touch':'de
   assert.equal(transferRequests.length,1,'reopening reuses the already loaded module');
   assert.equal(await page.locator('#cla-transfer-styles').count(),1);
   await page.evaluate(()=>{transferMenu.stop();auto.stop()});assert.equal(await page.locator('#cla-transfer-menu,.cla-transfer-tool').count(),0);assert.equal(await page.locator('dialog').count(),0);await page.locator('#cla-transfer-styles').waitFor({state:'detached'});assert.deepEqual(errors,[]);
-  console.log((mobile?'Touch':'Desktop')+': wand entry, cross-pane mouse/touch and batch drag, canceled/outside drops, world copy/move, character/preset regex copies, partial failure, IDs/metadata, layout, startup/key connection, manual cancel and cleanup passed');await page.close();
+  console.log((mobile?'Touch':'Desktop')+': wand entry, cross-pane mouse/touch and batch drag, canceled/outside drops, world copy/move, character/preset regex copies, partial failure, IDs/metadata, layout, startup/key connection, manual cancel, preset positioning and same-pane sorting, and cleanup passed');await page.close();
  }
 }finally{await browser?.close();await new Promise(resolve=>server.close(resolve))}
