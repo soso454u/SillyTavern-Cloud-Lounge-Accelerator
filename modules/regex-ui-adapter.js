@@ -75,10 +75,15 @@ function getTypeKey(element) {
     return list ? TYPE_BY_LIST_ID[list.id] : null;
 }
 
-function createRegexAction(label, icon, className) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = `menu_button ${className}`;
+function createRegexAction(label, icon, className, tag = 'button') {
+    const button = document.createElement(tag);
+    if (tag === 'button') {
+        button.type = 'button';
+    } else {
+        button.tabIndex = 0;
+        button.setAttribute('role', 'button');
+    }
+    button.className = className;
     button.title = label;
     button.setAttribute('aria-label', label);
     const symbol = document.createElement('i');
@@ -649,7 +654,13 @@ export class RegexUiAdapter {
             row.dataset.claRegexScope = getTypeKey(row) || '';
             const actions = row.querySelector('.regex_script_buttons');
             if (actions && !actions.querySelector('.cla-regex-copy')) {
-                actions.prepend(createRegexAction('复制到下方', 'fa-copy', 'cla-regex-copy'));
+                const copy = createRegexAction('复制到下方', 'fa-copy', 'menu_button cla-regex-copy', 'div');
+                copy.addEventListener('keydown', event => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    if (!event.repeat) this.copyRuleFromAction(copy);
+                });
+                actions.prepend(copy);
             }
             collections.set(collection, (collections.get(collection) || 0) + 1);
             row.classList.toggle('cla-regex-selected', Boolean(row.querySelector('.regex_bulk_checkbox')?.checked));
@@ -754,11 +765,12 @@ export class RegexUiAdapter {
                     this.applyOrganizerFilters();
                 });
                 const selectAll = createRegexAction('选择此分组', 'fa-list-check', 'cla-regex-collection-action');
-                selectAll.disabled = rows.length === 0;
+                const group = { header, toggle, count, key, rows, collection, scope, selectAll, matchingRows: [] };
                 selectAll.addEventListener('click', () => {
-                    this.enableBulkEdit();
-                    this.setRowsSelected(rows.filter(row => this.rowMatchesOrganizer(row)), true);
-                    this.updateOrganizerCount();
+                    if (!group.matchingRows.length) return;
+                    const select = !group.matchingRows.every(row => row.querySelector('.regex_bulk_checkbox')?.checked);
+                    if (select) this.enableBulkEdit();
+                    this.setRowsSelected(group.matchingRows, select);
                 });
                 const rename = createRegexAction('重命名分组', 'fa-pencil', 'cla-regex-collection-action cla-regex-collection-rename');
                 const remove = collection === UNGROUPED_COLLECTION ? null
@@ -818,7 +830,7 @@ export class RegexUiAdapter {
                     row.classList.add('cla-regex-grouped-row');
                     row.style.setProperty('--cla-regex-order', String(order++));
                 });
-                this.collectionGroups.push({ header, toggle, count, key, rows, collection, scope });
+                this.collectionGroups.push(group);
             }
         }
     }
@@ -861,8 +873,10 @@ export class RegexUiAdapter {
             row.hidden = !show;
             if (show) visible += 1;
         }
-        for (const { header, toggle, count, key, rows: members, collection, scope } of this.collectionGroups) {
-            const matching = members.filter(row => this.rowMatchesOrganizer(row)).length;
+        for (const group of this.collectionGroups) {
+            const { header, toggle, count, key, rows: members, collection, scope } = group;
+            group.matchingRows = members.filter(row => this.rowMatchesOrganizer(row));
+            const matching = group.matchingRows.length;
             const emptyMatches = !this.organizerOpen || matchesRegexOrganizerFilter({
                 name: collection, collection, scope,
                 query: this.organizerRoot?.querySelector('[data-cla-regex-search]')?.value || '',
@@ -882,6 +896,15 @@ export class RegexUiAdapter {
             const checked = Boolean(row.querySelector('.regex_bulk_checkbox')?.checked);
             row.classList?.toggle?.('cla-regex-selected', this.collectionsEnabled && checked);
             if (checked) selected++;
+        }
+        for (const { matchingRows, selectAll } of this.collectionGroups) {
+            const checked = matchingRows.filter(row => row.querySelector('.regex_bulk_checkbox')?.checked).length;
+            const allSelected = checked > 0 && checked === matchingRows.length;
+            selectAll.disabled = matchingRows.length === 0;
+            selectAll.title = allSelected ? '取消本组选择' : '选择此分组';
+            selectAll.setAttribute('aria-pressed', allSelected ? 'true' : checked ? 'mixed' : 'false');
+            selectAll.firstElementChild.classList.toggle('fa-list-check', !allSelected);
+            selectAll.firstElementChild.classList.toggle('fa-minus', allSelected);
         }
         if (this.cancelSelectionButton) this.cancelSelectionButton.hidden = selected === 0;
         const counter = this.organizerRoot?.querySelector('[data-cla-regex-count]');
@@ -916,7 +939,11 @@ export class RegexUiAdapter {
     setRowsSelected(rows, selected) {
         let changed;
         for (const row of rows) if (this.setRowSelected(row, selected, { notify: false })) changed = row;
-        // Native change handlers read the complete selection, not only this row.
+        // Cloned copies lack the native row handler until the next list render.
+        // Notify a native row when available so its bulk controls read the new selection.
+        if (changed?.hasAttribute?.('data-cla-regex-copy-row')) {
+            changed = this.getRows().find(row => !row.hasAttribute('data-cla-regex-copy-row')) || changed;
+        }
         changed?.querySelector('.regex_bulk_checkbox')?.dispatchEvent(new Event('change', { bubbles: true }));
     }
 
@@ -997,21 +1024,8 @@ export class RegexUiAdapter {
         }
 
         const copyButton = target.closest('.cla-regex-copy');
-        if (copyButton && !copyButton.disabled && this.collectionsEnabled) {
-            const row = copyButton.closest('.regex-script-label[id]');
-            const scope = getTypeKey(row);
-            const context = this.getCollectionContext(scope);
-            if (!row || !context) return;
-            const restore = this.lockButton(copyButton);
-            const generation = this.generation;
-            void this.enqueue(async () => {
-                const { uuidv4 } = await import('../../../../utils.js');
-                if (!this.started || generation !== this.generation || !this.collectionsEnabled) return;
-                await this.duplicateRule(scope, row.id, context, uuidv4);
-                const expand = row.querySelector('input[name="regex_expand"]');
-                if (expand) expand.checked = false;
-                globalThis.toastr?.success?.('已复制到下方，副本默认停用', '正则复制');
-            }).finally(restore);
+        if (copyButton) {
+            this.copyRuleFromAction(copyButton);
             return;
         }
 
@@ -1480,6 +1494,24 @@ export class RegexUiAdapter {
         // Changing a rule does not invalidate every other compiled pattern.
         // GLOBAL already schedules its save. Scoped/preset writes are awaited
         // by the official API; permission helpers save only when they change.
+    }
+
+    copyRuleFromAction(button) {
+        if (!this.started || !this.collectionsEnabled || button.getAttribute('aria-busy') === 'true') return;
+        const row = button.closest('.regex-script-label[id]');
+        const scope = getTypeKey(row);
+        const context = this.getCollectionContext(scope);
+        if (!row || !context) return;
+        const restore = this.lockButton(button);
+        const generation = this.generation;
+        void this.enqueue(async () => {
+            const { uuidv4 } = await import('../../../../utils.js');
+            if (!this.started || generation !== this.generation || !this.collectionsEnabled) return;
+            await this.duplicateRule(scope, row.id, context, uuidv4);
+            const expand = row.querySelector('input[name="regex_expand"]');
+            if (expand) expand.checked = false;
+            globalThis.toastr?.success?.('已复制到下方，副本默认停用', '正则复制');
+        }).finally(restore);
     }
 
     async duplicateRule(scope, sourceId, scopeKey, createId) {
