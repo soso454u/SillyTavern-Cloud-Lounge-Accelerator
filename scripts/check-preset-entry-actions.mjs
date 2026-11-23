@@ -73,6 +73,7 @@ window.tokens = new PresetTokenPreview({ delay:40, sentOptions: { eventTypes, ev
 await tokens.start();window.ready=true;
 </script>`;
 const assets = new Map([['/native.js', native.replace(/from ['"][^'"]+['"]/g, "from '/stub.js'")], ['/stub.js', stub], ['/actions.js', source], ['/style.css', style], ['/native.css', nativeCss]]);
+assets.set('/preset-entry-groups.js', await readFile(new URL('../modules/preset-entry-groups.js', import.meta.url), 'utf8'));
 assets.set('/sent-prompt-total.js', await readFile(new URL('../modules/sent-prompt-total.js', import.meta.url), 'utf8'));
 assets.set('/tokens.js', await readFile(new URL('../modules/preset-token-preview.js', import.meta.url), 'utf8'));
 assets.set('/tokenizers.js', `export const getTokenizerModel=()=>window.model;export const countTokensOpenAIAsync=async message=>{window.tokenCalls.push(message);await window.tokenGate;if(window.tokenFail)throw Error('offline');return message.content.length+message.role.length};`);

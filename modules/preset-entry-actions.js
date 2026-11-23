@@ -1,3 +1,5 @@
+import { PresetEntryGroups } from './preset-entry-groups.js';
+
 const ROW = '[data-pm-identifier]';
 const OWN = '[data-cla-preset-action]';
 const MARK = Symbol('cla-preset-entry-render');
@@ -7,17 +9,18 @@ const MARK = Symbol('cla-preset-entry-render');
 export class PresetEntryActions {
     constructor({ documentRef = globalThis.document, loadApi = async () => {
         const [openai, { Popup }] = await Promise.all([import('../../../../openai.js'), import('../../../../popup.js')]);
-        return { manager: openai.promptManager, confirm: message => {
+        return { manager: openai.promptManager, getPresetName: () => openai.oai_settings?.preset_settings_openai || '', confirm: message => {
             const content = documentRef.createElement('p');
             content.textContent = message;
             // A header makes the native helper interpolate text as HTML.
             // Passing no header preserves this safe DOM node and its text.
             return Popup.show.confirm(null, content);
         } };
-    }, isGenerating = () => false } = {}) {
+    }, isGenerating = () => false, extensionSettings = {}, saveSettings = () => {} } = {}) {
         this.document = documentRef;
         this.loadApi = loadApi;
         this.isGenerating = isGenerating;
+        this.groups = new PresetEntryGroups({ host: this, extensionSettings, saveSettings });
         this.started = false;
         this.generation = 0;
         this.nodes = new Set();
@@ -40,6 +43,7 @@ export class PresetEntryActions {
                 'clearEditForm', 'clearInspectForm', 'showPopup', 'hidePopup', 'render'];
             if (!required.every(key => typeof manager?.[key] === 'function')) return false;
             this.manager = manager;
+            this.groups.getPresetName = api.getPresetName || (() => '');
             this.confirm = api.confirm;
             this.originalRender = manager.renderPromptManagerListItems;
             const originalRender = this.originalRender;
@@ -93,7 +97,8 @@ export class PresetEntryActions {
         this.closeMenu();
         for (const node of this.nodes) if (!node.isConnected) this.nodes.delete(node);
         const list = this.manager?.listElement;
-        if (!list?.isConnected) return;
+        if (!list?.isConnected) { this.groups.clear(); return; }
+        this.groups.render();
         const context = this.context();
         for (const row of list.querySelectorAll(ROW)) {
             let button = row.querySelector(OWN);
@@ -334,6 +339,7 @@ export class PresetEntryActions {
             this.manager.clearEditForm();
         }
         this.pending = null;
+        this.groups.clear();
         for (const node of this.nodes) node.remove();
         this.nodes.clear();
     }
