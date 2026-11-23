@@ -125,7 +125,7 @@ export class PresetEntryActions {
         }
     }
 
-    openMenu(button, id) {
+    openMenu(button, id, grouping = false) {
         const context = button.claContext;
         if (!this.current(context) || this.busy) return;
         const prompt = this.manager.getPromptById(id);
@@ -133,11 +133,16 @@ export class PresetEntryActions {
         const menu = this.document.createElement('div');
         menu.className = 'cla-preset-entry-menu';
         menu.setAttribute('role', 'menu');
-        for (const [action, label] of [['before', '在上方新建'], ['after', '在下方新建'], ['copy', '复制到下方'], ['remove', '移出当前列表'], ['delete', '永久删除条目']]) {
+        const groupContext = this.groups.context();
+        if (grouping) this.groups.assignmentMenu(menu, groupContext, id);
+        const actions = grouping ? [] : [['before', '在上方新建'], ['after', '在下方新建'], ['copy', '复制到下方'],
+            ...(groupContext ? [['group', '归入分组…']] : []), ['remove', '移出当前列表'], ['delete', '永久删除条目']];
+        for (const [action, label] of actions) {
             const item = this.button(label, action);
             item.setAttribute('role', 'menuitem');
             item.claContext = context;
             item.dataset.claPromptId = id;
+            item.claGroupContext = groupContext;
             if (action === 'copy') item.disabled = !!prompt.marker;
             if (action === 'remove' || action === 'delete') {
                 item.disabled = prompt.marker === true || prompt.system_prompt !== false || !this.manager.isPromptDeletionAllowed?.(prompt);
@@ -197,6 +202,7 @@ export class PresetEntryActions {
         }
         const button = event.target?.closest?.(OWN);
         if (!button) {
+            if (this.menu?.contains(event.target)) return;
             this.closeMenu();
             // The native editor owns all ordinary edits, creation and closing.
             if (target && (target.matches?.('.prompt-manager-edit-action') || /prompt_manager_(popup.*(close|reset)|footer)/.test(target.id))) this.pending = null;
@@ -208,10 +214,16 @@ export class PresetEntryActions {
         const action = button.dataset.claPresetAction;
         const id = button.dataset.claPromptId || button.closest(ROW)?.dataset.pmIdentifier;
         const context = button.claContext;
+        const groupContext = button.claGroupContext;
+        const menuAnchor = this.menuButton;
         const wasOpen = this.menuButton === button;
         this.closeMenu();
         if (!this.current(context)) return;
         if (action === 'menu') { if (!wasOpen) this.openMenu(button, id); return; }
+        if (action === 'group') {
+            if (this.groups.valid(groupContext)) this.openMenu(menuAnchor, id, true);
+            return;
+        }
         if (action === 'remove' || action === 'delete') void this.deleteEntry(context, id, action === 'delete');
         else this.openDraft(context, id, action);
     }

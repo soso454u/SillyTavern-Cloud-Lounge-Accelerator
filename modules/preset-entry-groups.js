@@ -64,18 +64,20 @@ export function readPresetGroups(settings, key) {
         assignments: { ...state?.assignments },
         autoPrefix: state?.autoPrefix !== false,
         autoSections: state?.autoSections !== false,
+        collapsed: Array.isArray(state?.collapsed) ? state.collapsed.filter(name => typeof name === 'string') : null,
+        groupOrder: Array.isArray(state?.groupOrder) ? state.groupOrder.filter(name => typeof name === 'string') : [],
         rules: (Array.isArray(state?.rules) ? state.rules : []).filter(rule => rule
             && typeof rule.group === 'string' && typeof rule.value === 'string' && rule.value.trim()
             && ['prefix', 'contains'].includes(rule.mode)).map(rule => ({ ...rule })),
     };
 }
 
-// All controls live outside the native sortable. Filtering only hides rows;
-// it never moves them or changes the enabled state / prompt_order arrays.
+// Group the flex display, keeping native prompt nodes in their original DOM
+// order. Native execution order is edited in the explicit original-order view.
 export class PresetEntryGroups {
     constructor({ host, extensionSettings = {}, saveSettings = () => {}, getPresetName = () => '' }) {
         Object.assign(this, { host, extensionSettings, saveSettings, getPresetName });
-        this.selected = new Set(); this.filter = ''; this.query = ''; this.rows = new Set();
+        this.headers = []; this.rowStyles = new Map(); this.sortRecords = new Map(); this.rawOrder = false;
     }
 
     context() {
@@ -103,14 +105,14 @@ export class PresetEntryGroups {
     }
     assign(context, ids, value) {
         const state = this.state(context), known = new Set(this.entries(context).map(prompt => prompt.identifier));
-        if (!ids.length || ids.some(id => !known.has(id))) throw new Error('请先勾选当前列表中的条目');
+        if (!ids.length || ids.some(id => !known.has(id))) throw new Error('条目已不在当前列表，请重新操作');
         if (![AUTO, UNGROUPED].includes(value)) normalizePresetGroup(value);
         for (const id of ids) {
             if (value === AUTO) delete state.assignments[id];
             else state.assignments = { ...state.assignments, [id]: value };
         }
         if (![AUTO, UNGROUPED].includes(value) && !state.groups.includes(value)) state.groups.push(value);
-        this.selected.clear(); this.commit(context, state);
+        this.commit(context, state);
     }
     create(context, value) {
         const name = normalizePresetGroup(value), state = this.state(context);
@@ -129,7 +131,8 @@ export class PresetEntryGroups {
         for (const id of Object.keys(state.assignments)) if (state.assignments[id] === previous) state.assignments[id] = name;
         state.groups = [...new Set([...state.groups.filter(group => group !== previous), name])];
         state.rules = state.rules.map(rule => rule.group === previous ? { ...rule, group: name } : rule);
-        if (this.filter === previous) this.filter = name;
+        if (state.collapsed) state.collapsed = state.collapsed.map(group => group === previous ? name : group);
+        state.groupOrder = state.groupOrder.map(group => group === previous ? name : group);
         this.commit(context, state);
     }
     remove(context, name) {
@@ -144,7 +147,8 @@ export class PresetEntryGroups {
         for (const id of Object.keys(state.assignments)) if (state.assignments[id] === name) state.assignments[id] = UNGROUPED;
         state.groups = state.groups.filter(group => group !== name);
         state.rules = state.rules.filter(rule => rule.group !== name);
-        if (this.filter === name) this.filter = '';
+        if (state.collapsed) state.collapsed = state.collapsed.filter(group => group !== name);
+        state.groupOrder = state.groupOrder.filter(group => group !== name);
         this.commit(context, state);
     }
 
@@ -161,7 +165,10 @@ export class PresetEntryGroups {
     }
     run(action) {
         try { action(); if (this.feedback) this.feedback.textContent = ''; }
-        catch (error) { if (this.feedback) this.feedback.textContent = error.message; }
+        catch (error) {
+            if (this.feedback) this.feedback.textContent = error.message;
+            globalThis.toastr?.warning?.(error.message, '预设分组');
+        }
     }
     input(placeholder) {
         const input = this.node('input', '', 'text_pole'); input.placeholder = placeholder;
@@ -173,142 +180,229 @@ export class PresetEntryGroups {
         return select;
     }
 
+    orderedNames(context, state = this.state(context)) {
+        const names = [...this.names(context, state), UNGROUPED];
+        return [...new Set([...state.groupOrder.filter(name => names.includes(name)), ...names])];
+    }
+    collapsedNames(context, state = this.state(context)) {
+        return new Set(state.collapsed ?? this.orderedNames(context, state).filter(name => name !== UNGROUPED));
+    }
+    moveGroup(context, source, target, after) {
+        const state = this.state(context), order = this.orderedNames(context, state);
+        if (source === target) return;
+        if (!order.includes(source) || !order.includes(target)) throw new Error('分组已变化，请重新拖动');
+        state.groupOrder = order.filter(name => name !== source);
+        state.groupOrder.splice(state.groupOrder.indexOf(target) + (after ? 1 : 0), 0, source);
+        this.commit(context, state);
+    }
+    icon(label, symbol, action, className = '') {
+        const button = this.button('', action);
+        button.className = `cla-preset-fold-action ${className}`;
+        button.title = label; button.setAttribute('aria-label', label);
+        const icon = this.node('i', '', `fa-solid ${symbol}`); icon.setAttribute('aria-hidden', 'true');
+        button.append(icon); return button;
+    }
+    nameForm(parent, context, previous = null) {
+        parent.querySelector('.cla-preset-group-name-form')?.remove();
+        const form = this.node('form', '', 'cla-preset-group-name-form');
+        const input = this.input(previous === null ? '新分组名称' : '分组新名称');
+        input.maxLength = 60; input.value = previous || '';
+        const save = this.button('保存', () => {
+            if (previous === null) this.create(context, input.value);
+            else this.rename(context, previous, input.value);
+        });
+        const cancel = this.button('取消', () => form.remove());
+        form.addEventListener('submit', event => { event.preventDefault(); save.click(); });
+        form.append(input, save, cancel); parent.append(form); input.focus(); input.select();
+    }
+    assignmentMenu(menu, context, id) {
+        if (!this.valid(context)) return;
+        menu.classList.add('cla-preset-group-menu');
+        const current = classifyPresetEntries(this.entries(context), this.state(context)).get(id);
+        for (const name of this.orderedNames(context)) {
+            const button = this.button(`${name === current ? '✓ ' : ''}${name}`, () => {
+                this.assign(context, [id], name); this.host.closeMenu();
+            });
+            button.setAttribute('role', 'menuitem'); menu.append(button);
+        }
+        menu.append(this.button('恢复自动识别', () => { this.assign(context, [id], AUTO); this.host.closeMenu(); }),
+            this.button('＋ 新建分组并归入', () => {
+                menu.replaceChildren();
+                const input = this.input('新分组名称'); input.maxLength = 60;
+                const save = () => {
+                    const name = normalizePresetGroup(input.value);
+                    this.assign(context, [id], name); this.host.closeMenu();
+                };
+                input.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); this.run(save); } });
+                menu.append(input, this.button('保存', save)); input.focus();
+            }));
+    }
+    sortable(list) {
+        const jquery = globalThis.jQuery || globalThis.$;
+        if (!jquery?.fn?.sortable) return null;
+        try { return jquery(list).sortable('instance'); } catch { return null; }
+    }
+    protectSortable(list, grouped) {
+        let record = this.sortRecords.get(list);
+        if (!record) {
+            record = { refresh: () => this.protectSortable(list, list.classList.contains('cla-preset-grouped-list')) };
+            for (const type of ['pointerdown', 'mousedown', 'touchstart']) list.addEventListener(type, record.refresh, { capture: true, passive: true });
+            this.sortRecords.set(list, record);
+        }
+        const instance = this.sortable(list);
+        if (!instance?.options || instance.dragging) return;
+        if (record.instance !== instance) { record.instance = instance; record.previous = instance.options.cancel; record.applied = false; }
+        if (grouped) {
+            if (!record.applied || instance.options.cancel !== '*') record.previous = instance.options.cancel;
+            instance.option('cancel', '*'); record.applied = true;
+        } else if (record.applied) {
+            if (instance.options.cancel === '*') instance.option('cancel', record.previous);
+            record.applied = false;
+        }
+    }
+    clearDisplay() {
+        this.finishDrag(false);
+        for (const header of this.headers) header.remove();
+        this.headers = [];
+        for (const [row, previous] of this.rowStyles) {
+            if (row.style.getPropertyValue('order') === previous.applied) {
+                if (previous.value) row.style.setProperty('order', previous.value, previous.priority);
+                else row.style.removeProperty('order');
+            }
+            row.classList.remove('cla-preset-group-hidden'); delete row.dataset.claPresetGroup;
+        }
+        this.rowStyles.clear();
+        this.list?.classList.remove('cla-preset-grouped-list');
+        if (this.list) this.protectSortable(this.list, false);
+    }
+    startDrag(event, header, context, name) {
+        if (event.button > 0 || !this.valid(context) || this.rawOrder) return;
+        event.preventDefault(); event.stopPropagation(); this.finishDrag(false);
+        this.drag = { pointerId: event.pointerId, source: event.currentTarget, header, context, name,
+            x: event.clientX, y: event.clientY, started: Date.now(), active: false };
+        this.dragMove = move => this.moveDrag(move);
+        this.dragEnd = end => { if (end.pointerId === this.drag?.pointerId) this.finishDrag(end.type === 'pointerup'); };
+        const doc = this.host.document;
+        doc.addEventListener('pointermove', this.dragMove, { capture: true, passive: false });
+        for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) doc.addEventListener(type, this.dragEnd, true);
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+    }
+    moveDrag(event) {
+        const drag = this.drag;
+        if (!drag || event.pointerId !== drag.pointerId) return;
+        if (!this.valid(drag.context)) { this.finishDrag(false); return; }
+        if (!drag.active && Date.now() - drag.started >= 150 && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) >= 8) {
+            drag.active = true; drag.header.classList.add('cla-preset-group-dragging');
+        }
+        if (!drag.active) return;
+        event.preventDefault();
+        for (const header of this.headers) header.classList.remove('cla-preset-group-drop-before', 'cla-preset-group-drop-after');
+        const hit = this.host.document.elementFromPoint(event.clientX, event.clientY);
+        const target = hit?.closest('.cla-preset-fold-header, [data-pm-identifier]');
+        const name = target?.dataset.claPresetGroup;
+        const header = this.headers.find(node => node.dataset.claPresetGroup === name);
+        drag.target = null;
+        if (header && name !== drag.name) {
+            const rect = target.getBoundingClientRect();
+            drag.after = event.clientY > rect.top + rect.height / 2; drag.target = name;
+            header.classList.add(drag.after ? 'cla-preset-group-drop-after' : 'cla-preset-group-drop-before');
+        }
+    }
+    finishDrag(commit) {
+        const drag = this.drag;
+        if (!drag) return;
+        this.drag = null;
+        const doc = this.host.document;
+        doc.removeEventListener('pointermove', this.dragMove, true);
+        for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) doc.removeEventListener(type, this.dragEnd, true);
+        if (drag.source.hasPointerCapture?.(drag.pointerId)) drag.source.releasePointerCapture(drag.pointerId);
+        for (const header of this.headers) header.classList.remove('cla-preset-group-dragging', 'cla-preset-group-drop-before', 'cla-preset-group-drop-after');
+        if (commit && drag.active && drag.target && this.valid(drag.context)) this.run(() => this.moveGroup(drag.context, drag.name, drag.target, drag.after));
+    }
     render() {
         const list = this.host.manager?.listElement, context = this.context();
         if (!list?.isConnected || !context) { this.clear(); return; }
-        if (this.key !== context.key || this.prompts !== context.prompts || this.order !== context.order) {
-            this.filter = ''; this.query = ''; this.selected.clear();
-        }
-        this.key = context.key; this.prompts = context.prompts; this.order = context.order;
+        if (this.sortable(list)?.dragging) return;
+        if (this.key !== context.key) this.rawOrder = false;
+        this.key = context.key;
         const expanded = this.root?.open || false;
-        const open = this.root?.querySelector('details')?.open || false;
-        this.root?.remove();
-        this.root = this.node('details', '', 'cla-preset-groups');
-        this.root.open = expanded;
-        this.root.setAttribute('aria-label', '预设条目分类');
-        const state = this.state(context), entries = this.entries(context), names = this.names(context, state);
-        const byId = new Map(entries.map(prompt => [prompt.identifier, prompt]));
-        const classified = classifyPresetEntries(entries, state);
-        if (this.filter && ![...names, UNGROUPED].includes(this.filter)) this.filter = '';
-        const heading = this.node('summary', '', 'cla-preset-group-heading');
-        heading.append(this.node('span', '条目分组'), this.node('small', this.filter || `自动 · ${names.length} 组`));
-        const body = this.node('div', '', 'cla-preset-group-body');
-        const bar = this.node('div', '', 'cla-preset-group-bar');
-        for (const group of ['', ...names, UNGROUPED]) {
-            const count = entries.filter(prompt => !group || classified.get(prompt.identifier) === group).length;
-            const button = this.button(`${group || '全部'} ${count}`, () => {
-                if (!this.valid(context)) return;
-                this.filter = group; this.selected.clear(); this.render();
-            });
-            button.setAttribute('aria-pressed', String(this.filter === group)); bar.append(button);
+        this.root?.remove(); this.clearDisplay(); this.list = list;
+        // Drop disconnected sortable records after native panel replacement.
+        for (const [element, record] of this.sortRecords) if (!element.isConnected) {
+            for (const type of ['pointerdown', 'mousedown', 'touchstart']) element.removeEventListener(type, record.refresh, true);
+            this.sortRecords.delete(element);
         }
-        const search = this.input('搜索条目名称'); search.type = 'search'; search.value = this.query;
-        search.addEventListener('input', () => {
-            if (!this.valid(context)) return;
-            this.query = search.value; this.selected.clear(); this.applyFilter(context, state);
-        });
-        const details = this.node('details'); details.open = open;
-        details.className = 'cla-preset-group-manager';
-        details.append(this.node('summary', '管理分组与识别规则'));
-        const management = this.node('div', '', 'cla-preset-group-management');
+        this.root = this.node('details', '', 'cla-preset-groups'); this.root.open = expanded;
+        this.root.setAttribute('aria-label', '条目分组设置');
+        const state = this.state(context), entries = this.entries(context), names = this.orderedNames(context, state);
+        const classified = classifyPresetEntries(entries, state), collapsed = this.collapsedNames(context, state);
+        const heading = this.node('summary', '条目分组', 'cla-preset-group-heading');
+        const body = this.node('div', '', 'cla-preset-group-body');
         const manage = this.node('div', '', 'cla-preset-group-tools');
-        const groupName = this.input('分组名称');
+        const groupName = this.input('分组名称'); groupName.maxLength = 60;
         manage.append(groupName, this.button('新建分组', () => this.create(context, groupName.value)));
-        const groups = this.select(names.map(name => [name, name]), '要管理的分组');
+        const groups = this.select(names.filter(name => name !== UNGROUPED).map(name => [name, name]), '要管理的分组');
         manage.append(groups, this.button('改名', () => this.rename(context, groups.value, groupName.value)),
             this.button('删除分组', () => this.remove(context, groups.value)));
-        const bulk = this.node('div', '', 'cla-preset-group-tools');
-        const target = this.select([[AUTO, '恢复自动识别'], [UNGROUPED, UNGROUPED], ...names.map(name => [name, name])], '归组目标');
-        this.selectionLabel = this.node('small');
-        bulk.append(this.selectionLabel, this.button('全选可见', () => {
-            if (!this.valid(context)) return;
-            for (const row of this.rows) if (!row.classList.contains('cla-preset-group-hidden')) this.selected.add(row.dataset.pmIdentifier);
-            this.syncSelection();
-        }), this.button('清空选择', () => { this.selected.clear(); this.syncSelection(); }), target,
-        this.button('归入分组', () => this.assign(context, [...this.selected], target.value)));
-        const autoLabel = this.node('label', '', 'cla-preset-group-auto');
-        const auto = this.node('input'); auto.type = 'checkbox'; auto.checked = state.autoPrefix;
-        auto.addEventListener('change', () => this.run(() => this.commit(context, { ...this.state(context), autoPrefix: auto.checked })));
-        autoLabel.append(auto, '按名称前缀自动识别');
-        const sectionsLabel = this.node('label', '', 'cla-preset-group-auto');
-        const sections = this.node('input'); sections.type = 'checkbox'; sections.checked = state.autoSections;
-        sections.addEventListener('change', () => this.run(() => this.commit(context, { ...this.state(context), autoSections: sections.checked })));
-        sectionsLabel.append(sections, '按头尾标记识别区间分组');
-        const help = this.node('small', '优先级：手动归组 → 自定义规则（从上到下首条命中）→ 头尾区间 → 名称前缀 → 未分类。区间示例：====↓[文风] 与 ====↑[文风]，两者之间的条目自动归组（含头尾）。支持嵌套；缺少另一端或名称不一致时不按该区间归组。名称前缀示例：【文风】描写、[规则]约束、文风·描写、身份：设定、00 | 世界观 | 背景。仅识别名称，关键词忽略大小写。删除分组会将现有条目放回未分类，条目内容保留。');
-        const rules = this.node('div', '', 'cla-preset-group-rules');
-        state.rules.forEach((rule, index) => {
-            const row = this.node('div', '', 'cla-preset-group-tools');
-            row.append(this.node('span', `${index + 1}. ${rule.mode === 'prefix' ? '开头是' : '包含'}「${rule.value}」→ ${rule.group}`),
-                this.button('移除规则', () => { const next = this.state(context); next.rules.splice(index, 1); this.commit(context, next); }));
-            rules.append(row);
-        });
-        const addRule = this.node('div', '', 'cla-preset-group-tools');
-        const mode = this.select([['contains', '名称包含'], ['prefix', '名称开头是']], '识别方式');
-        const value = this.input('识别关键词'); const ruleGroup = this.input('归入分组名称');
-        addRule.append(mode, value, ruleGroup, this.button('添加规则', () => {
-            const next = this.state(context), group = normalizePresetGroup(ruleGroup.value), keyword = value.value.trim();
-            if (!keyword || keyword.length > 120) throw new Error('关键词请输入 1–120 个字符');
-            next.rules.push({ mode: mode.value, value: keyword, group });
-            if (!next.groups.includes(group)) next.groups.push(group);
-            this.commit(context, next);
-        }));
-        management.append(manage, bulk, sectionsLabel, autoLabel, rules, addRule);
-        const instructions = this.node('details');
-        instructions.append(this.node('summary', '识别说明'), help);
-        management.append(instructions);
-        details.append(management);
+        const tools = this.node('div', '', 'cla-preset-group-tools');
+        tools.append(this.button('全部展开', () => this.commit(context, { ...this.state(context), collapsed: [] })),
+            this.button('全部收起', () => this.commit(context, { ...this.state(context), collapsed: names })),
+            this.button(this.rawOrder ? '返回分组' : '原始顺序', () => { if (this.valid(context)) { this.rawOrder = !this.rawOrder; this.render(); } }));
+        const rules = this.node('details'); rules.append(this.node('summary', '自动识别设置'));
+        const ruleTools = this.node('div', '', 'cla-preset-group-tools');
+        for (const [key, label] of [['autoSections', '头尾区间'], ['autoPrefix', '名称前缀']]) {
+            const button = this.button(`${label}：${state[key] ? '开' : '关'}`, () => this.commit(context, { ...this.state(context), [key]: !this.state(context)[key] }));
+            button.setAttribute('aria-pressed', String(state[key])); ruleTools.append(button);
+        }
+        rules.append(ruleTools, this.node('small', '自动使用成对头尾标题里的组名。点列表中的分组标题展开或收起；条目归组请用条目 ⋯ 菜单。分组拖动调整显示位置，原始顺序中可调整实际执行顺序。'));
         this.feedback = this.node('small', '', 'cla-preset-group-feedback'); this.feedback.setAttribute('role', 'status');
-        body.append(bar, search, details, this.feedback);
-        this.root.append(heading, body);
+        body.append(manage, tools, rules, this.feedback); this.root.append(heading, body);
         const container = this.host.manager.containerElement;
-        if (container?.contains(list)) container.prepend(this.root);
-        else list.before(this.root);
-        for (const row of this.rows) if (!row.isConnected) this.rows.delete(row);
-        for (const row of list.querySelectorAll('[data-pm-identifier]')) {
-            this.rows.add(row);
-            row.querySelector('.cla-preset-group-choice')?.remove();
-            const prompt = byId.get(row.dataset.pmIdentifier);
-            if (!prompt) continue;
-            const label = this.node('label', '', 'cla-preset-group-choice');
-            label.addEventListener('click', event => event.stopPropagation());
-            const checkbox = this.node('input'); checkbox.type = 'checkbox'; checkbox.checked = this.selected.has(prompt.identifier);
-            checkbox.setAttribute('aria-label', `选择条目：${prompt.name || prompt.identifier}`);
-            checkbox.addEventListener('change', () => {
-                if (!this.valid(context)) return;
-                if (checkbox.checked) this.selected.add(prompt.identifier); else this.selected.delete(prompt.identifier);
-                this.syncSelection();
+        if (container?.contains(list)) container.prepend(this.root); else list.before(this.root);
+        if (this.rawOrder) { this.protectSortable(list, false); return; }
+        list.classList.add('cla-preset-grouped-list');
+        const rows = [...list.querySelectorAll(':scope > [data-pm-identifier]')];
+        const members = new Map(names.map(name => [name, []]));
+        for (const row of rows) {
+            const name = classified.get(row.dataset.pmIdentifier) || UNGROUPED;
+            if (!members.has(name)) members.set(name, []);
+            members.get(name).push(row);
+        }
+        let order = 0;
+        for (const [name, groupRows] of members) {
+            if (!groupRows.length && name === UNGROUPED) continue;
+            const header = this.node('li', '', 'cla-preset-fold-header');
+            header.dataset.claPresetGroup = name; header.style.order = String(order++);
+            const handle = this.node('button', '⠿', 'cla-preset-fold-drag'); handle.type = 'button';
+            handle.title = `按住拖动分组：${name}`; handle.setAttribute('aria-label', handle.title);
+            handle.addEventListener('pointerdown', event => this.startDrag(event, header, context, name));
+            const toggle = this.button('', () => {
+                const next = this.state(context), set = this.collapsedNames(context, next);
+                if (set.has(name)) set.delete(name); else set.add(name);
+                this.commit(context, { ...next, collapsed: [...set] });
             });
-            label.title = `分类：${classified.get(prompt.identifier)}`; label.append(checkbox);
-            // Insert into the name cell to preserve the native three-column grid.
-            const cell = row.querySelector('.completion_prompt_manager_prompt_name');
-            cell?.prepend(label);
+            toggle.className = 'cla-preset-fold-toggle'; toggle.setAttribute('aria-expanded', String(!collapsed.has(name)));
+            toggle.setAttribute('aria-label', `${name}，${groupRows.length} 条`);
+            toggle.append(this.node('span', collapsed.has(name) ? '▸' : '▾', 'cla-preset-fold-arrow'), this.node('span', name, 'cla-preset-fold-name'), this.node('small', `${groupRows.length} 条`));
+            header.append(handle, toggle, this.icon('新建分组', 'fa-plus', () => this.nameForm(header, context)));
+            if (name !== UNGROUPED) header.append(this.icon('重命名分组', 'fa-pencil', () => this.nameForm(header, context, name)),
+                this.icon('删除分组', 'fa-trash-can', () => this.remove(context, name)));
+            list.append(header); this.headers.push(header);
+            for (const row of groupRows) {
+                const applied = String(order++);
+                this.rowStyles.set(row, { value: row.style.getPropertyValue('order'), priority: row.style.getPropertyPriority('order'), applied });
+                row.style.setProperty('order', applied); row.dataset.claPresetGroup = name;
+                row.classList.toggle('cla-preset-group-hidden', collapsed.has(name));
+            }
         }
-        this.applyFilter(context, state);
-    }
-
-    applyFilter(context, state) {
-        const prompts = new Map(this.entries(context).map(prompt => [prompt.identifier, prompt]));
-        const classified = classifyPresetEntries([...prompts.values()], state);
-        const query = this.query.trim().toLocaleLowerCase();
-        for (const row of this.rows) {
-            const prompt = prompts.get(row.dataset.pmIdentifier);
-            const visible = prompt && (!this.filter || classified.get(prompt.identifier) === this.filter)
-                && (!query || String(prompt.name || '').toLocaleLowerCase().includes(query));
-            row.classList.toggle('cla-preset-group-hidden', !visible);
-            if (!visible) this.selected.delete(row.dataset.pmIdentifier);
-        }
-        this.syncSelection();
-    }
-    syncSelection() {
-        for (const row of this.rows) {
-            const input = row.querySelector('.cla-preset-group-choice input');
-            if (input) input.checked = this.selected.has(row.dataset.pmIdentifier);
-        }
-        if (this.selectionLabel) this.selectionLabel.textContent = `已选 ${this.selected.size} 项`;
+        this.protectSortable(list, true);
     }
     clear() {
-        this.root?.remove(); this.root = null;
-        for (const row of this.rows) { row.classList.remove('cla-preset-group-hidden'); row.querySelector('.cla-preset-group-choice')?.remove(); }
-        this.rows.clear(); this.selected.clear(); this.key = null;
+        this.clearDisplay(); this.root?.remove(); this.root = null;
+        for (const [list, record] of this.sortRecords) {
+            this.protectSortable(list, false);
+            for (const type of ['pointerdown', 'mousedown', 'touchstart']) list.removeEventListener(type, record.refresh, true);
+        }
+        this.sortRecords.clear(); this.list = null; this.key = null;
     }
 }

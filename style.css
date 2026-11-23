@@ -881,25 +881,6 @@ body .cla-preset-entry-menu button.menu_button[data-cla-preset-action] {
     scrollbar-width: thin;
 }
 
-.cla-preset-group-bar {
-    display: flex;
-    gap: 5px;
-    overflow-x: auto;
-    flex-shrink: 0;
-    padding-bottom: 2px;
-    scrollbar-width: thin;
-}
-
-.cla-preset-group-bar button.menu_button { flex-shrink: 0; white-space: nowrap; }
-.cla-preset-group-body > *, .cla-preset-group-management > * { flex-shrink: 0; }
-
-.cla-preset-group-management {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 6px 0 2px;
-}
-
 .cla-preset-group-tools {
     display: flex;
     flex-wrap: wrap;
@@ -918,11 +899,6 @@ body .cla-preset-entry-menu button.menu_button[data-cla-preset-action] {
     overflow-wrap: anywhere;
 }
 
-.cla-preset-group-bar button[aria-pressed="true"] {
-    border-color: var(--SmartThemeBodyColor, #eee);
-    background: var(--SmartThemeQuoteColor, #6666);
-}
-
 .cla-preset-groups .text_pole {
     box-sizing: border-box;
     min-width: 0;
@@ -938,11 +914,70 @@ body .cla-preset-entry-menu button.menu_button[data-cla-preset-action] {
 
 .cla-preset-groups summary { cursor: pointer; }
 .cla-preset-groups small { display: block; overflow-wrap: anywhere; }
-.cla-preset-group-auto { display: flex; align-items: center; gap: 6px; }
-.cla-preset-group-choice { display: inline-flex; align-items: center; margin-right: 5px; vertical-align: middle; }
-.cla-preset-group-choice input { margin: 0; cursor: pointer; }
-#completion_prompt_manager_list > .cla-preset-group-hidden { display: none !important; }
 .cla-preset-group-feedback { color: var(--SmartThemeQuoteColor, #f99); }
+
+#completion_prompt_manager_list.cla-preset-grouped-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.cla-preset-grouped-list > :not([data-pm-identifier]):not(.cla-preset-fold-header) { order: -1; }
+.cla-preset-grouped-list > .cla-preset-group-hidden { display: none !important; }
+.cla-preset-grouped-list [data-pm-identifier] .drag-handle { visibility: hidden; }
+
+#completion_prompt_manager_list > li.cla-preset-fold-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    min-height: 32px;
+    padding: 6px 2px;
+    margin: 5px 0;
+    border: 0;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #8884);
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    color: inherit;
+}
+
+.cla-preset-fold-toggle, .cla-preset-fold-action, .cla-preset-fold-drag {
+    appearance: none;
+    border: 0;
+    border-radius: 4px;
+    background: none;
+    color: inherit;
+    font: inherit;
+    margin: 0;
+    cursor: pointer;
+}
+
+.cla-preset-fold-toggle {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex: 1;
+    min-width: 0;
+    padding: 3px 0;
+    text-align: left;
+}
+
+.cla-preset-fold-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.cla-preset-fold-toggle small { flex-shrink: 0; opacity: 0.65; font-size: 0.8em; }
+.cla-preset-fold-arrow { flex-shrink: 0; font-size: 0.8em; opacity: 0.7; }
+.cla-preset-fold-action, .cla-preset-fold-drag { flex-shrink: 0; padding: 4px 6px; opacity: 0.7; }
+.cla-preset-fold-action:hover, .cla-preset-fold-toggle:hover { opacity: 1; background: #8881; }
+.cla-preset-fold-drag { cursor: grab; touch-action: none; user-select: none; }
+.cla-preset-group-dragging { opacity: 0.45; }
+.cla-preset-fold-header.cla-preset-group-drop-before { box-shadow: 0 -2px var(--SmartThemeBodyColor, #888) !important; }
+.cla-preset-fold-header.cla-preset-group-drop-after { box-shadow: 0 2px var(--SmartThemeBodyColor, #888) !important; }
+.cla-preset-group-name-form { display: flex; flex-basis: 100%; gap: 5px; margin: 4px 0; }
+.cla-preset-group-name-form input { flex: 1; min-width: 0; width: 80px; }
+.cla-preset-group-name-form button { width: auto; margin: 0; font-size: 0.8em; }
+body .cla-preset-group-menu { width: 168px; }
+.cla-preset-group-menu button.menu_button { width: 100%; margin: 0; padding: 5px 8px; font: inherit; font-size: 12px; min-height: 26px; text-align: left; overflow-wrap: anywhere; }
+.cla-preset-group-menu input { width: 100%; min-width: 0; font-size: 12px; }
 
 .cla-preset-entry-menu button:disabled {
     opacity: 0.4;

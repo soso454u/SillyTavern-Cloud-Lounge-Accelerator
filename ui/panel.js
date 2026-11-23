@@ -222,7 +222,7 @@ export class SettingsPanel {
         for (const [key, title, description] of [
             ['regexCollections', '正则分类与多选', '直接在合集里勾选、按住名称划选和拖动归组'],
             ['transferTools', '世界书 / 正则 / 预设转移', '双栏复制与移动，可连续阅读世界书和已启用的预设条目'],
-            ['presetEntryActions', '预设条目分组与操作', '头尾区间自动分组、自定义分类和批量归组，以及行内新建与复制'],
+            ['presetEntryActions', '预设条目分组与操作', '列表内分类折叠、整组拖动、自定义归组，以及行内新建与复制'],
             ['presetTokenPreview', '预设实时 token', '编辑条目时即时统计原文 token'],
             ['secretKeyBatch', '密钥批量删除', '在密钥管理弹窗里多选删除'],
             ['chatHistoryBatch', '聊天批量操作', '在聊天记录中多选删除，保护当前聊天'],

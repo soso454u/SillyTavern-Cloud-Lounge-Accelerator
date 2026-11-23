@@ -82,7 +82,7 @@ test('reject duplicate/invalid names and missing IDs; rename/delete cover rules 
     const f = fixture(), g = f.groups, context = g.context();
     for (const name of ['', '未分类', '@auto', 'a\nb', 'a'.repeat(61)]) assert.throws(() => normalizePresetGroup(name));
     assert.throws(() => g.create(context, '规则'), /同名/);
-    assert.throws(() => g.assign(context, ['missing'], '新组'), /勾选/);
+    assert.throws(() => g.assign(context, ['missing'], '新组'), /不在当前列表/);
     g.commit(context, { ...g.state(), groups: ['文风'], assignments: { absent: '文风' }, rules: [{ mode: 'contains', value: '普通', group: '文风' }] });
     g.rename(context, '文风', '描写');
     assert.equal(g.state().rules[0].group, '描写'); assert.equal(g.state().assignments.absent, '描写');
@@ -92,4 +92,22 @@ test('reject duplicate/invalid names and missing IDs; rename/delete cover rules 
     const before = JSON.stringify(f.extensionSettings);
     assert.throws(() => g.create(context, '保存失败'), /save failed/);
     assert.equal(JSON.stringify(f.extensionSettings), before);
+});
+
+test('group order and fold state persist separately from native execution order; stale dragging cannot write', () => {
+    const f = fixture(), g = f.groups, context = g.context();
+    const before = JSON.stringify(f.order);
+    g.create(context, '我的组');
+    assert.equal(g.collapsedNames(context).has('规则'), true);
+    assert.equal(g.collapsedNames(context).has('未分类'), false);
+    g.moveGroup(context, '我的组', '规则', false);
+    assert.equal(g.orderedNames(context)[0], '我的组');
+    g.commit(context, { ...g.state(), collapsed: ['规则'] });
+    g.rename(context, '规则', '要求');
+    assert.deepEqual(g.state().collapsed, ['要求']);
+    assert.ok(g.state().groupOrder.includes('要求'));
+    assert.equal(JSON.stringify(f.order), before);
+    f.change('B'); assert.deepEqual(g.state().groupOrder, []);
+    assert.throws(() => g.moveGroup(context, '我的组', '要求', true), /切换/);
+    f.change('A'); assert.equal(g.orderedNames(g.context())[0], '我的组');
 });
