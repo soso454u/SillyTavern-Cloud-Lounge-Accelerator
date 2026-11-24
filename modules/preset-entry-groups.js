@@ -269,7 +269,8 @@ export class PresetEntryGroups {
             this.feedback = this.node('small', '', 'cla-preset-group-feedback'); this.feedback.setAttribute('role', 'status');
             settings.append(bar, views, tools); this.root.append(settings, this.feedback);
         }
-        if (this.root.parentElement !== list.parentElement) list.before(this.root);
+        const toolbarAnchor = list.parentElement?.querySelector('[class$="prompt_manager_header"]') || list;
+        if (this.root.parentElement !== toolbarAnchor.parentElement || this.root.nextElementSibling !== toolbarAnchor) toolbarAnchor.before(this.root);
         if (this.search.value !== this.query) this.search.value = this.query;
         this.statusFilter.value = this.filter;
         this.groupViewButton.setAttribute('aria-pressed', String(!this.rawOrder)); this.rawViewButton.setAttribute('aria-pressed', String(this.rawOrder));

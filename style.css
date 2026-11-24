@@ -841,10 +841,48 @@ body .cla-preset-entry-menu button.menu_button[data-cla-preset-action] {
 
 .cla-preset-groups {
     min-width: 0;
-    margin-bottom: 8px;
-    border-bottom: 1px solid var(--SmartThemeBorderColor, #8884);
+    margin: 8px 0 12px;
     font-size: 0.85em;
 }
+
+.cla-preset-settings {
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor, #888) 20%, transparent);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor, #888) 3%, transparent);
+}
+.cla-preset-settings > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 34px;
+    padding: 7px 11px !important;
+    margin: 0 !important;
+    border: 0 !important;
+    border-radius: 7px;
+    background: transparent !important;
+    color: inherit !important;
+    box-sizing: border-box;
+    list-style: none;
+    font-weight: 600;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+.cla-preset-settings > summary::-webkit-details-marker { display: none; }
+.cla-preset-settings > summary::marker { content: ''; }
+.cla-preset-settings > summary::after {
+    content: '';
+    flex: 0 0 7px;
+    height: 7px;
+    margin-right: 2px;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: translateY(-2px) rotate(45deg);
+    opacity: 0.65;
+}
+.cla-preset-settings[open] > summary::after { transform: translateY(2px) rotate(225deg); }
+.cla-preset-settings > summary:focus-visible { outline: 2px solid var(--SmartThemeQuoteColor, currentColor); outline-offset: -3px; border-radius: 7px; }
+.cla-preset-settings > .cla-preset-group-tools { margin: 8px 10px; }
 
 .cla-preset-group-tools {
     display: flex;
