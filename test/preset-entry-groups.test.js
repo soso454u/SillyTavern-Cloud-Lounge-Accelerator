@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { emptyFolders, normalizeFolderState, assignedFolder, folderPath, folderTree, createFolder, renameFolder, moveFolder, deleteFolder, assignEntries, classifyUnassignedEntries, importFolderMetadata, promptFingerprint } from '../modules/preset-folder-model.js';
-import { classifyPresetEntry } from '../modules/preset-folder-suggestions.js';
+import { emptyFolders, normalizeFolderState, assignedFolder, folderPath, folderLayout, createFolder, renameFolder, moveFolder, deleteFolder, assignEntries, syncPresetSections, importFolderMetadata, promptFingerprint } from '../modules/preset-folder-model.js';
+import { findPresetSections } from '../modules/preset-section-boundaries.js';
 import { PresetEntryGroups, PRESET_GROUPS_KEY } from '../modules/preset-entry-groups.js';
 
 const prompts = () => [{ identifier: 'later', name: '[看似分类]示例', role: 'system', content: 'ordinary rule', injection_position: 1, injection_depth: 4, injection_order: 25 },
@@ -24,14 +24,17 @@ test('folders have stable IDs, arbitrary nesting, safe parent changes and deleti
     assert.equal(JSON.stringify(native), before);
 });
 
-test('initial display order comes from prompt_order, not prompts storage; explicit folder order remains separate', () => {
+const projectedEntries = nodes => nodes.flatMap(node => node.entry ? [node.entry] : projectedEntries(node.children));
+
+test('folder layout keeps the full native sequence even with manual folders spanning separate intervals', () => {
     const items = prompts(), state = emptyFolders();
-    const later = createFolder(state, '后段', null, uuid), first = createFolder(state, '前段', null, uuid);
-    assignEntries(state, items, ['first'], first); assignEntries(state, items, ['later'], later);
-    assert.deepEqual(folderTree(state, ordered(items)).map(folder => folder.id), [first, later, null]);
-    state.order['@root'] = [later, first];
-    assert.equal(folderTree(state, ordered(items))[0].id, later);
-    assert.deepEqual(ordered(items).map(item => item.identifier), ['first', 'marker', 'later']);
+    const outer = createFolder(state, '文风', null, uuid), child = createFolder(state, 'NSFW', outer, uuid);
+    assignEntries(state, items, ['first', 'later'], child);
+    state.order['@root'] = [child, outer]; // obsolete saved visual order
+    const layout = folderLayout(state, ordered(items));
+    assert.deepEqual(layout.map(node => node.id || node.entry.identifier), [outer, 'marker', outer]);
+    assert.deepEqual(projectedEntries(layout), ordered(items));
+    assert.deepEqual(layout.filter(node => node.id).map(node => node.total), [1, 1]);
 });
 
 test('legacy migration retains only explicit references, archives old metadata, and never guesses from a name', () => {
@@ -55,34 +58,49 @@ test('metadata round-trip checks identifiers and content signatures; imports can
     assert.throws(() => importFolderMetadata({ folders: [] }, items), /分类文件/);
 });
 
-test('classifies by body function, avoids ambiguous instructions and never overwrites manual choices', () => {
+const namedEntries = names => names.map((name, i) => ({ identifier: String(i), name, content: 'body' }));
+
+test('matches nested structural dividers and keeps rows between and outside the intervals in place', () => {
+    const entries = namedEntries(['开场', '====↓[规则]↓====', '直属一', '『 写作规则', '内部', '写作规则 』', '直属二', '====↑[规则]↑====', '结尾']);
     const state = emptyFolders();
-    const entries = [
-        { identifier: 'before', name: '====↓[涩调]↓====', content: '' },
-        { identifier: 'style', name: '基调', content: 'Use a literary style with varied prose sentence rhythm and imagery.' },
-        { identifier: 'world', name: '写卡', content: 'Preserve story continuity and follow world rules. Character actions should have consequences on the timeline.' },
-        { identifier: 'mixed', content: 'Literary style, prose sentence rhythm, sexual scenes and sexual anatomy with foreplay.' },
-        { identifier: 'adult', content: 'For sexual scenes, follow the consent rules and agree on a safeword.' },
-        { identifier: 'plain', name: '[NSFW]成人', content: 'Unstructured ambiguous instruction.' },
-        { identifier: 'after', name: '====↑[涩调]↑====', content: '' },
-    ];
-    assignEntries(state, entries, ['world'], null);
-    assert.ok(classifyUnassignedEntries(state, entries));
-    assert.deepEqual(classifyPresetEntry(entries[2]), ['剧情与世界规则']);
-    assert.equal(folderPath(state, assignedFolder(state, 'style')), '文风');
-    assert.equal(folderPath(state, assignedFolder(state, 'adult')), 'NSFW / 玩法规则');
-    assert.deepEqual(state.assignments.world, { folderId: null, source: 'manual' });
-    assert.equal(state.assignments.mixed, undefined);
-    assert.equal(state.assignments.plain, undefined);
-    assert.equal(state.assignments.before, undefined);
-    assert.equal(state.assignments.after, undefined);
-    const [nsfw] = state.folders.filter(folder => folder.name === 'NSFW');
-    assert.equal(folderTree(state, entries).find(folder => folder.id === nsfw.id).total, 1);
-    assert.ok(state.collapsed.includes(nsfw.id));
-    assert.ok(state.collapsed.includes(assignedFolder(state, 'adult')));
-    assignEntries(state, entries, ['adult'], null);
-    assert.equal(classifyUnassignedEntries(state, entries), false);
-    assert.equal(assignedFolder(state, 'adult'), null);
+    assert.deepEqual(findPresetSections(entries), [{ start: 1, end: 7, name: '规则' }, { start: 3, end: 5, name: '写作规则' }]);
+    assert.ok(syncPresetSections(state, entries));
+    const layout = folderLayout(state, entries), outer = layout[1];
+    assert.equal(outer.total, 7);
+    assert.deepEqual(outer.children.map(node => node.entry?.name || node.name), ['====↓[规则]↓====', '直属一', '写作规则', '直属二', '====↑[规则]↑====']);
+    assert.equal(folderPath(state, assignedFolder(state, '4')), '规则 / 写作规则');
+    assert.deepEqual(projectedEntries(layout), entries);
+    assert.equal(syncPresetSections(state, entries), false);
+});
+
+test('replaces old automatic folders, preserves explicit moves, and never recreates deleted sections', () => {
+    const entries = namedEntries(['开场', '<!-- == 视角模式 == -->', '内容', '另一条', '<!-- ===== -->', '尾声']);
+    const state = emptyFolders(), old = createFolder(state, '文风', null, uuid);
+    assignEntries(state, entries, ['0', '2'], old, 'auto');
+    assignEntries(state, entries, ['3'], null);
+    assert.ok(syncPresetSections(state, entries));
+    assert.equal(assignedFolder(state, '0'), null);
+    assert.equal(state.folders.some(folder => folder.id === old), false);
+    assert.deepEqual(state.assignments['3'], { folderId: null, source: 'manual' });
+    const id = assignedFolder(state, '2');
+    assert.equal(folderPath(state, id), '视角模式');
+    assert.equal(assignedFolder(normalizeFolderState(state), '2'), id);
+    deleteFolder(state, id);
+    assert.ok(syncPresetSections(state, entries));
+    assert.equal(state.folders.length, 0);
+    assert.equal(assignedFolder(state, '2'), null);
+});
+
+test('repeated decorated labels are separate sections, and orphan or crossing headings stay ungrouped', () => {
+    const entries = namedEntries(['꒰১┈┈文风┈┈໒꒱', '甲', '꒰১┈┈文风┈┈໒꒱', '无分组', '꒰১┈┈文风┈┈໒꒱', '乙', '꒰১┈┈文风┈┈໒꒱',
+        '↓A', '↓B', '丙', '↑A', '↑B', '『 未闭合', '末尾']);
+    const state = emptyFolders();
+    syncPresetSections(state, entries);
+    assert.equal(state.folders.length, 2);
+    assert.notEqual(assignedFolder(state, '1'), assignedFolder(state, '5'));
+    assert.equal(assignedFolder(state, '9'), null);
+    assert.equal(assignedFolder(state, '13'), null);
+    assert.deepEqual(projectedEntries(folderLayout(state, entries)), entries);
 });
 
 test('respects saved expanded folders while defaulting newly created folders to folded', () => {
@@ -134,10 +152,8 @@ test('real preset compatibility: classify references, fold and delete folders wh
     const byId = new Map(data.prompts.map(prompt => [prompt.identifier, prompt])), holder = data.prompt_order.toSorted((a, b) => b.order.length - a.order.length)[0], entries = holder.order.map(item => byId.get(item.identifier)).filter(Boolean);
     const state = emptyFolders(), parent = createFolder(state, '测试目录', null, uuid), child = createFolder(state, '测试子目录', parent, uuid);
     assignEntries(state, data.prompts, entries.slice(0, 8).map(prompt => prompt.identifier), child); state.collapsed.push(parent);
-    assert.equal(folderTree(state, entries).flatMap(folder => folder.items).length, entries.length - 8);
-    const classified = classifyUnassignedEntries(state, entries);
-    assert.ok(classified);
-    assert.equal(folderTree(state, entries).reduce((sum, folder) => sum + folder.total, 0), entries.length);
+    assert.ok(syncPresetSections(state, entries));
+    assert.deepEqual(projectedEntries(folderLayout(state, entries)), entries);
     assert.ok(entries.slice(0, 8).every(prompt => assignedFolder(state, prompt.identifier) === child));
     deleteFolder(state, child); deleteFolder(state, parent);
     assert.equal(JSON.stringify(data), before);

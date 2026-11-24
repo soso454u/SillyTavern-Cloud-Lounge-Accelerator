@@ -18,6 +18,7 @@ const rows = '#completion_prompt_manager_list > [data-pm-identifier]';
 const headers = '#completion_prompt_manager_list > .cla-preset-fold-header';
 const rendered = page => page.evaluate(rows => [...document.querySelectorAll(rows)]
     .filter(row => getComputedStyle(row).display !== 'none' && row.getClientRects().length)
+    .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
     .map(row => row.dataset.pmIdentifier), rows);
 const assertHidden = async (page, ids) => {
     const hidden = await page.evaluate(({ rows, ids }) => [...document.querySelectorAll(rows)]
@@ -81,142 +82,102 @@ try {
         const regexDialog = page.locator('dialog[open]').filter({ hasText: /内置正则|内建正则|embedded regex|preset contains.*regex/i });
         if (await regexDialog.count()) await act(regexDialog.locator('.popup-button-cancel'));
         await page.locator('dialog[open]').waitFor({ state: 'hidden' });
-        await folder('NSFW').waitFor();
         assert.ok(resources.has(manifest.js.split('/').pop()));
         assert.ok(resources.has(manifest.css.split('/').pop()));
-        assert.equal(await page.getByText(/分类建议|待审核|应用审核|按原头尾结构预览/).count(), 0);
         const original = await snapshot(page);
         const [loadedOrder] = JSON.parse(original);
         for (const expected of fixtureOrder) {
             assert.deepEqual(loadedOrder.find(group => String(group.character_id) === String(expected.character_id)), expected);
         }
         const ids = await page.locator(rows).evaluateAll(items => items.map(row => row.dataset.pmIdentifier));
+        const characterId = await page.evaluate(async () => String((await import('/scripts/openai.js')).promptManager.activeCharacter.id));
+        const expectedOrder = fixtureOrder.find(group => String(group.character_id) === characterId)
+            .order.map(item => item.identifier).filter(id => ids.includes(id));
         assert.ok(ids.length >= 100);
-        const folders = await metadata(page);
-        assert.ok(Object.values(folders.assignments).some(item => item.source === 'auto'));
-        const parent = folders.folders.find(item => item.name === 'NSFW' && !item.parentId);
-        const children = folders.folders.filter(item => item.parentId === parent.id);
-        assert.ok(children.length >= 2, 'fixture should produce more than one NSFW subfolder');
-        const child = children.find(item => Object.values(folders.assignments).some(assignment => assignment.folderId === item.id));
-        const members = Object.entries(folders.assignments).filter(([, item]) => item.folderId === child.id).map(([id]) => id);
-        const descendantCount = Object.values(folders.assignments).filter(item => children.some(child => child.id === item.folderId)).length;
+        assert.deepEqual(ids, expectedOrder);
+        const state = await metadata(page);
+        assert.ok(Object.values(state.assignments).some(item => item.source === 'section'));
+        assert.equal(Object.values(state.assignments).some(item => item.source === 'auto'), false);
+        const parent = state.folders.find(item => item.name === '规则' && !item.parentId);
+        const child = state.folders.find(item => item.name === '文风' && item.parentId === parent?.id);
+        assert.ok(child, 'Use the large fixture with the nested 规则 / 文风 region');
         const parentRow = folder(parent.name), childRow = folder(child.name);
-        assert.equal(Number(await parentRow.locator('.cla-preset-fold-count').textContent()), descendantCount);
-        assert.equal(await page.locator(headers).locator('[aria-expanded="true"]').count(), 0);
+        const assigned = ids.filter(id => state.assignments[id]?.folderId);
+        const outside = ids.filter(id => !state.assignments[id]?.folderId);
+        const byId = new Map(state.folders.map(item => [item.id, item]));
+        const inFolder = (id, target) => {
+            for (let current = state.assignments[id]?.folderId; current; current = byId.get(current)?.parentId) {
+                if (current === target) return true;
+            }
+            return false;
+        };
+        const parentMembers = ids.filter(id => inFolder(id, parent.id));
+        const childMembers = ids.filter(id => inFolder(id, child.id));
+        const parentDirect = ids.filter(id => state.assignments[id]?.folderId === parent.id);
+        const childDirect = ids.filter(id => state.assignments[id]?.folderId === child.id);
+        await parentRow.waitFor();
         assert.equal(await childRow.count(), 0);
-        await assertHidden(page, ids);
+        assert.equal(Number(await parentRow.locator('.cla-preset-fold-count').textContent()), parentMembers.length);
+        assert.deepEqual(await rendered(page), outside);
+        await assertHidden(page, assigned);
 
-        await act(parentRow.locator('.cla-preset-fold-name'));
+        await act(parentRow.locator('.cla-preset-fold-toggle'));
         await childRow.waitFor();
-        await assertHidden(page, ids);
+        assert.deepEqual(await rendered(page), ids.filter(id => outside.includes(id) || parentDirect.includes(id)));
+        await assertHidden(page, childMembers);
         await act(childRow.locator('.cla-preset-folder-arrow'));
-        assert.deepEqual(await rendered(page), ids.filter(id => members.includes(id)));
-
+        assert.deepEqual(await rendered(page), ids.filter(id => [outside, parentDirect, childDirect].some(items => items.includes(id))));
         if (mobile) {
             const line = await childRow.evaluate(row => ({
-                flow: getComputedStyle(row).flexWrap,
-                height: row.getBoundingClientRect().height,
+                flow: getComputedStyle(row).flexWrap, height: row.getBoundingClientRect().height,
                 overflows: row.scrollWidth > row.clientWidth + 1,
             }));
             assert.equal(line.flow, 'nowrap');
             assert.ok(line.height >= 44 && line.height < 60);
             assert.equal(line.overflows, false);
         }
-        await act(parentRow.locator('.cla-preset-fold-action'));
-        await button('新建子文件夹…').waitFor();
-        assert.equal(await parentRow.locator('.cla-preset-fold-toggle').getAttribute('aria-expanded'), 'true');
-        await page.keyboard.press('Escape');
         await act(parentRow.locator('.cla-preset-fold-toggle'));
-        assert.equal(await childRow.count(), 0);
-        await assertHidden(page, ids);
-
-        // Force a true native list rebuild. Never substitute test rows or a fake manager.
+        await assertHidden(page, parentMembers);
         await page.evaluate(async () => (await import('/scripts/openai.js')).promptManager.renderPromptManagerListItems());
-        await assertHidden(page, ids);
+        await assertHidden(page, parentMembers);
+
         await filter.selectOption('enabled');
-        await assertHidden(page, ids);
+        await assertHidden(page, parentMembers);
         await filter.selectOption('all');
-        await search.fill('NSFW');
-        assert.equal(await parentRow.locator('.cla-preset-fold-toggle').getAttribute('aria-expanded'), 'true');
-        const searchResults = new Set(await rendered(page));
-        assert.ok(members.every(id => searchResults.has(id)));
-        await act(childRow.locator('.cla-preset-fold-toggle'));
-        await assertHidden(page, members);
+        await search.fill(child.name);
+        assert.equal(await childRow.locator('.cla-preset-fold-toggle').getAttribute('aria-expanded'), 'true');
         await search.fill('');
-        await assertHidden(page, ids);
-        assert.equal(await childRow.count(), 0);
+        await assertHidden(page, parentMembers);
         await act(parentRow.locator('.cla-preset-fold-toggle'));
         assert.equal(await childRow.locator('.cla-preset-fold-toggle').getAttribute('aria-expanded'), 'true');
-        await act(childRow.locator('.cla-preset-fold-toggle'));
-        await assertHidden(page, ids);
 
         await act(button('全部展开'));
-        assert.deepEqual(await rendered(page), ids);
-        await act(button('全部折叠'));
-        await assertHidden(page, ids);
+        assert.deepEqual(await rendered(page), expectedOrder, 'visual position in the grouped view must match prompt_order');
+        const positions = await page.evaluate(({ rows, headers }) => [...document.querySelectorAll(`${rows}, ${headers}`)]
+            .filter(row => row.getClientRects().length)
+            .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
+            .map(row => row.dataset.pmIdentifier || `folder:${row.dataset.claPresetGroup}`), { rows, headers });
+        for (const section of [parent, child]) {
+            assert.equal(positions[positions.indexOf(`folder:${section.id}`) + 1], section.sectionKey,
+                'folder header should immediately precede its opening divider in the original list');
+        }
         await act(button('原始顺序'));
         assert.equal(await page.locator(headers).count(), 0);
-        assert.deepEqual(await rendered(page), ids);
-        assert.deepEqual(await page.locator(rows).evaluateAll(items => items.map(row => row.dataset.pmIdentifier)), ids);
+        assert.deepEqual(await rendered(page), expectedOrder);
         await act(button('分类浏览'));
-        await assertHidden(page, ids);
+        assert.deepEqual(await rendered(page), expectedOrder);
 
         const persisted = page.waitForResponse(response => response.url().endsWith('/api/settings/save') && response.ok());
-        await act(parentRow.locator('.cla-preset-fold-toggle'));
-        await act(childRow.locator('.cla-preset-fold-toggle'));
+        await act(button('全部折叠'));
         await persisted;
         await page.reload();
         await page.locator('.cla-preset-groups').waitFor({ state: 'attached', timeout: 30_000 });
         await openDrawer();
-        await childRow.waitFor();
-        assert.equal(await childRow.locator('.cla-preset-fold-toggle').getAttribute('aria-expanded'), 'true');
-        assert.deepEqual(await rendered(page), ids.filter(id => members.includes(id)));
-
-        const visible = page.locator(`${rows}:visible`);
-        const target = visible.first().locator('.completion_prompt_manager_prompt_name');
-        if (mobile) {
-            await target.evaluate(async name => {
-                name.scrollIntoView({ block: 'center', behavior: 'instant' });
-                // Wait for the drawer and the browser's touch hit testing to settle.
-                await Promise.all(name.closest('.drawer-content').getAnimations().map(animation => animation.finished.catch(() => {})));
-                await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-            });
-            const point = await target.boundingBox();
-            const cdp = await context.newCDPSession(page);
-            const touchPoint = { x: point.x + point.width / 2, y: point.y + point.height / 2 };
-            assert.ok(await target.evaluate((name, { x, y }) => name.contains(document.elementFromPoint(x, y)), touchPoint));
-            await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [touchPoint] });
-            await button('批量移动').waitFor();
-            await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-            await cdp.detach();
-        } else {
-            await target.click({ modifiers: ['Control'] });
-        }
-        assert.equal(await page.locator(`${rows}.cla-preset-entry-selected`).count(), 1);
-        assert.equal(await page.locator('.cla-preset-bulk-toolbar input[type=checkbox]').count(), 0);
-        await act(button('批量移动'));
-        const destination = children.find(item => item.id !== child.id);
-        await act(button(`NSFW / ${destination.name}`));
-        const first = ids.find(id => members.includes(id));
-        assert.deepEqual((await metadata(page)).assignments[first], { folderId: destination.id, source: 'manual' });
-
-        await act(button('新建文件夹'));
-        await page.getByPlaceholder('新文件夹名称').fill('检查目录');
-        await act(button('保存'));
-        await act(folder('检查目录').locator('.cla-preset-fold-action'));
-        await act(button('重命名…'));
-        await page.getByPlaceholder('文件夹新名称').fill('已重命名');
-        await act(button('保存'));
-        await act(folder('已重命名').locator('.cla-preset-fold-action'));
-        await act(button('移动文件夹…'));
-        await page.getByLabel('上级文件夹').selectOption(parent.id);
-        await act(button('保存'));
-        await act(folder('已重命名').locator('.cla-preset-fold-action'));
-        await act(button('删除文件夹…'));
-        await act(page.locator('dialog[open] .popup-button-ok'));
-        await folder('已重命名').waitFor({ state: 'detached' });
+        await parentRow.waitFor();
+        assert.deepEqual(await rendered(page), outside);
+        await assertHidden(page, assigned);
         assert.equal(await snapshot(page), original);
-        console.log(`${mobile ? 'Touch / Cappuccino' : 'Desktop / Dark Lite'}: ${ids.length} native prompt rows, folders, search/filter, native rebuild, reload and unchanged prompts/prompt_order passed`);
+        console.log(`${mobile ? 'Touch / Cappuccino' : 'Desktop / Dark Lite'}: ${ids.length} rows in original visual order, nested dividers in place, native data unchanged`);
         await context.close();
     }
 } finally {

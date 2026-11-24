@@ -1,5 +1,5 @@
-import { PRESET_GROUPS_KEY, UNGROUPED_ID, normalizeFolderState, assignedFolder, folderPath, folderTree,
-    createFolder, renameFolder, moveFolder, deleteFolder, assignEntries, classifyUnassignedEntries, promptFingerprint, importFolderMetadata } from './preset-folder-model.js';
+import { PRESET_GROUPS_KEY, normalizeFolderState, assignedFolder, folderPath, folderLayout,
+    createFolder, renameFolder, moveFolder, deleteFolder, assignEntries, syncPresetSections, promptFingerprint, importFolderMetadata } from './preset-folder-model.js';
 export { PRESET_GROUPS_KEY, UNGROUPED, normalizePresetGroup } from './preset-folder-model.js';
 
 // This is the existing preset organizer, using the same extension-settings key.
@@ -243,7 +243,7 @@ export class PresetEntryGroups {
                 this.host.showMenu(menu, create);
                 menu.querySelector('input')?.focus();
             });
-            const toggleAll = folded => this.setFold(context, [UNGROUPED_ID, ...this.state(context).folders.map(folder => folder.id)], folded);
+            const toggleAll = folded => this.setFold(context, this.state(context).folders.map(folder => folder.id), folded);
             const importInput = this.input('导入分类文件', 'file');
             importInput.accept = '.json,application/json'; importInput.hidden = true;
             importInput.addEventListener('change', () => {
@@ -280,7 +280,7 @@ export class PresetEntryGroups {
             this.rawOrder = false; this.query = ''; this.filter = 'all'; this.searchFolders.clear();
         }
         this.key = context.key;
-        const focusedFolder = this.host.document.activeElement?.closest?.('.cla-preset-fold-toggle')?.closest('.cla-preset-fold-header')?.dataset.claPresetGroup;
+        const focusedFolder = this.host.document.activeElement?.closest?.('.cla-preset-fold-toggle')?.closest('.cla-preset-fold-header')?.dataset.claPresetSegment;
         this.clearDisplay();
         if (this.list && this.list !== list) this.protectSortable(this.list, false);
         this.list = list;
@@ -289,8 +289,8 @@ export class PresetEntryGroups {
             this.sortRecords.delete(element);
         }
         const state = this.state(context), entries = this.entries(context), raw = this.extensionSettings[PRESET_GROUPS_KEY]?.[context.key];
-        const classified = classifyUnassignedEntries(state, entries);
-        if (classified || (raw && (raw.schema !== 4 || entries.some(prompt =>
+        const sectionsChanged = syncPresetSections(state, entries);
+        if (sectionsChanged || (raw && (raw.schema !== 4 || entries.some(prompt =>
             Object.hasOwn(state.assignments, prompt.identifier) && state.fingerprints[prompt.identifier] !== promptFingerprint(prompt))))) {
             this.run(() => this.persist(context, state));
         }
@@ -329,36 +329,42 @@ export class PresetEntryGroups {
         } else {
             list.classList.add('cla-preset-grouped-list');
             const collapsed = new Set(state.collapsed);
+            const layout = folderLayout(state, entries);
             const matching = new Set();
-            const scan = folder => {
-                for (const child of folder.children) scan(child);
-                if (folder.items.some(prompt => visible.has(prompt.identifier)) || folder.children.some(child => matching.has(child.id))) matching.add(folder.id);
+            const scan = node => {
+                if (node.entry) return visible.has(node.entry.identifier);
+                const childMatches = node.children.map(scan);
+                const matches = childMatches.includes(true);
+                if (matches) matching.add(node);
+                return matches;
             };
-            const tree = folderTree(state, entries);
-            if (filtering) for (const folder of tree) scan(folder);
+            if (filtering) for (const node of layout) scan(node);
             const draw = (nodes, depth = 0, parentHidden = false) => {
-                for (const folder of nodes) {
-                    const hideFolder = parentHidden || (filtering && !matching.has(folder.id));
-                    const id = folder.id || UNGROUPED_ID;
-                    const folded = query ? (this.searchFolders.get(id) ?? false) : collapsed.has(id);
-                    if (!hideFolder) this.drawFolder(list, context, state, folder, id, folded, order++, depth, focusedFolder);
-                    draw(folder.children, depth + 1, hideFolder || folded);
-                    for (const prompt of folder.items) place(prompt, hideFolder || folded || !visible.has(prompt.identifier), depth + 1);
+                for (const node of nodes) {
+                    if (node.entry) {
+                        place(node.entry, parentHidden || !visible.has(node.entry.identifier), depth);
+                        continue;
+                    }
+                    const hideFolder = parentHidden || (filtering && !matching.has(node));
+                    const folded = query ? (this.searchFolders.get(node.id) ?? false) : collapsed.has(node.id);
+                    if (!hideFolder) this.drawFolder(list, context, state, node, folded, order++, depth, focusedFolder);
+                    draw(node.children, depth + 1, hideFolder || folded);
                 }
             };
-            draw(tree);
+            draw(layout);
         }
         if (this.host.menuButton && !this.host.menuButton.isConnected) this.host.closeMenu();
         this.protectSortable(list, !this.rawOrder || filtering || !!this.host.selection?.mode);
         this.host.selection?.render();
         this.watchStatus(list, context);
     }
-    drawFolder(list, context, state, folder, id, folded, order, depth, focusedFolder) {
+    drawFolder(list, context, state, folder, folded, order, depth, focusedFolder) {
         const header = this.node('li', '', 'cla-preset-fold-header');
-        header.dataset.claPresetGroup = id;
+        header.dataset.claPresetGroup = folder.id;
+        header.dataset.claPresetSegment = String(folder.segment);
         header.style.setProperty('order', String(order), 'important');
         header.style.setProperty('--cla-preset-depth', String(Math.min(depth, 6)));
-        const toggle = () => this.setFold(context, [id], !folded);
+        const toggle = () => this.setFold(context, [folder.id], !folded);
         const button = this.button('', toggle, 'cla-preset-fold-toggle');
         button.title = folderPath(state, folder.id);
         button.setAttribute('aria-label', `${folder.name}，${folder.total} 条`);
@@ -368,15 +374,13 @@ export class PresetEntryGroups {
         button.append(arrow, this.node('span', folder.name, 'cla-preset-fold-name'), this.node('small', String(folder.total), 'cla-preset-fold-count'));
         header.append(button);
         header.addEventListener('click', event => { if (!event.target.closest('button')) this.run(toggle); });
-        if (folder.id) {
-            const more = this.button('⋯', () => this.showFolderMenu(more, context, id), 'cla-preset-fold-action');
-            more.setAttribute('aria-label', `更多：${folder.name}`);
-            more.setAttribute('aria-haspopup', 'menu');
-            header.append(more);
-        }
+        const more = this.button('⋯', () => this.showFolderMenu(more, context, folder.id), 'cla-preset-fold-action');
+        more.setAttribute('aria-label', `更多：${folder.name}`);
+        more.setAttribute('aria-haspopup', 'menu');
+        header.append(more);
         list.append(header);
         this.headers.push(header);
-        if (id === focusedFolder) button.focus({ preventScroll: true });
+        if (header.dataset.claPresetSegment === focusedFolder) button.focus({ preventScroll: true });
     }
     clear() {
         this.clearDisplay(); this.root?.remove(); this.root = null; this.toolbarContext = null; this.feedback = null;
