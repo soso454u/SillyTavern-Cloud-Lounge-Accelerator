@@ -1,156 +1,157 @@
-// Grouped rows stay in place until drop. Hit-test only the row/header under the
-// pointer, rather than asking native sortable to measure/reflow every hidden row.
+const ROW = '[data-pm-identifier][class*="prompt_manager_prompt_draggable"]';
+const FOLDER = '.cla-preset-folder';
+const COMPANION = 'cla-preset-drag-companion';
+
+// Keep SillyTavern's jQuery UI helper, placeholder, touch handling and update
+// callback. Only adapt which nodes are measured and which rows move as a block.
 export class PresetGroupedDrag {
     constructor(groups, list) {
-        this.groups = groups; this.list = list;
-        this.doc = groups.host.document; this.win = this.doc.defaultView;
-        this.down = this.down.bind(this); this.move = this.move.bind(this); this.up = this.up.bind(this);
-        this.cancel = event => { if (event.type !== 'pointercancel' || event.pointerId === this.state?.pointer) this.finish(); };
-        this.contextMenu = event => { if (this.state) event.preventDefault(); };
-        this.key = event => { if (event.key === 'Escape') { event.preventDefault(); this.finish(); } };
-        this.block = event => {
-            if (this.state?.active || this.handle(event.target)) {
-                if (event.cancelable) event.preventDefault();
-                event.stopImmediatePropagation();
-            }
-        };
+        this.groups = groups; this.list = list; this.doc = groups.host.document;
+        this.jquery = globalThis.jQuery || globalThis.$;
+        this.down = this.down.bind(this); this.cancel = this.cancel.bind(this);
+        this.key = event => { if (event.key === 'Escape' && this.state) { event.preventDefault(); this.cancel(); } };
         this.click = event => {
-            if (Date.now() < (this.suppressUntil || 0)) {
-                event.preventDefault(); event.stopImmediatePropagation();
-            }
+            if (Date.now() < (this.suppressUntil || 0)) { event.preventDefault(); event.stopImmediatePropagation(); }
         };
-        list.addEventListener('pointerdown', this.down, true);
+        for (const type of ['pointerdown', 'mousedown', 'touchstart']) list.addEventListener(type, this.down, { capture: true, passive: true });
         list.addEventListener('click', this.click, true);
-        list.addEventListener('contextmenu', this.contextMenu);
-        for (const type of ['mousedown', 'touchstart']) list.addEventListener(type, this.block, { capture: true, passive: false });
+        this.doc.addEventListener('pointercancel', this.cancel, true); this.doc.addEventListener('keydown', this.key, true);
+        this.doc.defaultView.addEventListener('blur', this.cancel); this.reconcile();
     }
-    handle(target) {
-        if (this.groups.rawOrder) return null;
-        const handle = target?.closest?.('.drag-handle');
-        const row = handle?.closest('[data-pm-identifier][class*="prompt_manager_prompt_draggable"]');
-        return row?.parentElement === this.list ? row : null;
+    nativeRows() {
+        const original = this.original.items;
+        return typeof original === 'function' ? original.call(this.list, null, { options: this.original }) : this.jquery(this.list).find(original);
+    }
+    reconcile() {
+        const instance = this.groups.sortable(this.list);
+        if (!instance?.options || instance.dragging) return;
+        if (this.instance !== instance) {
+            this.restore(); this.instance = instance; this.original = {}; this.applied = {}; this.pointerOptions = {};
+        }
+        for (const key of ['items', 'handle', 'delay', 'distance', 'cancel', 'axis', 'tolerance', 'placeholder', 'forcePlaceholderSize', 'revert', 'start', 'change', 'update', 'stop']) {
+            if (!(key in this.original) || (instance.options[key] !== this.applied[key] && instance.options[key] !== this.pointerOptions[key])) this.original[key] = instance.options[key];
+        }
+        const controller = this;
+        this.applied = {
+            // toArray passes options: return every REAL row, including folded
+            // rows. Synthetic folder headers must never enter prompt_order.
+            items(event, ui) {
+                if (ui?.options) return controller.nativeRows().not('.ui-sortable-placeholder, .ui-sortable-helper');
+                return controller.jquery(controller.list.children).filter(`${ROW}, ${FOLDER}`)
+                    .filter(function () { return !this.classList.contains(COMPANION) && this.getClientRects().length > 0; });
+            },
+            handle: '.drag-handle, .cla-preset-fold-header', delay: 0, distance: 4,
+            cancel: this.original.cancel, axis: 'y', tolerance: 'pointer',
+            placeholder: 'cla-preset-native-placeholder', forcePlaceholderSize: true, revert: false,
+            start(event, ui) { controller.start(event, ui); return controller.original.start?.call(this, event, ui); },
+            change(event, ui) { controller.change(ui); return controller.original.change?.call(this, event, ui); },
+            update(event, ui) { return controller.update(this, event, ui); },
+            stop(event, ui) { controller.stop(); return controller.original.stop?.call(this, event, ui); },
+        };
+        instance.option(this.applied);
     }
     down(event) {
-        this.suppressUntil = 0;
-        if (event.button > 0 || event.isPrimary === false || this.groups.rawOrder) return;
-        const row = this.handle(event.target);
+        if (this.state?.active || event.button > 0 || event.isPrimary === false) return;
+        this.suppressUntil = 0; this.reconcile();
+        const instance = this.instance;
+        if (!instance?.options || this.groups.rawOrder) return;
         const header = event.target?.closest?.('.cla-preset-fold-header');
-        if (!row && (!header || event.target.closest('.cla-preset-fold-icon'))) return;
-        if (this.groups.host.busy || this.groups.query || this.groups.filter !== 'all') return;
-        const folder = header && this.groups.folderNodes.get(header.dataset.claPresetGroup);
+        const row = event.target?.closest?.('.drag-handle')?.closest(ROW);
+        const allowed = !this.groups.host.busy && !this.groups.query && this.groups.filter === 'all';
+        const folder = header && !event.target.closest('.cla-preset-fold-icon') && this.groups.folderNodes.get(header.dataset.claPresetGroup);
+        // Run after the global guard, before native mouse/Touch Punch handlers.
+        this.pointerOptions = { handle: this.applied.handle, delay: folder ? 250 : 0, distance: 4,
+            cancel: !allowed ? '*' : folder ? '.cla-preset-fold-icon' : this.original.cancel };
+        instance.option(this.pointerOptions);
+        if (!allowed || (!folder && row?.parentElement !== this.list)) return;
+        const context = this.groups.context(); if (!this.groups.valid(context)) return;
         const selection = this.groups.host.selection;
-        const ids = row ? (selection?.mode && selection.selected.has(row.dataset.pmIdentifier)
-            ? new Set(selection.selected) : new Set([row.dataset.pmIdentifier])) : new Set(folder?.ids);
-        const context = this.groups.context();
-        if (!ids.size || !this.groups.valid(context)) return;
-        const options = row ? this.groups.sortable(this.list)?.options : null;
-        this.finish();
-        this.state = { ids, context, source: row || folder.element, folder: !row, x: event.clientX, y: event.clientY,
-            startX: event.clientX, startY: event.clientY, pointer: event.pointerId, ready: false, active: false,
-            distance: row ? Math.max(10, Number(options?.distance) || 0) : 10 };
-        for (const [type, fn] of [['pointermove', this.move], ['pointerup', this.up], ['pointercancel', this.cancel], ['touchmove', this.block]]) {
-            this.doc.addEventListener(type, fn, { capture: true, passive: false });
-        }
-        this.win.addEventListener('blur', this.cancel);
-        this.doc.addEventListener('keydown', this.key, true);
-        // Let a folder swipe scroll until the hold activates. Row handles already
-        // opt out of touch scrolling; suppress compatibility mouse sorting too.
-        if (row) { event.preventDefault(); event.stopImmediatePropagation(); }
-        this.timer = this.win.setTimeout(() => {
-            if (!this.state) return;
-            this.state.ready = true;
-            if (this.state.folder || this.moved()) this.activate();
-        }, row ? Math.max(150, Number(options?.delay) || 0) : 400);
+        const ids = folder ? new Set(folder.ids) : selection?.mode && selection.selected.has(row.dataset.pmIdentifier)
+            ? new Set(selection.selected) : new Set([row.dataset.pmIdentifier]);
+        const source = folder ? folder.element : row;
+        const block = [...this.list.children].filter(node => node === source || ids.has(node.dataset.pmIdentifier)
+            || (folder && this.groups.folderNodes.get(node.dataset.claPresetGroup)?.ids.every(id => ids.has(id))));
+        this.state = { source, ids, block, context, folder: !!folder, active: false };
     }
-    moved() { return Math.hypot(this.state.x - this.state.startX, this.state.y - this.state.startY) >= this.state.distance; }
-    activate() {
+    start(event, ui) {
         const state = this.state;
-        if (!state?.source.isConnected || !this.groups.valid(state.context)) { this.finish(); return; }
-        state.active = true;
-        state.source.classList.add('cla-preset-folder-dragging');
+        if (!state || !this.groups.valid(state.context)) { this.cancelling = true; return; }
+        state.active = true; state.order = [...this.list.children]; state.source = ui.item[0];
         this.list.classList.add('cla-preset-drag-active');
-        const line = this.doc.createElement('div'); line.className = 'cla-preset-drop-line'; line.hidden = true;
-        line.setAttribute('aria-hidden', 'true'); this.doc.body.append(line); state.line = line;
-        for (let node = this.list; node; node = node.parentElement) {
-            if (node.scrollHeight > node.clientHeight && /auto|scroll|overlay/.test(this.win.getComputedStyle(node).overflowY)) { state.scroller = node; break; }
+        for (const node of state.block) if (node !== state.source) node.classList.add(COMPANION);
+        this.instance.items = this.instance.items.filter(item => !item.item[0].classList.contains(COMPANION));
+        this.instance.refreshPositions();
+        if (state.ids.size > 1) {
+            state.badge = this.doc.createElement('span'); state.badge.className = 'cla-preset-drag-count';
+            state.badge.textContent = `${state.ids.size} 条一起移动`; ui.helper[0].append(state.badge);
         }
-        state.scroller ||= this.doc.scrollingElement;
-        this.queue();
     }
-    move(event) {
+    change(ui) {
+        const previous = ui.placeholder[0]?.previousElementSibling;
+        const folder = previous && this.groups.folderNodes.get(previous.dataset.claPresetGroup);
+        if (!folder?.folded || this.state?.ids.has(folder.ids[0])) return;
+        // Below a folded header means after its ENTIRE hidden range.
+        const last = [...this.list.querySelectorAll(ROW)].find(row => row.dataset.pmIdentifier === folder.ids.at(-1));
+        if (last) last.after(ui.placeholder[0]);
+    }
+    update(owner, event, ui) {
         const state = this.state;
-        if (!state || state.pointer !== event.pointerId) return;
-        state.x = event.clientX; state.y = event.clientY;
-        if (!state.active) {
-            if (!this.moved()) return;
-            if (state.folder) { this.finish(); return; }
-            if (state.ready) this.activate();
+        if (!state || this.cancelling || !this.groups.valid(state.context)) return;
+        let next = ui.item[0].nextSibling;
+        while (next && state.block.includes(next)) next = next.nextSibling;
+        const fragment = this.doc.createDocumentFragment();
+        for (const node of state.block) fragment.append(node);
+        this.list.insertBefore(fragment, next); state.updated = true;
+        // Native update schedules the debounced save. Observe failure without
+        // making drop wait for the SETTINGS_UPDATED promise.
+        const host = this.groups.host, manager = host.manager, save = manager.saveServiceSettings;
+        let expected;
+        const observeSave = (...args) => {
+            const pending = save.apply(manager, args);
+            Promise.resolve(pending).catch(error => {
+                const now = host.context();
+                if (now?.settings === state.context.settings && now.characterId === state.context.characterId && now.order === expected) {
+                    now.holder.order = state.context.order;
+                    for (const node of state.order) if (node.parentElement === this.list) this.list.append(node);
+                    host.decorate();
+                }
+                this.groups.run(() => { throw error; });
+            });
+            return pending;
+        };
+        manager.saveServiceSettings = observeSave;
+        try { return this.original.update?.call(owner, event, ui); }
+        finally {
+            expected = host.context()?.order;
+            if (manager.saveServiceSettings === observeSave) manager.saveServiceSettings = save;
         }
-        if (this.state?.active) { event.preventDefault(); event.stopImmediatePropagation(); this.queue(); }
     }
-    targetAt(x, y) {
-        const state = this.state;
-        const node = this.doc.elementFromPoint(x, y)?.closest?.('[data-pm-identifier], .cla-preset-folder');
-        if (!node || node.parentElement !== this.list || node === state.source) return null;
-        const rect = node.getBoundingClientRect(), above = y < rect.top + rect.height / 2;
-        let id = node.dataset.pmIdentifier, before = above;
-        if (!id) {
-            const folder = this.groups.folderNodes.get(node.dataset.claPresetGroup);
-            if (!folder) return null;
-            before = above || !folder.folded;
-            id = before ? folder.ids[0] : folder.ids.at(-1);
-        }
-        if (!id || state.ids.has(id)) return null;
-        return { rect, above: before, target: before ? { before: id } : { after: id } };
+    stop() {
+        const state = this.state; if (!state) return;
+        this.suppressUntil = state.active ? Date.now() + 500 : 0;
+        for (const node of state.block) node.classList.remove(COMPANION);
+        state.badge?.remove(); this.list.classList.remove('cla-preset-drag-active'); this.state = null;
+        if (!this.cancelling) this.groups.host.decorate();
     }
-    queue() {
-        if (this.frame != null) return;
-        this.frame = this.win.requestAnimationFrame(time => { this.frame = null; this.paint(time); });
+    cancel() {
+        if (!this.state) return;
+        this.cancelling = true;
+        try { if (this.instance?.dragging) this.instance.cancel(); this.stop(); }
+        finally { this.cancelling = false; }
     }
-    paint(time) {
-        const state = this.state;
-        if (!state?.active) return;
-        if (!state.source.isConnected || this.groups.list !== this.list) { this.finish(); return; }
-        const hit = state.hit = this.targetAt(state.x, state.y);
-        const scroller = state.scroller;
-        const sr = scroller === this.doc.scrollingElement ? { top: 0, bottom: this.win.innerHeight, left: 0, right: this.win.innerWidth } : scroller?.getBoundingClientRect();
-        const direction = sr && state.x >= sr.left && state.x <= sr.right && state.y >= sr.top && state.y <= sr.bottom
-            ? (state.y < sr.top + 40 ? -1 : state.y > sr.bottom - 40 ? 1 : 0) : 0;
-        // Read geometry first; only then write the indicator and scroll position.
-        state.line.hidden = !hit;
-        if (hit) Object.assign(state.line.style, { left: `${hit.rect.left}px`, width: `${hit.rect.width}px`,
-            transform: `translateY(${(hit.above ? hit.rect.top : hit.rect.bottom) - 2}px)` });
-        const previous = scroller?.scrollTop;
-        if (direction) scroller.scrollTop += direction * 600 * Math.min(32, state.lastTime == null ? 16 : time - state.lastTime) / 1000;
-        state.lastTime = time;
-        if (direction && scroller.scrollTop !== previous) this.queue();
-    }
-    up(event) {
-        const state = this.state;
-        if (!state || state.pointer !== event.pointerId) return;
-        // A release can precede the queued paint; use the final pointer position.
-        const hit = state.active && this.groups.valid(state.context) ? this.targetAt(event.clientX, event.clientY) : null;
-        this.finish();
-        if (!state.active) return;
-        event.preventDefault(); event.stopImmediatePropagation(); this.suppressUntil = Date.now() + 500;
-        if (hit) this.groups.run(async () => {
-            if (await this.groups.moveEntries(state.ids, hit.target)) this.groups.host.selection?.exit();
-        });
-    }
-    finish() {
-        this.win.clearTimeout(this.timer); this.timer = null;
-        if (this.frame != null) this.win.cancelAnimationFrame(this.frame);
-        this.frame = null;
-        this.state?.line?.remove(); this.state?.source.classList.remove('cla-preset-folder-dragging');
-        this.list.classList.remove('cla-preset-drag-active'); this.state = null;
-        for (const [type, fn] of [['pointermove', this.move], ['pointerup', this.up], ['pointercancel', this.cancel], ['touchmove', this.block]]) this.doc.removeEventListener(type, fn, true);
-        this.win.removeEventListener('blur', this.cancel);
-        this.doc.removeEventListener('keydown', this.key, true);
+    finish() { this.cancel(); }
+    restore() {
+        if (!this.instance?.options || !this.original) return;
+        const restore = {};
+        for (const [key, value] of Object.entries(this.original)) if (this.instance.options[key] === this.applied[key]
+            || this.instance.options[key] === this.pointerOptions[key]) restore[key] = value;
+        this.instance.option(restore);
     }
     destroy() {
-        this.finish();
-        this.list.removeEventListener('pointerdown', this.down, true); this.list.removeEventListener('click', this.click, true);
-        this.list.removeEventListener('contextmenu', this.contextMenu);
-        for (const type of ['mousedown', 'touchstart']) this.list.removeEventListener(type, this.block, true);
+        this.cancel(); this.restore();
+        for (const type of ['pointerdown', 'mousedown', 'touchstart']) this.list.removeEventListener(type, this.down, true);
+        this.list.removeEventListener('click', this.click, true);
+        this.doc.removeEventListener('pointercancel', this.cancel, true); this.doc.removeEventListener('keydown', this.key, true);
+        this.doc.defaultView.removeEventListener('blur', this.cancel);
     }
 }

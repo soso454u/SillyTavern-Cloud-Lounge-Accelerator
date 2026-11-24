@@ -787,12 +787,12 @@
     }
 }
 
-body.cla-fast-ui dialog.popup:has(.ui-sortable-helper, .sortable-drag, .sortable-chosen, .cla-preset-drag-active)::backdrop {
+body.cla-fast-ui dialog.popup:has(.ui-sortable-helper, .sortable-drag, .sortable-chosen)::backdrop {
     -webkit-backdrop-filter: none !important;
     backdrop-filter: none !important;
 }
 
-body.cla-fast-ui :is(.drawer-content, dialog.popup, .inline-drawer-content, #WorldInfo, #floatingPrompt):has(.ui-sortable-helper, .sortable-drag, .sortable-chosen, .cla-preset-drag-active) {
+body.cla-fast-ui :is(.drawer-content, dialog.popup, .inline-drawer-content, #WorldInfo, #floatingPrompt):has(.ui-sortable-helper, .sortable-drag, .sortable-chosen) {
     -webkit-backdrop-filter: none !important;
     backdrop-filter: none !important;
     box-shadow: none !important;
@@ -1271,10 +1271,35 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder.collapsed > .cla-preset-fold-header { opacity: 0.85; }
 
 
-.cla-preset-drop-line { position: fixed; top: 0; margin: 0; height: 4px; border-radius: 2px; background: var(--SmartThemeQuoteColor, #6a8); pointer-events: none; z-index: 2147483646; will-change: transform; }
-#completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder-dragging > .cla-preset-fold-header { outline: 2px dashed var(--SmartThemeQuoteColor, #6a8); opacity: 0.7; }
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header { touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
-
-.cla-preset-drop-line[hidden] { display: none !important; }
 #completion_prompt_manager_list.cla-preset-drag-active { user-select: none; -webkit-user-select: none; }
-#completion_prompt_manager_list.cla-preset-drag-active > [data-pm-identifier].cla-preset-folder-dragging { opacity: 0.65; }
+html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable > li.cla-preset-drag-companion { display: none !important; }
+#completion_prompt_manager #completion_prompt_manager_list > .cla-preset-native-placeholder {
+    display: block !important;
+    visibility: visible !important;
+    box-sizing: border-box;
+    flex: 0 0 auto;
+    border: 2px dashed #548de5 !important;
+    border-radius: 8px;
+    background: #548de520 !important;
+    min-height: 36px;
+    pointer-events: none;
+}
+#completion_prompt_manager #completion_prompt_manager_list > .ui-sortable-helper {
+    transition: none !important;
+    animation: none !important;
+    pointer-events: none;
+    box-shadow: 0 5px 16px #0003;
+    z-index: 20000 !important;
+}
+.cla-preset-drag-count {
+    position: absolute;
+    inset: -18px 4px auto auto;
+    padding: 2px 8px;
+    border-radius: 10px;
+    color: white;
+    background: #376cc4;
+    font-size: 12px;
+    white-space: nowrap;
+    pointer-events: none;
+}

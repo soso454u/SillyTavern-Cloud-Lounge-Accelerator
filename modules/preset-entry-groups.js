@@ -113,6 +113,7 @@ export class PresetEntryGroups {
         if (this.multiDragLists.has(list) || !jquery) return;
         this.multiDragLists.add(list);
         jquery(list).on('sortstop.claMultiDrag', (event, ui) => {
+            if (!this.rawOrder) return;
             const id = ui?.item?.[0]?.dataset?.pmIdentifier, selection = this.host.selection;
             if (!id || !selection?.mode || !selection.selected.has(id) || selection.selected.size < 2) return;
             const ids = new Set(selection.selected);
@@ -364,7 +365,10 @@ export class PresetEntryGroups {
             }
             this.updateFolds();
         }
-        if (!this.rawOrder && !this.groupedDrag) this.groupedDrag = new PresetGroupedDrag(this, list);
+        if (!this.rawOrder) {
+            if (!this.groupedDrag) this.groupedDrag = new PresetGroupedDrag(this, list);
+            else this.groupedDrag.reconcile();
+        }
         this.protectSortable(list, filtering);
         this.watchMultiDrag(list);
         this.host.selection?.render(); this.watchStatus(list, context);
