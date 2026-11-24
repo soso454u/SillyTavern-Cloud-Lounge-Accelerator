@@ -71,7 +71,10 @@ try {
             --SmartThemeBorderColor: rgb(195, 207, 195);
             background: rgb(246, 245, 237);
             color: var(--SmartThemeBodyColor);
-        }` });
+        }
+        /* Reproduce the reported theme's right alignment and tiny controls. */
+        #completion_prompt_manager_list .completion_prompt_manager_prompt_name { text-align: right !important; margin-left: auto; }
+        #completion_prompt_manager_list .prompt_manager_prompt_controls span { width: 18px; height: 18px; transition: all 1s; }` });
         const checkDisabled = async () => {
             const disabled = page.locator(`${rows}.completion_prompt_manager_prompt_disabled [data-pm-name]`).first();
             assert.deepEqual(await disabled.evaluate(node => {
@@ -116,10 +119,64 @@ try {
         await act(button('分类浏览'));
         assert.deepEqual(await rowOrder(), nativeOrder);
         assert.deepEqual(await nativeSnapshot(page), original);
-        await identities.first().scrollIntoViewIfNeeded();
-        await page.screenshot({ path: `/tmp/cla-2181-${mobile ? 'touch' : 'desktop'}.png` });
+        assert.equal(await page.locator(`${list} > [data-pm-identifier]`).count(), nativeOrder.length);
+        await page.waitForFunction(() => {
+            const row = document.querySelector('#completion_prompt_manager_list > [data-pm-identifier]');
+            if (window.claSettledRow !== row) {
+                window.claSettledRow = row;
+                window.claSettledAt = performance.now();
+            }
+            return row && performance.now() - window.claSettledAt > 500;
+        });
+        const row = identities.last();
+        await row.scrollIntoViewIfNeeded();
+        const geometry = await row.evaluate(node => {
+            const name = node.querySelector('[data-pm-name]');
+            const toggle = node.querySelector('.prompt-manager-toggle-action');
+            const r = node.getBoundingClientRect();
+            const n = name.getBoundingClientRect();
+            return { alignment: getComputedStyle(name).textAlign, inset: n.left - r.left,
+                width: toggle.getBoundingClientRect().width, transition: getComputedStyle(toggle).transitionDuration };
+        });
+        assert.equal(geometry.alignment, 'start');
+        assert.ok(geometry.inset < 20, JSON.stringify(geometry));
+        assert.equal(geometry.width, mobile ? 44 : 32);
+        assert.equal(geometry.transition, '0s');
+        const nativeToggle = row.locator('.prompt-manager-toggle-action');
+        const promptId = await row.getAttribute('data-pm-identifier');
+        await page.evaluate(async () => {
+            const m = (await import('/scripts/openai.js')).promptManager;
+            window.claRow = document.querySelector('[data-pm-identifier]');
+            window.claToggleSaves = 0;
+            window.claToggleRenders = 0;
+            const save = m.saveServiceSettings;
+            m.saveServiceSettings = function (...args) {
+                window.claToggleSaves++;
+                return Promise.all([save.apply(this, args), new Promise(resolve => setTimeout(resolve, 300))]);
+            };
+            const render = m.renderPromptManagerListItems;
+            m.renderPromptManagerListItems = function (...args) {
+                window.claToggleRenders++;
+                return render.apply(this, args);
+            };
+        });
+        const enabled = () => page.evaluate(async id => {
+            const m = (await import('/scripts/openai.js')).promptManager;
+            return m.getPromptOrderEntry(m.activeCharacter, id).enabled;
+        }, promptId);
+        const initial = await enabled();
+        for (let i = 0; i < 6; i++) {
+            // Use the edge outside the old 18px icon, with real pointer/touch input.
+            if (mobile) await nativeToggle.tap({ position: { x: 3, y: 20 } });
+            else await nativeToggle.click({ position: { x: 3, y: 15 } });
+            assert.equal(await enabled(), i % 2 ? initial : !initial, 'each tap changes state immediately while saving is pending');
+        }
+        assert.deepEqual(await page.evaluate(() => [window.claToggleSaves, window.claToggleRenders, window.claRow.isConnected]), [6, 0, true]);
+        assert.deepEqual(await nativeSnapshot(page), original);
+        await row.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: `/tmp/cla-2182-${mobile ? 'touch' : 'desktop'}.png` });
         assert.equal(errors.length, 0, errors.join('\n'));
-        console.log(`${mobile ? 'Touch' : 'Desktop'}: ${ids.length} original rows, 10 paired sections, readable light-theme disabled text, stable nested folds, and unchanged native data. Loaded ${manifest.version}.`);
+        console.log(`${mobile ? 'Touch' : 'Desktop'}: ${ids.length} original rows, 10 paired sections, readable light-theme disabled text, flat native rows, left-aligned names, six immediate edge taps with pending saves, stable folds, and unchanged native data. Loaded ${manifest.version}.`);
         await context.close();
     }
 } finally { await browser.close(); }

@@ -6,7 +6,7 @@ import { PRESET_GROUPS_KEY, PRESET_GROUPS_SCHEMA, folderLayout } from './preset-
 export class PresetEntryGroups {
     constructor({ host, extensionSettings = {}, saveSettings = () => {}, getPresetName = () => '' }) {
         Object.assign(this, { host, extensionSettings, saveSettings, getPresetName });
-        this.folderNodes = new Map(); this.rowStyles = new Map(); this.sortRecords = new Map(); this.rawOrder = false; this.query = ''; this.filter = 'all'; this.searchFolders = new Map();
+        this.folderNodes = new Map(); this.rowMembership = new Map(); this.rowStyles = new Map(); this.sortRecords = new Map(); this.rawOrder = false; this.query = ''; this.filter = 'all'; this.searchFolders = new Map();
     }
     start() {
         const saved = this.extensionSettings[PRESET_GROUPS_KEY];
@@ -84,15 +84,10 @@ export class PresetEntryGroups {
     }
     clearDisplay() {
         this.statusObserver?.disconnect(); this.statusObserver = null;
-        // Reuse the actual native rows, preserving their listeners. Only the
-        // ungrouped view exposes sortable, after restoring exact native order.
-        if (this.list?.isConnected) {
-            const rows = new Map([...this.list.querySelectorAll('[data-pm-identifier]')].map(row => [row.dataset.pmIdentifier, row]));
-            for (const entry of this.host.context()?.order || []) { const row = rows.get(entry.identifier); if (row) { this.list.append(row); rows.delete(entry.identifier); } }
-            for (const row of rows.values()) this.list.append(row);
-        }
         for (const node of this.folderNodes.values()) node.element.remove();
         this.folderNodes.clear();
+        for (const row of this.rowMembership.keys()) row.classList.remove('cla-preset-fold-hidden');
+        this.rowMembership.clear();
         for (const [row, styles] of this.rowStyles) for (const { property, value, priority } of styles) {
             if (value) row.style.setProperty(property, value, priority); else row.style.removeProperty(property);
         }
@@ -124,11 +119,10 @@ export class PresetEntryGroups {
         else for (const id of ids) this.searchFolders.set(id, folded);
         preservePresetAnchor(anchor || this.root, () => {
             for (const id of ids) {
-                const record = this.folderNodes.get(id); if (!record) continue;
-                record.element.classList.toggle('collapsed', folded);
-                record.button.setAttribute('aria-expanded', String(!folded));
-                record.arrow.textContent = folded ? '▸' : '▾';
+                const record = this.folderNodes.get(id);
+                if (record) record.folded = folded;
             }
+            this.updateFolds();
         });
     }
     renderToolbar(list, context) {
@@ -185,7 +179,10 @@ export class PresetEntryGroups {
             this.sortRecords.delete(element);
         }
         this.statusObserver?.disconnect();
-        if (this.folderNodes.size && ![...this.folderNodes.values()].some(record => record.element.isConnected)) this.folderNodes.clear();
+        if (this.folderNodes.size && ![...this.folderNodes.values()].some(record => record.element.isConnected)) {
+            this.folderNodes.clear();
+            this.rowMembership.clear();
+        }
         const entries = this.entries(context);
         this.renderToolbar(list, context);
         list.classList.add('cla-preset-readable');
@@ -211,54 +208,74 @@ export class PresetEntryGroups {
             this.protectSortable(list, true);
             list.classList.add('cla-preset-grouped-list');
             const layout = [...folderLayout(entries), ...displayEntries.slice(entries.length).map(entry => ({ entry }))];
-            const alive = new Set(), expanded = this.expanded(context);
-            const place = (parent, node, index) => { if (parent.children[index] !== node) parent.insertBefore(node, parent.children[index] || null); };
-            // Keep native list heading/auxiliary nodes before the owned tree.
-            const offset = [...list.children].filter(node => !node.hasAttribute('data-pm-identifier') && !node.classList.contains('cla-preset-folder')).length;
-            const draw = (nodes, parent, groupNames = '', offset = 0) => {
-                let matches = false, position = offset;
+            const alive = new Set();
+            const expanded = this.expanded(context);
+            this.rowMembership.clear();
+            const draw = (nodes, ancestors = [], groupNames = '') => {
+                let matches = false;
                 for (const node of nodes) {
                     if (node.entry) {
-                        const row = rows.get(node.entry.identifier); if (!row) continue;
-                        place(parent, row, position++);
-                        // Restore only our own filtering style when an entry reappears.
+                        const row = rows.get(node.entry.identifier);
+                        if (!row) continue;
+                        this.rowMembership.set(row, ancestors);
                         if (this.rowStyles.has(row)) {
-                            for (const item of this.rowStyles.get(row)) { if (item.value) row.style.setProperty(item.property, item.value, item.priority); else row.style.removeProperty(item.property); }
+                            for (const item of this.rowStyles.get(row)) {
+                                if (item.value) row.style.setProperty(item.property, item.value, item.priority);
+                                else row.style.removeProperty(item.property);
+                            }
                             this.rowStyles.delete(row);
                         }
-                        if (!visible(node.entry, groupNames)) this.rowStyle(row, 'display', 'none'); else matches = true;
+                        if (!visible(node.entry, groupNames)) this.rowStyle(row, 'display', 'none');
+                        else matches = true;
                         continue;
                     }
                     alive.add(node.id);
                     const record = this.drawFolder(node);
-                    place(parent, record.element, position++);
-                    const childMatches = draw(node.children, record.body, `${groupNames} ${node.name}`);
-                    record.element.hidden = filtering && !childMatches;
-                    const folded = query ? (this.searchFolders.get(node.id) ?? false) : !expanded.has(node.id);
-                    record.element.classList.toggle('collapsed', folded);
-                    record.button.setAttribute('aria-expanded', String(!folded)); record.arrow.textContent = folded ? '▸' : '▾';
+                    record.ancestors = ancestors;
+                    record.folded = query ? (this.searchFolders.get(node.id) ?? false) : !expanded.has(node.id);
+                    const firstEntry = node.id && rows.get(JSON.parse(node.id)[0]);
+                    if (firstEntry && record.element.nextElementSibling !== firstEntry) list.insertBefore(record.element, firstEntry);
+                    const childMatches = draw(node.children, [...ancestors, node.id], `${groupNames} ${node.name}`);
+                    record.filtered = filtering && !childMatches;
                     if (childMatches) matches = true;
                 }
                 return matches;
             };
-            draw(layout, list, '', offset);
-            for (const [id, record] of this.folderNodes) if (!alive.has(id)) { record.element.remove(); this.folderNodes.delete(id); }
+            draw(layout);
+            for (const [id, record] of this.folderNodes) {
+                if (!alive.has(id)) {
+                    record.element.remove();
+                    this.folderNodes.delete(id);
+                }
+            }
+            this.updateFolds();
         }
         this.protectSortable(list, !this.rawOrder || filtering || !!this.host.selection?.mode);
         this.host.selection?.render(); this.watchStatus(list, context);
+    }
+    updateFolds() {
+        const ancestorFolded = ids => ids.some(id => this.folderNodes.get(id)?.folded);
+        for (const record of this.folderNodes.values()) {
+            record.element.hidden = record.filtered || ancestorFolded(record.ancestors);
+            record.element.classList.toggle('collapsed', record.folded);
+            record.button.setAttribute('aria-expanded', String(!record.folded));
+            record.arrow.textContent = record.folded ? '▸' : '▾';
+        }
+        for (const [row, ancestors] of this.rowMembership) {
+            row.classList.toggle('cla-preset-fold-hidden', ancestorFolded(ancestors));
+        }
     }
     drawFolder(folder) {
         let record = this.folderNodes.get(folder.id);
         if (!record) {
             const element = this.node('li', '', 'cla-preset-folder'); element.dataset.claPresetGroup = folder.id;
             const header = this.node('div', '', 'cla-preset-fold-header'); header.dataset.claPresetGroup = folder.id;
-            const body = this.node('ul', '', 'cla-preset-folder-body');
             const button = this.button('', () => this.setFold(this.context(), [folder.id], !element.classList.contains('collapsed'), header), 'cla-preset-fold-toggle');
             const arrow = this.node('span', '', 'cla-preset-folder-arrow'); arrow.setAttribute('aria-hidden', 'true');
             const name = this.node('span', '', 'cla-preset-fold-name'), count = this.node('small', '', 'cla-preset-fold-count');
             button.append(arrow, name, count);
-            header.append(button); element.append(header, body);
-            record = { element, header, body, button, arrow, name, count }; this.folderNodes.set(folder.id, record);
+            header.append(button); element.append(header);
+            record = { element, header, button, arrow, name, count }; this.folderNodes.set(folder.id, record);
         }
         record.name.textContent = folder.name; record.count.textContent = String(folder.total);
         record.button.setAttribute('aria-label', `${folder.name}，${folder.total} 条`);

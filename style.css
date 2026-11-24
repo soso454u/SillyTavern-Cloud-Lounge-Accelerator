@@ -901,14 +901,7 @@ body .cla-preset-entry-menu button.menu_button[data-cla-preset-action] {
     min-width: 0;
     width: 100%;
 }
-#completion_prompt_manager_list .cla-preset-folder > .cla-preset-folder-body {
-    display: block;
-    list-style: none;
-    padding: 0 0 0 10px;
-    margin: 0;
-    min-width: 0;
-}
-#completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder.collapsed > .cla-preset-folder-body,
+#completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable > li[data-pm-identifier].cla-preset-fold-hidden,
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder[hidden] { display: none !important; }
 #completion_prompt_manager_list.cla-preset-grouped-list .drag-handle { display: none !important; }
 #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
@@ -1163,7 +1156,6 @@ body.cla-preset-drag-guard [id$="prompt_manager_list"] [data-pm-identifier][clas
 .cla-preset-groups [aria-pressed=true] { background: var(--SmartThemeBorderColor, #8884); }
 @media (max-width: 600px) {
     .cla-preset-group-tools .menu_button { min-height: 32px; }
-    #completion_prompt_manager_list .cla-preset-folder > .cla-preset-folder-body { padding-inline-start: 6px; }
 }
 
 body.cla-preset-drag-guard #completion_prompt_manager_list.cla-preset-grouped-list
@@ -1173,4 +1165,50 @@ body.cla-preset-drag-guard #completion_prompt_manager_list.cla-preset-grouped-li
 body.cla-preset-drag-guard #completion_prompt_manager_list.cla-preset-grouped-list
     [data-pm-identifier][class*="prompt_manager_prompt_draggable"] > .drag-handle {
     display: none !important;
+}
+
+/* Keep the native row's three columns stable under flex/right-aligned themes. */
+#completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable > li[data-pm-identifier]:not(.completion_prompt_manager_prompt_invisible) {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) max-content minmax(2.5ch, max-content) !important;
+    align-items: center;
+    column-gap: 0.35em;
+}
+#completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable > li[data-pm-identifier] > .completion_prompt_manager_prompt_name {
+    justify-self: stretch !important;
+    text-align: start !important;
+    justify-content: flex-start !important;
+    min-width: 0;
+    width: auto !important;
+    margin-inline: 0 !important;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+#completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable .completion_prompt_manager_prompt_name .prompt-manager-inspect-action {
+    text-align: start !important;
+    float: none !important;
+}
+#completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable .prompt_manager_prompt_controls {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center;
+    gap: 4px;
+}
+#completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable .prompt_manager_prompt_controls .prompt-manager-toggle-action {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 32px !important;
+    height: 32px !important;
+    margin: 0 !important;
+    transition: none !important;
+    touch-action: manipulation;
+}
+@media (pointer: coarse) {
+    #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable .prompt_manager_prompt_controls .prompt-manager-toggle-action {
+        width: 44px !important;
+        height: 44px !important;
+    }
 }
