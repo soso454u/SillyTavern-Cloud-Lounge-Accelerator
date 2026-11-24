@@ -16,11 +16,13 @@ export function resolveSections(entries, manual = []) {
     return removeCrossed(auto);
 }
 
-export function folderLayout(entries, manual = [], names = {}) {
+export function folderLayout(entries, manual = [], names = {}, hidden = []) {
+    const skip = new Set(hidden);
     const roots = [];
     const open = [];
     const starts = new Map();
     for (const section of resolveSections(entries, manual)) {
+        if (skip.has(JSON.stringify([entries[section.start].identifier, entries[section.end].identifier]))) continue;
         if (!starts.has(section.start)) starts.set(section.start, []);
         starts.get(section.start).push(section);
     }

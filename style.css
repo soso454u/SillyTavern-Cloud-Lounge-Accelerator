@@ -1267,7 +1267,17 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
 }
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header > button.cla-preset-fold-icon:hover { opacity: 1; }
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header > button.cla-preset-fold-icon[hidden] { display: none !important; }
-#completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header > button.cla-on { opacity: 1; color: var(--SmartThemeQuoteColor, inherit) !important; }
 @media (pointer: coarse) {
     #completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header > button.cla-preset-fold-icon { flex-basis: 38px !important; width: 38px !important; }
 }
+
+/* Folder state: closed/open folder icon, highlighted open header, indented children */
+#completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder { margin-left: calc(var(--cla-fold-depth, 0) * 14px) !important; width: auto; }
+.cla-preset-folder-arrow { flex: 0 0 18px; opacity: 0.85; text-align: center; }
+#completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder:not(.collapsed) > .cla-preset-fold-header {
+    border-color: var(--SmartThemeQuoteColor, currentColor);
+    border-left-width: 4px;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, currentColor) 14%, transparent);
+}
+#completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder:not(.collapsed) .cla-preset-folder-arrow { color: var(--SmartThemeQuoteColor, inherit); opacity: 1; }
+#completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder.collapsed > .cla-preset-fold-header { opacity: 0.85; }

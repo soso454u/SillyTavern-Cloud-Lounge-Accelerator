@@ -1,9 +1,7 @@
 // Only complete pairs create groups. The boundary row stays editable in the
 // group body, and the synthetic header sits immediately before it.
 // Patterns are generic decorations seen across many community presets, not
-// tied to one preset. A closer first matches an opener with the same title;
-// when titles differ (e.g. "----USER信息----" / "----信息结束----") it falls back
-// to the nearest open opener of the same family whose title overlaps.
+// tied to one preset. A closer matches the nearest opener with the same title.
 const patterns = [
     { family: 'bracket-arrow', pattern: /^(={2,})([↓↑])\[([^\[\]]+)\]\2\1$/u, read: m => [m[2] === '↑', m[3], m[1]] },
     { family: 'arrow', pattern: /^([↓↑⬇⬆])([^↓↑⬇⬆]+)\1$/u, read: m => [/[↑⬆]/u.test(m[1]), m[2]] },
@@ -45,7 +43,6 @@ function readBoundary(name) {
     return null;
 }
 
-const overlaps = (a, b) => !!a && !!b && (a.includes(b) || b.includes(a));
 
 export function findPresetSections(entries) {
     const pending = [];
@@ -63,10 +60,6 @@ export function findPresetSections(entries) {
             if (marker.family === 'comment' && marker.title === null) { at = i; break; }
             if (marker.loose || open.key === marker.key) { at = i; break; }
         }
-        if (at < 0) for (let i = pending.length - 1; i >= 0; i--) {
-            const open = pending[i];
-            if (open.group === marker.group && (marker.title === '' || overlaps(open.title, marker.title))) { at = i; break; }
-        }
         if (at < 0) continue;
         const [start] = pending.splice(at, 1);
         pairs.push({ start: start.index, end: index, name: start.title, rank: 2 });
@@ -75,7 +68,7 @@ export function findPresetSections(entries) {
     // A one-sided heading such as "=== 基调等 ===" runs until the next divider
     // or the end of the section that contains it.
     for (const open of pending) {
-        if (!['dash', 'symbol', 'emoji', 'comment', 'corner', 'quote'].includes(open.family) || !open.title) continue;
+        if (open.family !== 'dash' || !open.group.includes('"="') || !open.title) continue;
         let end = entries.length - 1;
         for (const section of sections) if (section.start < open.index && section.end > open.index) end = Math.min(end, section.end - 1);
         for (let i = open.index + 1; i <= end; i++) if (markers.has(i)) { end = i - 1; break; }

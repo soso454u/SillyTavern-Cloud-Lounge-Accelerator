@@ -27,7 +27,7 @@ export class PresetEntryGroups {
     meta(context) {
         const saved = this.extensionSettings[PRESET_GROUPS_KEY];
         const item = saved?.schema === PRESET_GROUPS_SCHEMA ? saved.presets?.[this.presetKey(context)] : null;
-        return { names: { ...(item?.names || {}) }, manual: [...(item?.manual || [])] };
+        return { names: { ...(item?.names || {}) }, manual: [...(item?.manual || [])], hidden: [...(item?.hidden || [])] };
     }
     saveMeta(context, meta) {
         const previous = this.extensionSettings[PRESET_GROUPS_KEY];
@@ -62,27 +62,11 @@ export class PresetEntryGroups {
     removeGroup(folder) {
         const context = this.context(); if (!this.valid(context)) return;
         const meta = this.meta(context);
+        const before = meta.manual.length;
         meta.manual = meta.manual.filter(group => JSON.stringify([group.start, group.end]) !== folder.id);
+        if (meta.manual.length === before && !meta.hidden.includes(folder.id)) meta.hidden.push(folder.id);
+        delete meta.names[folder.id];
         this.saveMeta(context, meta); this.render();
-    }
-    async toggleFolder(record) {
-        const context = this.host.context();
-        if (!context || this.host.busy) return;
-        const manager = this.host.manager, ids = new Set(record.ids);
-        const allowed = new Set(context.prompts.filter(p => ids.has(p.identifier) && manager.isPromptToggleAllowed?.(p)).map(p => p.identifier));
-        if (!allowed.size) return;
-        const enable = !context.order.some(item => allowed.has(item.identifier) && item.enabled);
-        const order = context.order.map(item => allowed.has(item.identifier) ? { ...item, enabled: enable } : item);
-        this.host.busy = true;
-        try {
-            await this.host.write([{ owner: context.holder, key: 'order', next: order }]);
-            const counts = manager.tokenHandler?.getCounts?.();
-            if (counts) for (const id of allowed) counts[id] = null;
-            manager.render();
-        } catch (error) {
-            console.error('[Cloud Lounge Accelerator] 整组开关保存失败', error);
-            globalThis.toastr?.error?.('保存失败，请重试', '预设分类');
-        } finally { this.host.busy = false; }
     }
     expanded(context) {
         const saved = this.extensionSettings[PRESET_GROUPS_KEY];
@@ -223,6 +207,10 @@ export class PresetEntryGroups {
                 if (selection.mode) selection.exit(); else { selection.enter(); selection.render(); globalThis.toastr?.info?.('点选条目，选好首尾后点「建为分组」', '多选'); }
             });
             views.append(this.selectButton);
+            tools.append(this.button('恢复已删除的自动分组', () => {
+                const ctx = this.context(); if (!this.valid(ctx)) return;
+                const meta = this.meta(ctx); meta.hidden = []; this.saveMeta(ctx, meta); this.render();
+            }));
             settings.append(tools);
             this.feedback = this.node('small', '', 'cla-preset-group-feedback'); this.feedback.setAttribute('role', 'status');
             views.append(settings); this.root.append(bar, views, this.feedback);
@@ -275,7 +263,7 @@ export class PresetEntryGroups {
             this.protectSortable(list, true);
             list.classList.add('cla-preset-grouped-list');
             const meta = this.meta(context);
-            const layout = [...folderLayout(entries, meta.manual, meta.names), ...displayEntries.slice(entries.length).map(entry => ({ entry }))];
+            const layout = [...folderLayout(entries, meta.manual, meta.names, meta.hidden), ...displayEntries.slice(entries.length).map(entry => ({ entry }))];
             const alive = new Set();
             const expanded = this.expanded(context);
             this.rowMembership.clear();
@@ -293,6 +281,7 @@ export class PresetEntryGroups {
                             }
                             this.rowStyles.delete(row);
                         }
+                        if (ancestors.length) this.rowStyle(row, 'margin-left', `${Math.min(ancestors.length, 4) * 14}px`);
                         if (!visible(node.entry, groupNames)) this.rowStyle(row, 'display', 'none');
                         else matches = true;
                         continue;
@@ -300,13 +289,13 @@ export class PresetEntryGroups {
                     alive.add(node.id);
                     const record = this.drawFolder(node);
                     record.ancestors = ancestors;
+                    record.element.style.setProperty('--cla-fold-depth', String(Math.min(ancestors.length, 4)));
                     record.folded = query ? (this.searchFolders.get(node.id) ?? false) : !expanded.has(node.id);
                     const firstEntry = node.id && rows.get(JSON.parse(node.id)[0]);
                     if (firstEntry && record.element.nextElementSibling !== firstEntry) list.insertBefore(record.element, firstEntry);
                     const ids = [], subs = [];
                     const walk = list => { for (const child of list) { if (child.entry) ids.push(child.entry.identifier); else { subs.push(child.id); walk(child.children); } } };
                     walk(node.children); record.ids = ids; record.subs = subs; record.folder = node;
-                    record.enabled = ids.filter(id => orderEntries.get(id)?.enabled).length;
                     const childMatches = draw(node.children, [...ancestors, node.id], `${groupNames} ${node.name}`);
                     record.filtered = filtering && !childMatches;
                     if (childMatches) matches = true;
@@ -331,13 +320,8 @@ export class PresetEntryGroups {
             record.element.hidden = record.filtered || ancestorFolded(record.ancestors);
             record.element.classList.toggle('collapsed', record.folded);
             record.button.setAttribute('aria-expanded', String(!record.folded));
-            record.arrow.textContent = record.folded ? '▸' : '▾';
-            const on = record.enabled > 0;
-            record.power.glyph.classList.toggle('fa-toggle-on', on); record.power.glyph.classList.toggle('fa-toggle-off', !on); record.power.classList.toggle('cla-on', on);
-            record.power.title = on ? `整组禁用（已启用 ${record.enabled}/${record.ids?.length || 0}）` : '整组启用';
-            record.power.setAttribute('aria-label', record.power.title);
+            record.arrow.className = `cla-preset-folder-arrow fa-solid ${record.folded ? 'fa-folder' : 'fa-folder-open'}`;
             record.subFold.hidden = !record.subs?.length;
-            record.remove.hidden = !record.folder?.manual;
         }
         for (const [row, ancestors] of this.rowMembership) {
             row.classList.toggle('cla-preset-fold-hidden', ancestorFolded(ancestors));
@@ -358,10 +342,9 @@ export class PresetEntryGroups {
                 const subs = record.subs || []; const allFolded = subs.every(id => this.folderNodes.get(id)?.folded);
                 this.setFold(this.context(), subs, !allFolded, header);
             });
-            const power = icon('fa-toggle-off', '整组启用', () => this.toggleFolder(record));
-            const remove = icon('fa-trash-can', '删除这个手动分组（不删条目）', () => this.removeGroup(record.folder));
-            header.append(button, rename, subFold, power, remove); element.append(header);
-            record = { element, header, button, arrow, name, count, power, subFold, remove }; this.folderNodes.set(folder.id, record);
+            const remove = icon('fa-xmark', '删除分组（条目保留在原位）', () => this.removeGroup(record.folder));
+            header.append(button, rename, subFold, remove); element.append(header);
+            record = { element, header, button, arrow, name, count, subFold, remove }; this.folderNodes.set(folder.id, record);
         }
         record.name.textContent = folder.name; record.count.textContent = String(folder.total);
         record.button.setAttribute('aria-label', `${folder.name}，${folder.total} 条`);

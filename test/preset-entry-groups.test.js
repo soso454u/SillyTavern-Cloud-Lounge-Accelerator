@@ -26,7 +26,7 @@ test('unpaired, mismatched and crossed boundaries do not create folders', () => 
 test('a one-sided heading groups rows until the next divider or its parent end', () => {
     const prompts = entries('---- 外层 ----', '----孤立标题----', '正文', '---- 外层结束 ----', '=== 基调 ===', '甲', '乙', '---- 下一段 ----', '丙', '---- 下一段结束 ----');
     assert.deepEqual(findPresetSections(prompts).map(s => [s.name, s.start, s.end]),
-        [['外层', 0, 3], ['孤立标题', 1, 2], ['基调', 4, 6], ['下一段', 7, 9]]);
+        [['外层', 0, 3], ['基调', 4, 6], ['下一段', 7, 9]]);
     assert.deepEqual(flatten(folderLayout(prompts)), prompts);
 });
 
@@ -36,6 +36,12 @@ test('neighbours sharing a name stem fold together; manual groups win', () => {
     const layout = folderLayout(prompts, [{ start: '2', end: '5', name: '我的' }], {});
     assert.deepEqual(layout.map(n => n.name ?? n.entry.name), ['开头', '身份1', '我的', '「写卡」丙', '单独']);
     assert.deepEqual(flatten(layout), prompts);
+});
+
+test('deleted auto groups are hidden without touching rows', () => {
+    const prompts = entries('↓A↓', '甲', '↑A↑');
+    const layout = folderLayout(prompts, [], {}, [JSON.stringify(['0', '2'])]);
+    assert.deepEqual(layout.map(n => n.entry.name), ['↓A↓', '甲', '↑A↑']);
 });
 
 test('renamed folders keep their original name for reset', () => {
@@ -67,7 +73,7 @@ test('real v1.35 recognizes paired dividers and keeps identity rows above writin
     const ordered = preset.prompt_order[0].order.map(row => byId.get(row.identifier));
     const before = JSON.stringify(preset);
     assert.deepEqual(findPresetSections(ordered).map(x => x.name),
-        ['身份', '写卡', '写作规则', '基调等', '不要动', 'USER信息', 'User衔接Char', '规则', '小剧场', 'NSFW', '缱绻 (二选一)', '姿势库', 'CP', '⦉ User攻 ⦊', '文风', '肉文', '视角模式', '双视角', '群像', '剧情选项', '选一', '思维链', '不一定管用的破限']);
+        ['身份', '写卡', '写作规则', '基调等', '不要动', '规则', '小剧场', 'NSFW', '缱绻 (二选一)', '姿势库', 'CP', '⦉ User攻 ⦊', '文风', '肉文', '视角模式', '双视角', '群像', '剧情选项', '选一', '思维链', '不一定管用的破限']);
     const layout = folderLayout(ordered);
     const writing = layout.findIndex(node => node.name === '写作规则');
     assert.deepEqual(layout.slice(0, writing).find(node => node.name === '身份').children.map(node => node.entry.name),
