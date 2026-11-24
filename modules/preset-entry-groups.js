@@ -255,7 +255,9 @@ export class PresetEntryGroups {
             this.groupViewButton = this.button('分类浏览', () => switchView(false));
             this.rawViewButton = this.button('原始顺序', () => switchView(true));
             const settings = this.node('details', '', 'cla-preset-settings');
-            const summary = this.node('summary', '折叠操作'); settings.append(summary);
+            const summary = this.node('summary');
+            const chevron = this.node('span', '', 'cla-preset-settings-chevron'); chevron.setAttribute('aria-hidden', 'true');
+            summary.append(this.node('span', '折叠操作', 'cla-preset-settings-label'), chevron); settings.append(summary);
             views.append(this.groupViewButton, this.rawViewButton);
             const tools = this.node('div', '', 'cla-preset-group-tools cla-preset-folder-tools');
             const toggleAll = folded => {
@@ -385,7 +387,7 @@ export class PresetEntryGroups {
             record.end.style.setProperty('display', record.end.hidden ? 'none' : 'block', 'important');
             record.element.classList.toggle('collapsed', record.folded);
             record.button.setAttribute('aria-expanded', String(!record.folded));
-            record.arrow.className = `cla-preset-folder-arrow cla-preset-folder-drag-handle fa-solid ${record.folded ? 'fa-folder' : 'fa-folder-open'}`;
+            record.arrow.className = `cla-preset-folder-arrow fa-solid ${record.folded ? 'fa-folder' : 'fa-folder-open'}`;
             record.subFold.hidden = !record.subs?.length;
         }
         for (const [row, ancestors] of this.rowMembership) {
@@ -400,8 +402,9 @@ export class PresetEntryGroups {
             end.setAttribute('role', 'separator');
             const header = this.node('div', '', 'cla-preset-fold-header'); header.dataset.claPresetGroup = folder.id;
             const button = this.button('', () => this.setFold(this.context(), [folder.id], !element.classList.contains('collapsed'), header), 'cla-preset-fold-toggle');
-            const arrow = this.node('span', '', 'cla-preset-folder-arrow cla-preset-folder-drag-handle'); arrow.setAttribute('aria-hidden', 'true');
-            arrow.title = '按住文件夹图标拖动分组';
+            const dragHandle = this.node('span', '', 'cla-preset-folder-drag-handle'); dragHandle.setAttribute('aria-hidden', 'true');
+            dragHandle.title = '按住文件夹图标拖动分组';
+            const arrow = this.node('i', '', 'cla-preset-folder-arrow'); dragHandle.append(arrow);
             const name = this.node('span', '', 'cla-preset-fold-name'), count = this.node('small', '', 'cla-preset-fold-count');
             button.append(name, count);
             const icon = (cls, title, action) => { const b = this.button('', action, 'cla-preset-fold-icon'); b.append(b.glyph = this.node('i', '', `fa-solid ${cls}`)); b.glyph.setAttribute('aria-hidden', 'true'); b.title = title; b.setAttribute('aria-label', title); return b; };
@@ -411,7 +414,7 @@ export class PresetEntryGroups {
                 this.setFold(this.context(), subs, !allFolded, header);
             });
             const remove = icon('fa-xmark', '删除分组（条目保留在原位）', () => this.removeGroup(record.folder));
-            header.append(arrow, button, rename, subFold, remove); element.append(header);
+            header.append(dragHandle, button, rename, subFold, remove); element.append(header);
             record = { element, end, header, button, arrow, name, count, subFold, remove }; this.folderNodes.set(folder.id, record);
         }
         record.name.textContent = folder.name; record.count.textContent = String(folder.total);

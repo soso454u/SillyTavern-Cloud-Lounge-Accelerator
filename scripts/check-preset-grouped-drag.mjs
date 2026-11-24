@@ -12,19 +12,21 @@ const nativeRoot = process.env.CLA_SILLYTAVERN_PUBLIC;
 assert.ok(nativeRoot, 'Set CLA_SILLYTAVERN_PUBLIC');
 const theme = process.env.CLA_PRESET_THEME_CSS ? await readFile(process.env.CLA_PRESET_THEME_CSS,'utf8') : null;
 const sources = new Map();
-for (const file of ['lib/jquery-3.5.1.min.js', 'lib/jquery-ui.min.js', 'lib/jquery.ui.touch-punch.min.js', 'css/promptmanager.css']) {
+for (const file of ['lib/jquery-3.5.1.min.js', 'lib/jquery-ui.min.js', 'lib/jquery.ui.touch-punch.min.js', 'css/promptmanager.css', 'css/fontawesome.min.css', 'css/solid.min.css']) {
     sources.set(`/${file}`, await readFile(path.join(nativeRoot, file), 'utf8'));
 }
+sources.set('/webfonts/fa-solid-900.woff2', await readFile(path.join(nativeRoot, 'webfonts/fa-solid-900.woff2')));
 const nativeManager = await readFile(path.join(nativeRoot,'scripts/PromptManager.js'),'utf8');
 const methodStart = nativeManager.indexOf('    makeDraggable() {');
 assert.ok(methodStart>=0);
 const method = nativeManager.slice(methodStart,nativeManager.indexOf('\n    }',methodStart)+6).trim();
 sources.set('/native-sortable.js', `const isMobile=()=>matchMedia('(pointer:coarse)').matches;export function ${method}`);
 for (const file of ['style.css', ...['preset-drag-guard', 'preset-entry-actions', 'preset-entry-groups', 'preset-grouped-drag', 'preset-entry-selection', 'preset-scroll-anchor', 'preset-folder-model', 'preset-section-boundaries'].map(name => `modules/${name}.js`)]) {
-    sources.set(`/${file}`, await readFile(new URL(`../${file}`, import.meta.url), 'utf8'));
+    sources.set(`/${file}`, await readFile(new URL(`../${file === 'style.css' ? 'dist/style.css' : file}`, import.meta.url), 'utf8'));
 }
 const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="stylesheet" href="/css/promptmanager.css"><link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/css/fontawesome.min.css"><link rel="stylesheet" href="/css/solid.min.css">
 <style>*{box-sizing:border-box}body{font:16px sans-serif;margin:8px}#scroll{height:1000px;overflow:auto}#completion_prompt_manager{max-width:550px}ul{padding:0;margin:0}li[data-pm-identifier]{min-height:32px;background:#eee}</style>
 <body class="cla-preset-drag-guard"><div id="completion_prompt_manager"><div id="scroll"><ul id="completion_prompt_manager_list"></ul></div></div>
 <script src="/lib/jquery-3.5.1.min.js"></script><script src="/lib/jquery-ui.min.js"></script><script src="/lib/jquery.ui.touch-punch.min.js"></script>
@@ -55,7 +57,7 @@ draw();window.guard=new PresetDragGuard();guard.start();actions.selection.start(
 </script>`;
 const server = createServer((request, response) => {
     const body = sources.get(request.url);
-    response.setHeader('Content-Type', request.url.endsWith('.js') ? 'text/javascript' : request.url.endsWith('.css') ? 'text/css' : 'text/html');
+    response.setHeader('Content-Type', request.url.endsWith('.js') ? 'text/javascript' : request.url.endsWith('.css') ? 'text/css' : request.url.endsWith('.woff2') ? 'font/woff2' : 'text/html');
     response.end(body ?? html);
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -100,6 +102,41 @@ try {
         const data = await page.evaluate(() => JSON.stringify(actions.context().prompts));
         assert.equal(await folder('Outer').count(),1);
         assert.equal(await page.locator('.cla-preset-folder-end:visible').count(),0);
+        await page.evaluate(() => document.fonts.ready);
+        const settings = page.locator('.cla-preset-settings'), summary = settings.locator('summary');
+        const checkToolbar = async () => {
+            const surface = await settings.evaluate(node => {
+                const style = getComputedStyle(node), summary = node.querySelector('summary');
+                return {border:style.borderTopWidth,display:getComputedStyle(summary).display,
+                    marker:getComputedStyle(summary).listStyleType,after:getComputedStyle(summary,'::after').content};
+            });
+            assert.deepEqual(surface,{border:'1px',display:'flex',marker:'none',after:'none'});
+            const bar = await summary.boundingBox(), chevron = await settings.locator('.cla-preset-settings-chevron').boundingBox();
+            assert.ok(chevron.x>bar.x+bar.width-30,'arrow stays on the right');
+            const geometry = await folder('Outer').evaluate(header => {
+                const rect = header.getBoundingClientRect(), handle = header.querySelector('.cla-preset-folder-drag-handle').getBoundingClientRect();
+                const glyph = header.querySelector('.cla-preset-folder-arrow').getBoundingClientRect();
+                return {center:rect.y+rect.height/2,handle:handle.y+handle.height/2,glyph:glyph.y+glyph.height/2};
+            });
+            assert.ok(Math.abs(geometry.center-geometry.handle)<=2,JSON.stringify(geometry));
+            assert.ok(Math.abs(geometry.center-geometry.glyph)<=2,JSON.stringify(geometry));
+        };
+        await checkToolbar();
+        const conflicts = await page.addStyleTag({content:`
+            #completion_prompt_manager details {border:0!important;background:none!important}
+            #completion_prompt_manager summary {display:list-item!important;list-style:disclosure-closed!important}
+            #completion_prompt_manager summary::after {content:'▼'!important}
+            #completion_prompt_manager .cla-preset-fold-header > span {position:absolute;top:0;left:0;display:block!important}
+        `});
+        await checkToolbar();
+        await page.screenshot({path:`/tmp/cla-toolbar-${version}-${mobile?'touch':'desktop'}-closed.png`,clip:{x:0,y:0,width:mobile?390:650,height:500}});
+        if(mobile) await summary.tap(); else await summary.click();
+        assert.equal(await settings.evaluate(node=>node.open),true);
+        assert.equal(await settings.getByRole('button',{name:'全部展开',exact:true}).isVisible(),true);
+        await page.screenshot({path:`/tmp/cla-toolbar-${version}-${mobile?'touch':'desktop'}-open.png`,clip:{x:0,y:0,width:mobile?390:650,height:650}});
+        if(mobile) await summary.tap(); else {await summary.focus();await page.keyboard.press('Enter');}
+        assert.equal(await settings.evaluate(node=>node.open),false);
+        await conflicts.evaluate(node=>node.remove());
         // Swiping a name or action button must scroll, never drag, toggle or
         // delete a group (Touch Punch used to capture the whole header).
         const swipe = async target => {
