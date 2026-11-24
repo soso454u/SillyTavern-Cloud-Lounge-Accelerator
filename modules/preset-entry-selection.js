@@ -127,6 +127,16 @@ export class PresetEntrySelection {
             const button = ui.button(label, action);
             button.disabled = label !== '取消' && (this.host.busy || this.selected.size === 0); toolbar.append(button);
         }
+        const folders = ui.folders();
+        if (folders.length) {
+            const move = ui.select([['', '移入分组…'], ...folders.map((f, i) => [String(i), `📁 ${f.name}`])], '移入分组');
+            move.disabled = this.host.busy || this.selected.size === 0;
+            move.addEventListener('change', () => {
+                const folder = folders[Number(move.value)]; if (!folder) return;
+                ui.run(() => ui.moveEntries(new Set(this.selected), { folder }).then(done => { if (done) this.exit(); }));
+            });
+            toolbar.append(move);
+        }
         list.before(toolbar);
     }
     async update(action) {
@@ -162,6 +172,15 @@ export class PresetEntrySelection {
         if (!context) return false;
         if (!this.mode || !this.current()) this.selected.clear();
         this.mode = true; this.context = context; this.scopeKey = this.scope(); return true;
+    }
+    moveHere(context, id) {
+        if (!this.mode || !this.selected.size) return;
+        this.host.groups.run(() => this.host.groups.moveEntries(new Set(this.selected), { after: id }).then(done => { if (done) this.exit(); }));
+    }
+    pick(context, id) {
+        if (!this.enter(context)) return;
+        this.selected.add(id); this.anchor = id; this.render();
+        globalThis.toastr?.info?.('可继续点选更多条目；用上方「移入分组…」，或在目标条目「⋯」选「移到这条下方」', '移动');
     }
     startGroup(context, id) {
         if (this.mode && this.selected.size) {

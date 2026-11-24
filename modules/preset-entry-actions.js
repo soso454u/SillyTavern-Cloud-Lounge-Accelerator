@@ -147,8 +147,9 @@ export class PresetEntryActions {
         position.textContent = `原始位置：第 ${context.order.findIndex(item => item.identifier === id) + 1} 项`;
         menu.append(position);
         const picking = this.selection.mode && this.selection.selected.size > 0;
-        const actions = [['group', picking ? `用已选 ${this.selection.selected.size} 项新建分组` : '从这里开始新建分组'], ['before', '在上方新建'], ['after', '在下方新建'], ['copy', '复制到下方'],
-            ['remove', '移出当前列表'], ['delete', '永久删除条目']];
+        const moves = picking ? [['moveHere', `把已选 ${this.selection.selected.size} 项移到这条下方`]] : [['pick', '选中，多条一起移动…']];
+        const actions = [...moves, ['before', '在上方新建'], ['after', '在下方新建'], ['copy', '复制到下方'],
+            ['remove', '移出当前列表'], ['delete', '永久删除条目'], ['group', picking ? `用已选 ${this.selection.selected.size} 项新建分组` : '从这里开始新建分组']];
         for (const [action, label] of actions) {
             const item = this.button(label, action);
             item.setAttribute('role', 'menuitem');
@@ -160,6 +161,17 @@ export class PresetEntryActions {
                 if (item.disabled) item.title = '酒馆内置条目受保护';
             }
             menu.append(item);
+        }
+        const folders = this.groups.folders();
+        if (folders.length) {
+            const move = this.groups.select([['', '📁 移入分组…'], ...folders.map((f, i) => [String(i), f.name])], '移入分组');
+            move.className = 'text_pole cla-preset-menu-move';
+            move.addEventListener('change', () => {
+                const folder = folders[Number(move.value)]; if (!folder) return;
+                this.closeMenu();
+                this.groups.run(() => this.groups.moveEntries(new Set([id]), { folder }));
+            });
+            menu.insertBefore(move, menu.children[1]);
         }
         this.showMenu(menu, button);
     }
@@ -238,6 +250,8 @@ export class PresetEntryActions {
         if (!this.current(context)) return;
         if (action === 'menu') { if (!wasOpen) this.openMenu(button, id); return; }
         if (action === 'group') { this.selection.startGroup(context, id); return; }
+        if (action === 'moveHere') { this.selection.moveHere(context, id); return; }
+        if (action === 'pick') { this.selection.pick(context, id); return; }
         if (action === 'remove' || action === 'delete') void this.deleteEntry(context, id, action === 'delete');
         else this.openDraft(context, id, action);
     }

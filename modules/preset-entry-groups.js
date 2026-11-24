@@ -68,6 +68,118 @@ export class PresetEntryGroups {
         delete meta.names[folder.id];
         this.saveMeta(context, meta); this.render();
     }
+    folders() { return [...this.folderNodes.values()].filter(r => r.folder && r.element.isConnected).map(r => r.folder); }
+    async moveEntries(ids, target) {
+        const context = this.host.context(), gctx = this.context();
+        if (!context || !this.valid(gctx) || this.host.busy) return false;
+        let anchor, before = false;
+        if (target.folder) {
+            const folder = target.folder, [startId, endId] = JSON.parse(folder.id);
+            if (ids.has(startId) || ids.has(endId)) throw new Error('不能把分组的首尾条目移进自己');
+            // Name-series and one-sided groups would not survive new members,
+            // so pin their current range as a manual group first.
+            if (!folder.manual && folder.rank !== 2) {
+                const meta = this.meta(gctx);
+                meta.manual.push({ start: startId, end: endId, name: folder.name });
+                this.saveMeta(gctx, meta);
+            }
+            anchor = endId; before = folder.rank === 2 && !folder.manual;
+        } else if (target.before) { anchor = target.before; before = true; } else anchor = target.after;
+        if (ids.has(anchor)) throw new Error('目标不能是已选条目');
+        const picked = context.order.filter(item => ids.has(item.identifier));
+        if (!picked.length) return false;
+        const rest = context.order.filter(item => !ids.has(item.identifier));
+        const at = rest.findIndex(item => item.identifier === anchor);
+        if (at < 0) return false;
+        const order = [...rest.slice(0, at + (before ? 0 : 1)), ...picked, ...rest.slice(at + (before ? 0 : 1))];
+        if (!before && target.folder) {
+            const meta = this.meta(gctx), group = meta.manual.find(g => g.start === JSON.parse(target.folder.id)[0]);
+            if (group) { group.end = picked.at(-1).identifier; this.saveMeta(gctx, meta); }
+        }
+        this.host.busy = true;
+        try {
+            await this.host.write([{ owner: context.holder, key: 'order', next: order }]);
+            this.host.manager.render(false);
+            return true;
+        } finally { this.host.busy = false; }
+    }
+    // Hold a folder header ~400ms, then drag: the whole block moves in the
+    // real preset order and is saved like a native drag.
+    dragFolder(header, getRecord) {
+        let timer = null, state = null;
+        const doc = this.host.document;
+        const cleanup = () => {
+            clearTimeout(timer); timer = null;
+            doc.removeEventListener('pointermove', move, true); doc.removeEventListener('pointerup', up, true); doc.removeEventListener('pointercancel', cancel, true);
+            doc.removeEventListener('touchmove', block, { capture: true });
+            if (state) { state.line.remove(); state.record.element.classList.remove('cla-preset-folder-dragging'); }
+            state = null;
+        };
+        const block = event => { if (state && event.cancelable) event.preventDefault(); };
+        const targetAt = (x, y) => {
+            const record = state.record;
+            const hit = doc.elementFromPoint(x, y)?.closest?.('[data-pm-identifier], .cla-preset-folder');
+            if (!hit || !this.list?.contains(hit) || record.element.contains(hit)) return null;
+            const id = hit.dataset.pmIdentifier;
+            if (id && record.ids.includes(id)) return null;
+            const rect = hit.getBoundingClientRect(), above = y < rect.top + rect.height / 2;
+            if (hit.classList.contains('cla-preset-folder')) {
+                const [first, last] = JSON.parse(hit.dataset.claPresetGroup);
+                const folded = hit.classList.contains('collapsed');
+                if (above || !folded) return { node: hit, above: true, target: { before: first } };
+                const other = this.folderNodes.get(hit.dataset.claPresetGroup);
+                return { node: hit, above: false, target: { after: other?.ids?.at(-1) || last } };
+            }
+            return { node: hit, above, target: above ? { before: id } : { after: id } };
+        };
+        const move = event => {
+            if (!state || event.pointerId !== state.pointer) return;
+            if (!state.active) {
+                if (Math.hypot(event.clientX - state.x, event.clientY - state.y) > 10) cleanup();
+                return;
+            }
+            event.preventDefault();
+            const hit = state.hit = targetAt(event.clientX, event.clientY);
+            if (!hit) { state.line.hidden = true; return; }
+            const rect = hit.node.getBoundingClientRect(), box = this.list.getBoundingClientRect();
+            Object.assign(state.line.style, { top: `${(hit.above ? rect.top : rect.bottom) - box.top + this.list.scrollTop - 2}px` });
+            state.line.hidden = false;
+            // Auto-scroll near the edges of the scrolling panel.
+            const scroller = this.list.closest('.scrollableInner, .drawer-content') || this.list.parentElement;
+            const sr = scroller?.getBoundingClientRect();
+            if (sr) { if (event.clientY < sr.top + 40) scroller.scrollTop -= 12; else if (event.clientY > sr.bottom - 40) scroller.scrollTop += 12; }
+        };
+        const up = event => {
+            if (!state || event.pointerId !== state.pointer) return;
+            const { active, hit, record } = state;
+            cleanup();
+            if (!active) return;
+            event.preventDefault(); event.stopPropagation();
+            this.suppressHeaderClick = Date.now() + 500;
+            if (hit) this.run(() => this.moveEntries(new Set(record.ids), hit.target));
+        };
+        const cancel = () => cleanup();
+        header.addEventListener('pointerdown', event => {
+            if (event.button > 0 || event.target.closest('.cla-preset-fold-icon') || this.host.busy || this.query || this.filter !== 'all') return;
+            const record = getRecord(); if (!record?.ids?.length) return;
+            cleanup();
+            const line = this.node('div', '', 'cla-preset-drop-line'); line.hidden = true;
+            state = { record, line, pointer: event.pointerId, x: event.clientX, y: event.clientY, active: false };
+            doc.addEventListener('pointermove', move, { capture: true, passive: false });
+            doc.addEventListener('pointerup', up, true); doc.addEventListener('pointercancel', cancel, true);
+            doc.addEventListener('touchmove', block, { capture: true, passive: false });
+            timer = setTimeout(() => {
+                if (!state) return;
+                state.active = true; record.element.classList.add('cla-preset-folder-dragging');
+                this.list.style.position ||= 'relative'; this.list.append(line);
+                globalThis.navigator?.vibrate?.(15);
+            }, 400);
+        });
+        header.addEventListener('click', event => {
+            if (Date.now() < (this.suppressHeaderClick || 0)) { event.preventDefault(); event.stopImmediatePropagation(); }
+        }, true);
+        header.addEventListener('contextmenu', event => { if (state) event.preventDefault(); });
+    }
     expanded(context) {
         const saved = this.extensionSettings[PRESET_GROUPS_KEY];
         return new Set(saved?.schema === PRESET_GROUPS_SCHEMA ? saved.expandedByPreset?.[context.key] : []);
@@ -106,7 +218,7 @@ export class PresetEntryGroups {
     protectSortable(list, grouped) {
         let record = this.sortRecords.get(list);
         if (!record) {
-            record = { refresh: () => this.protectSortable(list, !this.rawOrder || !!this.query || this.filter !== 'all' || !!this.host.selection?.mode || !!this.host.selection?.gesture) };
+            record = { refresh: () => this.protectSortable(list, !!this.query || this.filter !== 'all' || !!this.host.selection?.mode || !!this.host.selection?.gesture) };
             for (const type of ['pointerdown', 'mousedown', 'touchstart']) list.addEventListener(type, record.refresh, { capture: true, passive: true });
             this.sortRecords.set(list, record);
         }
@@ -211,9 +323,8 @@ export class PresetEntryGroups {
                 const ctx = this.context(); if (!this.valid(ctx)) return;
                 const meta = this.meta(ctx); meta.hidden = []; this.saveMeta(ctx, meta); this.render();
             }));
-            settings.append(tools);
             this.feedback = this.node('small', '', 'cla-preset-group-feedback'); this.feedback.setAttribute('role', 'status');
-            views.append(settings); this.root.append(bar, views, this.feedback);
+            settings.append(bar, views, tools); this.root.append(settings, this.feedback);
         }
         if (this.root.parentElement !== list.parentElement) list.before(this.root);
         if (this.search.value !== this.query) this.search.value = this.query;
@@ -260,7 +371,6 @@ export class PresetEntryGroups {
                 if (row && !visible(prompt)) this.rowStyle(row, 'display', 'none');
             }
         } else {
-            this.protectSortable(list, true);
             list.classList.add('cla-preset-grouped-list');
             const meta = this.meta(context);
             const layout = [...folderLayout(entries, meta.manual, meta.names, meta.hidden), ...displayEntries.slice(entries.length).map(entry => ({ entry }))];
@@ -309,7 +419,7 @@ export class PresetEntryGroups {
             }
             this.updateFolds();
         }
-        this.protectSortable(list, !this.rawOrder || filtering || !!this.host.selection?.mode);
+        this.protectSortable(list, filtering || !!this.host.selection?.mode);
         this.host.selection?.render(); this.watchStatus(list, context);
     }
     updateFolds() {
@@ -342,6 +452,7 @@ export class PresetEntryGroups {
             });
             const remove = icon('fa-xmark', '删除分组（条目保留在原位）', () => this.removeGroup(record.folder));
             header.append(button, rename, subFold, remove); element.append(header);
+            this.dragFolder(header, () => record);
             record = { element, header, button, arrow, name, count, subFold, remove }; this.folderNodes.set(folder.id, record);
         }
         record.name.textContent = folder.name; record.count.textContent = String(folder.total);

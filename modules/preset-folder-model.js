@@ -31,7 +31,7 @@ export function folderLayout(entries, manual = [], names = {}, hidden = []) {
         for (const section of starts.get(index) || []) {
             const id = JSON.stringify([entry.identifier, entries[section.end].identifier]);
             const original = section.name;
-            const folder = { id, name: names[id] || original, original, manual: !!section.manual, total: section.end - index + 1, children: [] };
+            const folder = { id, name: names[id] || original, original, manual: !!section.manual, rank: section.rank ?? 2, total: section.end - index + 1, children: [] };
             (open.at(-1)?.folder.children ?? roots).push(folder);
             open.push({ end: section.end, folder });
         }

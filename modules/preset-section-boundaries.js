@@ -121,5 +121,5 @@ export function removeCrossed(pairs) {
             else if (same) dropped.add(other); else { dropped.add(section); dropped.add(other); }
         }
     }
-    return pairs.filter(section => !dropped.has(section)).map(({ rank, ...rest }) => rest.manual ? { ...rest } : rest);
+    return pairs.filter(section => !dropped.has(section));
 }

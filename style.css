@@ -892,7 +892,6 @@ body .cla-preset-entry-menu button.menu_button[data-cla-preset-action] {
 }
 html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable > li.completion_prompt_manager_prompt.cla-preset-fold-hidden[data-pm-identifier],
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder[hidden] { display: none !important; }
-#completion_prompt_manager_list.cla-preset-grouped-list .drag-handle { display: none !important; }
 #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
     .completion_prompt_manager_prompt_disabled .completion_prompt_manager_prompt_name,
 #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
@@ -1147,10 +1146,6 @@ body.cla-preset-drag-guard [id$="prompt_manager_list"] [data-pm-identifier][clas
     .cla-preset-group-tools .menu_button { min-height: 32px; }
 }
 
-body.cla-preset-drag-guard #completion_prompt_manager_list.cla-preset-grouped-list
-    [data-pm-identifier][class*="prompt_manager_prompt_draggable"] > .drag-handle {
-    display: none !important;
-}
 
 /* The header and rows share a grid, including the slot used by theme drag handles. */
 #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable {
@@ -1159,9 +1154,6 @@ body.cla-preset-drag-guard #completion_prompt_manager_list.cla-preset-grouped-li
     --cla-pm-toggle: 32px;
     --cla-pm-control-gap: 3px;
     --cla-pm-controls: calc(3 * (var(--cla-pm-action) + var(--cla-pm-control-gap)) + var(--cla-pm-toggle));
-}
-#completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable.cla-preset-grouped-list {
-    --cla-pm-drag: 0px;
 }
 @media (pointer: coarse) {
     #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable {
@@ -1280,3 +1272,9 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
 }
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder:not(.collapsed) .cla-preset-folder-arrow { color: var(--SmartThemeQuoteColor, inherit); opacity: 1; }
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder.collapsed > .cla-preset-fold-header { opacity: 0.85; }
+
+.cla-preset-entry-menu .cla-preset-menu-move { width: 100%; margin: 2px 0; }
+
+.cla-preset-drop-line { position: absolute; left: 0; right: 0; height: 4px; border-radius: 2px; background: var(--SmartThemeQuoteColor, #6a8); pointer-events: none; z-index: 50; }
+#completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder-dragging > .cla-preset-fold-header { outline: 2px dashed var(--SmartThemeQuoteColor, #6a8); opacity: 0.7; }
+#completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header { touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
