@@ -17,11 +17,11 @@ export class PresetEntryActions {
             // Passing no header preserves this safe DOM node and its text.
             return Popup.show.confirm(null, content);
         } };
-    }, isGenerating = () => false, extensionSettings = {}, saveSettings = () => {}, eventSource, eventTypes } = {}) {
+    }, isGenerating = () => false, extensionSettings = {}, saveSettings = () => {} } = {}) {
         this.document = documentRef;
         this.loadApi = loadApi;
         this.isGenerating = isGenerating;
-        this.groups = new PresetEntryGroups({ host: this, extensionSettings, saveSettings, eventSource, eventTypes });
+        this.groups = new PresetEntryGroups({ host: this, extensionSettings, saveSettings });
         this.selection = new PresetEntrySelection({ host: this });
         this.started = false;
         this.generation = 0;
@@ -134,7 +134,7 @@ export class PresetEntryActions {
         }
     }
 
-    openMenu(button, id, grouping = false) {
+    openMenu(button, id) {
         const context = button.claContext;
         if (!this.current(context) || this.busy) return;
         const prompt = this.manager.getPromptById(id);
@@ -142,21 +142,16 @@ export class PresetEntryActions {
         const menu = this.document.createElement('div');
         menu.className = 'cla-preset-entry-menu';
         menu.setAttribute('role', 'menu');
-        if (!grouping) {
-            const position = this.document.createElement('small');
-            position.textContent = `原始位置：第 ${context.order.findIndex(item => item.identifier === id) + 1} 项`;
-            menu.append(position);
-        }
-        const groupContext = this.groups.context();
-        if (grouping) this.groups.assignmentMenu(menu, groupContext, id);
-        const actions = grouping ? [] : [['before', '在上方新建'], ['after', '在下方新建'], ['copy', '复制到下方'],
-            ...(groupContext ? [['group', '归入分组…']] : []), ['remove', '移出当前列表'], ['delete', '永久删除条目']];
+        const position = this.document.createElement('small');
+        position.textContent = `原始位置：第 ${context.order.findIndex(item => item.identifier === id) + 1} 项`;
+        menu.append(position);
+        const actions = [['before', '在上方新建'], ['after', '在下方新建'], ['copy', '复制到下方'],
+            ['remove', '移出当前列表'], ['delete', '永久删除条目']];
         for (const [action, label] of actions) {
             const item = this.button(label, action);
             item.setAttribute('role', 'menuitem');
             item.claContext = context;
             item.dataset.claPromptId = id;
-            item.claGroupContext = groupContext;
             if (action === 'copy') item.disabled = !!prompt.marker;
             if (action === 'remove' || action === 'delete') {
                 item.disabled = prompt.marker === true || prompt.system_prompt !== false || !this.manager.isPromptDeletionAllowed?.(prompt);
@@ -236,16 +231,10 @@ export class PresetEntryActions {
         const action = button.dataset.claPresetAction;
         const id = button.dataset.claPromptId || button.closest(ROW)?.dataset.pmIdentifier;
         const context = button.claContext;
-        const groupContext = button.claGroupContext;
-        const menuAnchor = this.menuButton;
         const wasOpen = this.menuButton === button;
         this.closeMenu();
         if (!this.current(context)) return;
         if (action === 'menu') { if (!wasOpen) this.openMenu(button, id); return; }
-        if (action === 'group') {
-            if (this.groups.valid(groupContext)) this.openMenu(menuAnchor, id, true);
-            return;
-        }
         if (action === 'remove' || action === 'delete') void this.deleteEntry(context, id, action === 'delete');
         else this.openDraft(context, id, action);
     }

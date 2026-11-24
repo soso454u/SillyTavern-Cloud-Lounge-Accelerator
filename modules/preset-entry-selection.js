@@ -122,21 +122,12 @@ export class PresetEntrySelection {
         const ui = this.host.groups, toolbar = this.toolbar = ui.node('div', '', 'cla-preset-bulk-toolbar');
         toolbar.setAttribute('role', 'toolbar'); toolbar.setAttribute('aria-label', '预设条目批量编辑');
         toolbar.append(ui.node('small', `已选 ${this.selected.size} 项`));
-        for (const [label, action] of [['批量移动', button => this.openGroups(button)], ['移出分类', () => { this.host.groups.assign(this.host.groups.context(), [...this.selected], null); this.exit(); }], ['启用', () => void this.update('enable')],
+        for (const [label, action] of [['启用', () => void this.update('enable')],
             ['禁用', () => void this.update('disable')], ['取消', () => this.exit()]]) {
-            let button; button = ui.button(label, () => action(button));
+            const button = ui.button(label, action);
             button.disabled = label !== '取消' && (this.host.busy || this.selected.size === 0); toolbar.append(button);
         }
         list.before(toolbar);
-    }
-    openGroups(button) {
-        if (!this.current() || this.host.busy || !this.selected.size) return;
-        const context = this.host.groups.context();
-        if (!context) return;
-        this.host.closeMenu();
-        const menu = this.host.groups.node('div', '', 'cla-preset-entry-menu'); menu.setAttribute('role', 'menu');
-        this.host.groups.assignmentMenu(menu, context, [...this.selected], () => this.exit());
-        this.host.showMenu(menu, button);
     }
     async update(action) {
         const context = this.context;
