@@ -385,7 +385,7 @@ export class PresetEntryGroups {
             record.end.style.setProperty('display', record.end.hidden ? 'none' : 'block', 'important');
             record.element.classList.toggle('collapsed', record.folded);
             record.button.setAttribute('aria-expanded', String(!record.folded));
-            record.arrow.className = `cla-preset-folder-arrow fa-solid ${record.folded ? 'fa-folder' : 'fa-folder-open'}`;
+            record.arrow.className = `cla-preset-folder-arrow cla-preset-folder-drag-handle fa-solid ${record.folded ? 'fa-folder' : 'fa-folder-open'}`;
             record.subFold.hidden = !record.subs?.length;
         }
         for (const [row, ancestors] of this.rowMembership) {
@@ -400,9 +400,10 @@ export class PresetEntryGroups {
             end.setAttribute('role', 'separator');
             const header = this.node('div', '', 'cla-preset-fold-header'); header.dataset.claPresetGroup = folder.id;
             const button = this.button('', () => this.setFold(this.context(), [folder.id], !element.classList.contains('collapsed'), header), 'cla-preset-fold-toggle');
-            const arrow = this.node('span', '', 'cla-preset-folder-arrow'); arrow.setAttribute('aria-hidden', 'true');
+            const arrow = this.node('span', '', 'cla-preset-folder-arrow cla-preset-folder-drag-handle'); arrow.setAttribute('aria-hidden', 'true');
+            arrow.title = '按住文件夹图标拖动分组';
             const name = this.node('span', '', 'cla-preset-fold-name'), count = this.node('small', '', 'cla-preset-fold-count');
-            button.append(arrow, name, count);
+            button.append(name, count);
             const icon = (cls, title, action) => { const b = this.button('', action, 'cla-preset-fold-icon'); b.append(b.glyph = this.node('i', '', `fa-solid ${cls}`)); b.glyph.setAttribute('aria-hidden', 'true'); b.title = title; b.setAttribute('aria-label', title); return b; };
             const rename = icon('fa-pen', '改名', () => this.renameFolder(record.folder));
             const subFold = icon('fa-angles-up', '折叠/展开全部子分组', () => {
@@ -410,7 +411,7 @@ export class PresetEntryGroups {
                 this.setFold(this.context(), subs, !allFolded, header);
             });
             const remove = icon('fa-xmark', '删除分组（条目保留在原位）', () => this.removeGroup(record.folder));
-            header.append(button, rename, subFold, remove); element.append(header);
+            header.append(arrow, button, rename, subFold, remove); element.append(header);
             record = { element, end, header, button, arrow, name, count, subFold, remove }; this.folderNodes.set(folder.id, record);
         }
         record.name.textContent = folder.name; record.count.textContent = String(folder.total);

@@ -1,6 +1,8 @@
 const ROW = '[data-pm-identifier][class*="prompt_manager_prompt_draggable"]';
 const FOLDER = '.cla-preset-folder';
 const COMPANION = 'cla-preset-drag-companion';
+const MOVE_EVENTS = ['pointermove', 'mousemove', 'touchmove'];
+const END_EVENTS = ['pointerup', 'mouseup', 'touchend', 'touchcancel', 'pointercancel'];
 
 // Keep SillyTavern's jQuery UI helper, placeholder, touch handling and update
 // callback. Only adapt which nodes are measured and which rows move as a block.
@@ -13,7 +15,19 @@ export class PresetGroupedDrag {
         this.click = event => {
             if (Date.now() < (this.suppressUntil || 0)) { event.preventDefault(); event.stopImmediatePropagation(); }
         };
+        this.move = event => {
+            const gesture = this.folderGesture, point = event.touches?.[0] || event;
+            if (gesture && Math.hypot(point.clientX - gesture.x, point.clientY - gesture.y) >= 8) {
+                gesture.moved = true; this.suppressUntil = Date.now() + 500;
+            }
+        };
+        this.end = () => {
+            if (this.folderGesture?.moved) this.suppressUntil = Date.now() + 500;
+            this.folderGesture = null;
+        };
         for (const type of ['pointerdown', 'mousedown', 'touchstart']) list.addEventListener(type, this.down, { capture: true, passive: true });
+        for (const type of MOVE_EVENTS) this.doc.addEventListener(type, this.move, { capture: true, passive: true });
+        for (const type of END_EVENTS) this.doc.addEventListener(type, this.end, { capture: true, passive: true });
         list.addEventListener('click', this.click, true);
         this.doc.addEventListener('pointercancel', this.cancel, true); this.doc.addEventListener('keydown', this.key, true);
         this.doc.defaultView.addEventListener('blur', this.cancel); this.reconcile();
@@ -40,7 +54,7 @@ export class PresetGroupedDrag {
                 return controller.jquery(controller.list.children).filter(`${ROW}, ${FOLDER}`)
                     .filter(function () { return !this.classList.contains(COMPANION) && this.getClientRects().length > 0; });
             },
-            handle: '.drag-handle, .cla-preset-fold-header', delay: 0, distance: 4,
+            handle: '.drag-handle, .cla-preset-folder-drag-handle', delay: 0, distance: 4,
             cancel: this.original.cancel, axis: 'y', tolerance: 'pointer',
             placeholder: 'cla-preset-native-placeholder', forcePlaceholderSize: true, revert: false,
             start(event, ui) { controller.start(event, ui); return controller.original.start?.call(this, event, ui); },
@@ -53,12 +67,14 @@ export class PresetGroupedDrag {
     down(event) {
         if (this.state?.active || event.button > 0 || event.isPrimary === false) return;
         this.suppressUntil = 0; this.reconcile();
+        const header = event.target?.closest?.('.cla-preset-fold-header');
+        const point = event.touches?.[0] || event;
+        this.folderGesture = header ? { x: point.clientX, y: point.clientY, moved: false } : null;
         const instance = this.instance;
         if (!instance?.options || this.groups.rawOrder) return;
-        const header = event.target?.closest?.('.cla-preset-fold-header');
         const row = event.target?.closest?.('.drag-handle')?.closest(ROW);
         const allowed = !this.groups.host.busy && !this.groups.query && this.groups.filter === 'all';
-        const folder = header && !event.target.closest('.cla-preset-fold-icon') && this.groups.folderNodes.get(header.dataset.claPresetGroup);
+        const folder = header && event.target.closest('.cla-preset-folder-drag-handle') && this.groups.folderNodes.get(header.dataset.claPresetGroup);
         // Run after the global guard, before native mouse/Touch Punch handlers.
         this.pointerOptions = { handle: this.applied.handle, delay: folder ? 250 : 0, distance: 4,
             cancel: !allowed ? '*' : folder ? '.cla-preset-fold-icon' : this.original.cancel };
@@ -149,7 +165,10 @@ export class PresetGroupedDrag {
     }
     destroy() {
         this.cancel(); this.restore();
+        this.folderGesture = null;
         for (const type of ['pointerdown', 'mousedown', 'touchstart']) this.list.removeEventListener(type, this.down, true);
+        for (const type of MOVE_EVENTS) this.doc.removeEventListener(type, this.move, true);
+        for (const type of END_EVENTS) this.doc.removeEventListener(type, this.end, true);
         this.list.removeEventListener('click', this.click, true);
         this.doc.removeEventListener('pointercancel', this.cancel, true); this.doc.removeEventListener('keydown', this.key, true);
         this.doc.defaultView.removeEventListener('blur', this.cancel);

@@ -1326,6 +1326,15 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
 
 
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header { touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+#completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder-drag-handle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 28px;
+    cursor: grab;
+    touch-action: none;
+}
+#completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder-drag-handle:active { cursor: grabbing; }
 #completion_prompt_manager_list.cla-preset-drag-active { user-select: none; -webkit-user-select: none; }
 html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable > li.cla-preset-drag-companion { display: none !important; }
 #completion_prompt_manager #completion_prompt_manager_list > .cla-preset-native-placeholder {

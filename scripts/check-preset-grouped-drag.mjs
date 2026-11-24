@@ -100,6 +100,34 @@ try {
         const data = await page.evaluate(() => JSON.stringify(actions.context().prompts));
         assert.equal(await folder('Outer').count(),1);
         assert.equal(await page.locator('.cla-preset-folder-end:visible').count(),0);
+        // Swiping a name or action button must scroll, never drag, toggle or
+        // delete a group (Touch Punch used to capture the whole header).
+        const swipe = async target => {
+            const rect = await box(target), start = {x:rect.x+rect.width/2,y:rect.y+rect.height/2};
+            const before = await page.locator('#scroll').evaluate(node => node.scrollTop);
+            await down(start); await page.waitForTimeout(300);
+            for (let i=1;i<=8;i++) { await move({x:start.x,y:start.y-i*12}); await page.waitForTimeout(16); }
+            assert.equal(await page.locator('.ui-sortable-helper').count(),0);
+            await up();
+            // Also reject a late synthetic click from a touch compatibility layer.
+            await target.dispatchEvent('click');
+            if (mobile) assert.ok(await page.locator('#scroll').evaluate(node => node.scrollTop)>before, 'folder controls allow native scrolling');
+            assert.equal(await folder('Next').count(),1,'swiping × must not delete the group');
+            assert.equal(await folder('Next').locator('.cla-preset-fold-toggle').getAttribute('aria-expanded'),'false');
+            assert.deepEqual(await page.evaluate(() => order()),initial);
+            assert.equal(await page.evaluate(() => saves),0);
+            await page.locator('#scroll').evaluate(node => { node.scrollTop=0; });
+            await page.waitForTimeout(100);
+        };
+        await swipe(folder('Next').locator('.cla-preset-fold-name'));
+        await swipe(folder('Next').locator('[title="删除分组（条目保留在原位）"]'));
+        await swipe(folder('Next').locator('[title="改名"]'));
+        // A fresh deliberate tap still toggles normally after a swipe.
+        const toggle = folder('Next').locator('.cla-preset-fold-toggle');
+        if (mobile) await toggle.tap(); else await toggle.click();
+        assert.equal(await toggle.getAttribute('aria-expanded'),'true');
+        if (mobile) await toggle.tap(); else await toggle.click();
+        assert.equal(await toggle.getAttribute('aria-expanded'),'false');
         // Single item crosses a folded 120-row section, keeping all hidden rows.
         await drag(row('n0'), folder('Outer'), 0, true);
         const firstMove = await page.evaluate(() => order());
@@ -112,7 +140,7 @@ try {
         assert.deepEqual((await page.evaluate(() => order())).slice(0,3), ['n121','n125','n1']);
         assert.deepEqual(await page.evaluate(() => [saves,renders,actions.selection.mode]), [2,0,false]);
         // An entire folded section, including its nested group, moves together.
-        await drag(folder('Outer'), folder('Next'), 440, true);
+        await drag(folder('Outer').locator('.cla-preset-folder-drag-handle'), folder('Next'), 440, true);
         const moved = await page.evaluate(() => order());
         assert.ok(moved.indexOf('n1')>moved.indexOf('n200'));
         assert.deepEqual(moved.slice(moved.indexOf('n1'),moved.indexOf('n1')+120), initial.slice(1,121));
