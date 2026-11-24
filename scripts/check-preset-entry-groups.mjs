@@ -1,9 +1,10 @@
 // Disposable real SillyTavern only. No simplified DOM or external requests.
+// Set CLA_PRESET_THEME_CSS to load a local theme with its original selectors.
 // CLA_TAVERN_URL=http://127.0.0.1:18781 CLA_PRESET_FIXTURE=/path/to/preset.json node scripts/check-preset-entry-groups.mjs
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-const { CLA_TAVERN_URL, CLA_PRESET_FIXTURE, CLA_BROWSER_EXECUTABLE } = process.env;
+const { CLA_TAVERN_URL, CLA_PRESET_FIXTURE, CLA_BROWSER_EXECUTABLE, CLA_PRESET_THEME_CSS } = process.env;
 assert.ok(CLA_TAVERN_URL && CLA_PRESET_FIXTURE, 'Set CLA_TAVERN_URL and CLA_PRESET_FIXTURE');
 const base = new URL(CLA_TAVERN_URL);
 assert.ok(['127.0.0.1', 'localhost', '[::1]'].includes(base.hostname), 'Use a local disposable SillyTavern');
@@ -11,6 +12,7 @@ const preset = JSON.parse(await readFile(CLA_PRESET_FIXTURE, 'utf8'));
 // Keep every prompt and prompt_order item, without importing unrelated extension data.
 delete preset.extensions;
 const fixture = Buffer.from(JSON.stringify(preset));
+const themeCss = CLA_PRESET_THEME_CSS ? await readFile(CLA_PRESET_THEME_CSS, 'utf8') : null;
 const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url)));
 const { chromium } = createRequire(import.meta.url)('playwright');
 const browser = await chromium.launch({ headless: true, ...(CLA_BROWSER_EXECUTABLE ? { executablePath: CLA_BROWSER_EXECUTABLE } : {}) });
@@ -62,27 +64,49 @@ try {
             ['写作规则', '不要动', '规则', '小剧场', 'NSFW', '文风', '视角模式', '选一', '思维链', '不一定管用的破限']);
         const identities = page.locator(`${list} > [data-pm-identifier]`).filter({ has: page.locator('[data-pm-name]').filter({ hasText: /身份[1-5]/u }) });
         assert.equal(await identities.count(), 5);
+        if (themeCss) await page.addStyleTag({ content: themeCss });
         const writing = await header('写作规则').evaluate(node => node.getBoundingClientRect().top);
         assert.ok(await identities.evaluateAll((items, top) => items.every(item => item.getBoundingClientRect().bottom <= top), writing));
-        // Apply the foreground and background contrast seen in the report to the
-        // real page, retaining SillyTavern's native disabled-row selectors.
-        await page.addStyleTag({ content: `#completion_prompt_manager {
+        if (!themeCss) await page.addStyleTag({ content: `#completion_prompt_manager {
             --SmartThemeBodyColor: rgb(49, 69, 58);
             --SmartThemeBorderColor: rgb(195, 207, 195);
             background: rgb(246, 245, 237);
             color: var(--SmartThemeBodyColor);
-        }
-        /* Reproduce the reported theme's right alignment and tiny controls. */
-        #completion_prompt_manager_list .completion_prompt_manager_prompt_name { text-align: right !important; margin-left: auto; }
-        #completion_prompt_manager_list .prompt_manager_prompt_controls span { width: 18px; height: 18px; transition: all 1s; }` });
+        }` });
         const checkDisabled = async () => {
-            const disabled = page.locator(`${rows}.completion_prompt_manager_prompt_disabled [data-pm-name]`).first();
-            assert.deepEqual(await disabled.evaluate(node => {
+            const disabled = identities.first().locator('[data-pm-name]');
+            const [color, opacity, decoration] = await disabled.evaluate(node => {
                 const style = getComputedStyle(node);
-                const link = node.querySelector('.prompt-manager-inspect-action');
-                return [style.color, style.opacity, style.textDecorationLine, link ? getComputedStyle(link).color : style.color];
-            }), ['rgb(49, 69, 58)', '1', 'line-through', 'rgb(49, 69, 58)']);
+                return [style.color, style.opacity, style.textDecorationLine];
+            });
+            assert.equal(opacity, '1');
+            assert.equal(decoration, 'line-through');
+            if (!themeCss) assert.equal(color, 'rgb(49, 69, 58)');
         };
+        const checkLayout = async () => {
+            const geometry = await identities.last().evaluate(node => {
+                const list = node.parentElement;
+                const head = list.querySelector('.completion_prompt_manager_list_head');
+                const left = head.firstElementChild.getBoundingClientRect().left;
+                const right = head.querySelector('.prompt_manager_prompt_tokens').getBoundingClientRect().right;
+                const name = node.querySelector('[data-pm-name]');
+                const text = name.querySelector('a, span[title]:not(.fa-solid)');
+                const target = node.querySelector('.prompt-manager-toggle-action');
+                const nameRect = name.getBoundingClientRect();
+                const textRect = text.getBoundingClientRect();
+                const toggleRect = target.getBoundingClientRect();
+                const tokenRect = node.querySelector('.prompt_manager_prompt_tokens').getBoundingClientRect();
+                return { nameOffset: nameRect.left - left, textInset: textRect.left - nameRect.left,
+                    width: toggleRect.width, height: toggleRect.height, tokenOffset: tokenRect.right - right,
+                    overlap: toggleRect.right - tokenRect.left, transition: getComputedStyle(target).transitionDuration };
+            });
+            assert.ok(Math.abs(geometry.nameOffset) < 4 && geometry.textInset <= 32, JSON.stringify(geometry));
+            assert.ok(Math.abs(geometry.tokenOffset) < 4 && geometry.overlap <= 0, JSON.stringify(geometry));
+            assert.equal(geometry.width, mobile ? 44 : 32);
+            assert.equal(geometry.height, mobile ? 44 : 32);
+            assert.equal(geometry.transition, '0s');
+        };
+        await checkLayout();
         await checkDisabled();
         await act(settings.locator('summary'));
         await act(settings.getByRole('button', { name: '全部展开', exact: true }));
@@ -90,6 +114,9 @@ try {
         assert.deepEqual(await rowOrder(), nativeOrder);
         await act(settings.getByRole('button', { name: '全部折叠', exact: true }));
         assert.equal(await page.locator('.cla-preset-folder.collapsed').count(), 10);
+        const foldedRows = page.locator(`${rows}.cla-preset-fold-hidden`);
+        assert.ok(await foldedRows.count() > 100);
+        assert.equal(await foldedRows.filter({ visible: true }).count(), 0, 'theme must honor folded rows');
         assert.equal(await identities.filter({ visible: true }).count(), 5);
         await act(settings.locator('summary'));
 
@@ -116,6 +143,7 @@ try {
         assert.equal(await page.locator('.cla-preset-folder').count(), 0);
         assert.deepEqual(await page.locator(`${list} > [data-pm-identifier]`).evaluateAll(items => items.map(item => item.dataset.pmIdentifier)), nativeOrder);
         await checkDisabled();
+        await checkLayout();
         await act(button('分类浏览'));
         assert.deepEqual(await rowOrder(), nativeOrder);
         assert.deepEqual(await nativeSnapshot(page), original);
@@ -130,18 +158,6 @@ try {
         });
         const row = identities.last();
         await row.scrollIntoViewIfNeeded();
-        const geometry = await row.evaluate(node => {
-            const name = node.querySelector('[data-pm-name]');
-            const toggle = node.querySelector('.prompt-manager-toggle-action');
-            const r = node.getBoundingClientRect();
-            const n = name.getBoundingClientRect();
-            return { alignment: getComputedStyle(name).textAlign, inset: n.left - r.left,
-                width: toggle.getBoundingClientRect().width, transition: getComputedStyle(toggle).transitionDuration };
-        });
-        assert.equal(geometry.alignment, 'start');
-        assert.ok(geometry.inset < 20, JSON.stringify(geometry));
-        assert.equal(geometry.width, mobile ? 44 : 32);
-        assert.equal(geometry.transition, '0s');
         const nativeToggle = row.locator('.prompt-manager-toggle-action');
         const promptId = await row.getAttribute('data-pm-identifier');
         await page.evaluate(async () => {
@@ -174,9 +190,9 @@ try {
         assert.deepEqual(await page.evaluate(() => [window.claToggleSaves, window.claToggleRenders, window.claRow.isConnected]), [6, 0, true]);
         assert.deepEqual(await nativeSnapshot(page), original);
         await row.scrollIntoViewIfNeeded();
-        await page.screenshot({ path: `/tmp/cla-2182-${mobile ? 'touch' : 'desktop'}.png` });
+        await page.screenshot({ path: `/tmp/cla-preset-${manifest.version}-${themeCss ? 'theme' : 'stock'}-${mobile ? 'touch' : 'desktop'}.png` });
         assert.equal(errors.length, 0, errors.join('\n'));
-        console.log(`${mobile ? 'Touch' : 'Desktop'}: ${ids.length} original rows, 10 paired sections, readable light-theme disabled text, flat native rows, left-aligned names, six immediate edge taps with pending saves, stable folds, and unchanged native data. Loaded ${manifest.version}.`);
+        console.log(`${mobile ? 'Touch' : 'Desktop'}: ${ids.length} original rows, 10 paired sections, readable light-theme disabled text, flat native rows, left-aligned names, six immediate edge taps with pending saves, stable folds with hidden rows, and unchanged native data. Loaded ${manifest.version}.`);
         await context.close();
     }
 } finally { await browser.close(); }

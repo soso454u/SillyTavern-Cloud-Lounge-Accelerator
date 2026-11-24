@@ -799,17 +799,6 @@ body.cla-fast-ui :is(.drawer-content, dialog.popup, .inline-drawer-content, #Wor
     transition-property: none !important;
 }
 
-#completion_prompt_manager #completion_prompt_manager_list li.completion_prompt_manager_prompt:has(.cla-preset-entry-more) {
-    grid-template-columns: minmax(0, 1fr) max-content minmax(2.5ch, max-content);
-    column-gap: 0.25em;
-    padding-left: 28px;
-}
-
-#completion_prompt_manager #completion_prompt_manager_list li.completion_prompt_manager_prompt:has(.cla-preset-entry-more) .prompt_manager_prompt_controls {
-    align-items: center;
-    gap: 0.15em;
-}
-
 body .cla-preset-entry-menu {
     position: fixed;
     z-index: 40000;
@@ -901,7 +890,7 @@ body .cla-preset-entry-menu button.menu_button[data-cla-preset-action] {
     min-width: 0;
     width: 100%;
 }
-#completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable > li[data-pm-identifier].cla-preset-fold-hidden,
+html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable > li.completion_prompt_manager_prompt.cla-preset-fold-hidden[data-pm-identifier],
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder[hidden] { display: none !important; }
 #completion_prompt_manager_list.cla-preset-grouped-list .drag-handle { display: none !important; }
 #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
@@ -1159,56 +1148,109 @@ body.cla-preset-drag-guard [id$="prompt_manager_list"] [data-pm-identifier][clas
 }
 
 body.cla-preset-drag-guard #completion_prompt_manager_list.cla-preset-grouped-list
-    [data-pm-identifier][class*="prompt_manager_prompt_draggable"] {
-    padding-inline-start: 0.5em !important;
-}
-body.cla-preset-drag-guard #completion_prompt_manager_list.cla-preset-grouped-list
     [data-pm-identifier][class*="prompt_manager_prompt_draggable"] > .drag-handle {
     display: none !important;
 }
 
-/* Keep the native row's three columns stable under flex/right-aligned themes. */
-#completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable > li[data-pm-identifier]:not(.completion_prompt_manager_prompt_invisible) {
-    display: grid !important;
-    grid-template-columns: minmax(0, 1fr) max-content minmax(2.5ch, max-content) !important;
-    align-items: center;
-    column-gap: 0.35em;
+/* The header and rows share a grid, including the slot used by theme drag handles. */
+#completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable {
+    --cla-pm-drag: 1.75rem;
+    --cla-pm-action: 1.5rem;
+    --cla-pm-toggle: 32px;
+    --cla-pm-control-gap: 3px;
+    --cla-pm-controls: calc(3 * (var(--cla-pm-action) + var(--cla-pm-control-gap)) + var(--cla-pm-toggle));
 }
-#completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable > li[data-pm-identifier] > .completion_prompt_manager_prompt_name {
+#completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable.cla-preset-grouped-list {
+    --cla-pm-drag: 0px;
+}
+@media (pointer: coarse) {
+    #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable {
+        --cla-pm-toggle: 44px;
+    }
+}
+
+html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
+    > li:is(.completion_prompt_manager_list_head, .completion_prompt_manager_prompt[data-pm-identifier]) {
+    grid-template-columns: var(--cla-pm-drag) minmax(0, 1fr) var(--cla-pm-controls) minmax(3.5ch, max-content) !important;
+    grid-template-areas: none !important;
+    align-items: center;
+    gap: 4px !important;
+    box-sizing: border-box;
+    padding-inline: 8px !important;
+}
+#completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
+    > li[data-pm-identifier]:where(:not(.completion_prompt_manager_prompt_invisible, .cla-preset-fold-hidden, [hidden])) {
+    display: grid !important;
+}
+html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
+    > li[data-pm-identifier] > .drag-handle {
+    grid-area: 1 / 1 / 2 / 2 !important;
+    position: static !important;
+    min-width: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+}
+html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
+    > li[data-pm-identifier] > .completion_prompt_manager_prompt_name,
+html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
+    > li.completion_prompt_manager_list_head > :first-child {
+    grid-area: 1 / 2 / 2 / 3 !important;
     justify-self: stretch !important;
     text-align: start !important;
-    justify-content: flex-start !important;
     min-width: 0;
     width: auto !important;
     margin-inline: 0 !important;
+}
+html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
+    > li[data-pm-identifier] > .completion_prompt_manager_prompt_name {
+    justify-content: flex-start !important;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-#completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable .completion_prompt_manager_prompt_name .prompt-manager-inspect-action {
-    text-align: start !important;
-    float: none !important;
+#completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
+    > li.completion_prompt_manager_list_head > :nth-child(2):empty {
+    display: none;
 }
-#completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable .prompt_manager_prompt_controls {
-    display: flex !important;
-    flex-direction: row !important;
+#completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
+    > li > .prompt_manager_prompt_tokens {
+    grid-area: 1 / 4 / 2 / 5 !important;
+    text-align: end;
+}
+html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
+    > li[data-pm-identifier] > span:has(> .prompt_manager_prompt_controls) {
+    grid-area: 1 / 3 / 2 / 4 !important;
+    width: auto !important;
+    min-width: 0;
+}
+html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable .prompt_manager_prompt_controls {
+    display: grid !important;
+    grid-template-columns: repeat(3, var(--cla-pm-action)) var(--cla-pm-toggle) !important;
+    grid-template-rows: var(--cla-pm-toggle) !important;
     align-items: center;
-    gap: 4px;
+    gap: var(--cla-pm-control-gap) !important;
+    width: auto !important;
 }
-#completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable .prompt_manager_prompt_controls .prompt-manager-toggle-action {
+html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable .prompt_manager_prompt_controls
+    > :is(.cla-preset-entry-more, .prompt-manager-detach-action, .prompt-manager-edit-action, .prompt-manager-toggle-action) {
+    grid-row: 1 !important;
     display: inline-flex !important;
     align-items: center;
     justify-content: center;
-    flex: 0 0 auto;
-    width: 32px !important;
-    height: 32px !important;
+    box-sizing: border-box;
+    width: 100% !important;
+    height: var(--cla-pm-toggle) !important;
     margin: 0 !important;
+}
+#completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable .prompt_manager_prompt_controls > span[class="fa-solid"]:empty {
+    display: none !important;
+}
+#completion_prompt_manager_list.cla-preset-readable .prompt_manager_prompt_controls > .cla-preset-entry-more { grid-column: 1; }
+#completion_prompt_manager_list.cla-preset-readable .prompt_manager_prompt_controls > .prompt-manager-detach-action { grid-column: 2; }
+#completion_prompt_manager_list.cla-preset-readable .prompt_manager_prompt_controls > .prompt-manager-edit-action { grid-column: 3; }
+#completion_prompt_manager_list.cla-preset-readable .prompt_manager_prompt_controls > .prompt-manager-toggle-action {
+    grid-column: 4;
+    min-width: 0;
     transition: none !important;
     touch-action: manipulation;
-}
-@media (pointer: coarse) {
-    #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable .prompt_manager_prompt_controls .prompt-manager-toggle-action {
-        width: 44px !important;
-        height: 44px !important;
-    }
 }
