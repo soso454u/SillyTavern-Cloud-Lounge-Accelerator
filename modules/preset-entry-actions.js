@@ -146,7 +146,8 @@ export class PresetEntryActions {
         const position = this.document.createElement('small');
         position.textContent = `原始位置：第 ${context.order.findIndex(item => item.identifier === id) + 1} 项`;
         menu.append(position);
-        const actions = [['before', '在上方新建'], ['after', '在下方新建'], ['copy', '复制到下方'],
+        const picking = this.selection.mode && this.selection.selected.size > 0;
+        const actions = [['group', picking ? `用已选 ${this.selection.selected.size} 项新建分组` : '从这里开始新建分组'], ['before', '在上方新建'], ['after', '在下方新建'], ['copy', '复制到下方'],
             ['remove', '移出当前列表'], ['delete', '永久删除条目']];
         for (const [action, label] of actions) {
             const item = this.button(label, action);
@@ -236,6 +237,7 @@ export class PresetEntryActions {
         this.closeMenu();
         if (!this.current(context)) return;
         if (action === 'menu') { if (!wasOpen) this.openMenu(button, id); return; }
+        if (action === 'group') { this.selection.startGroup(context, id); return; }
         if (action === 'remove' || action === 'delete') void this.deleteEntry(context, id, action === 'delete');
         else this.openDraft(context, id, action);
     }

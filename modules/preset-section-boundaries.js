@@ -50,9 +50,11 @@ const overlaps = (a, b) => !!a && !!b && (a.includes(b) || b.includes(a));
 export function findPresetSections(entries) {
     const pending = [];
     const pairs = [];
+    const markers = new Map();
     for (const [index, entry] of entries.entries()) {
         const marker = readBoundary(entry.name);
         if (!marker) continue;
+        markers.set(index, marker);
         if (!marker.closing) { pending.push({ index, ...marker }); continue; }
         let at = -1;
         for (let i = pending.length - 1; i >= 0; i--) {
@@ -67,25 +69,64 @@ export function findPresetSections(entries) {
         }
         if (at < 0) continue;
         const [start] = pending.splice(at, 1);
-        pairs.push({ start: start.index, end: index, name: start.title });
+        pairs.push({ start: start.index, end: index, name: start.title, rank: 2 });
     }
-    return removeCrossed(pairs);
+    const sections = removeCrossed(pairs);
+    // A one-sided heading such as "=== 基调等 ===" runs until the next divider
+    // or the end of the section that contains it.
+    for (const open of pending) {
+        if (!['dash', 'symbol', 'emoji', 'comment', 'corner', 'quote'].includes(open.family) || !open.title) continue;
+        let end = entries.length - 1;
+        for (const section of sections) if (section.start < open.index && section.end > open.index) end = Math.min(end, section.end - 1);
+        for (let i = open.index + 1; i <= end; i++) if (markers.has(i)) { end = i - 1; break; }
+        for (const section of sections) if (section.start > open.index && section.start <= end) end = section.start - 1;
+        if (end > open.index) sections.push({ start: open.index, end, name: open.title, rank: 1 });
+    }
+    // A series that fills a whole section adds nothing.
+    const series = findSeries(entries, markers).filter(run => !sections.some(sec => sec.start + 1 === run.start && sec.end - 1 === run.end));
+    return removeCrossed([...sections, ...series]);
 }
 
-export function removeCrossed(pairs, keep = new Set()) {
+// Runs of neighbours sharing a name stem: 身份1..身份5, 「写卡」…, 剧情选项….
+const SYMBOLS = /^[\s\p{P}\p{S}\p{Extended_Pictographic}️]+/u;
+function stem(name) {
+    const text = String(name ?? '').normalize('NFKC').trim();
+    const tag = /^([「【\[《〔(（][^」】\]》〕)）]{1,12}[」】\]》〕)）])/u.exec(text);
+    if (tag) return tag[1];
+    return text.replace(SYMBOLS, '');
+}
+function common(a, b) { let i = 0; while (i < a.length && a[i] === b[i]) i++; return a.slice(0, i); }
+function findSeries(entries, markers) {
+    const out = [];
+    let i = 0;
+    while (i < entries.length) {
+        if (markers.has(i)) { i++; continue; }
+        let prefix = stem(entries[i].name), j = i;
+        while (j + 1 < entries.length && !markers.has(j + 1)) {
+            const next = common(prefix, stem(entries[j + 1].name)).replace(/[\s\d\p{P}]+$/u, '');
+            if ([...next].length < 2) break;
+            prefix = next; j++;
+        }
+        const name = prefix.replace(/(.)[\[(（【「《〔][^\])）】」》〕]*$/u, '$1').replace(/^[\s\p{P}\p{S}]+|[\s\p{P}\p{S}]+$/gu, '');
+        if (j - i + 1 >= 3 && [...name].length >= 2) out.push({ start: i, end: j, name, rank: 0 });
+        i = j + 1;
+    }
+    return out;
+}
+
+// rank: manual 3 > paired 2 > one-sided heading 1 > name series 0.
+export function removeCrossed(pairs) {
     pairs.sort((a, b) => a.start - b.start || b.end - a.end);
-    const crossed = new Set();
+    const dropped = new Set();
     for (const [index, section] of pairs.entries()) {
         for (let i = index + 1; i < pairs.length && pairs[i].start <= section.end; i++) {
             const other = pairs[i];
-            const cross = other.end > section.end || (other.start === section.start && other.end === section.end);
-            if (!cross) continue;
-            // Manual groups win over recognized ones when they collide.
-            if (keep.has(section) && !keep.has(other)) crossed.add(other);
-            else if (keep.has(other) && !keep.has(section)) crossed.add(section);
-            else if (other.start === section.start && other.end === section.end) crossed.add(other);
-            else { crossed.add(section); crossed.add(other); }
+            const same = other.start === section.start && other.end === section.end;
+            if (!same && other.end <= section.end) continue;
+            const a = section.rank ?? 2, b = other.rank ?? 2;
+            if (a > b) dropped.add(other); else if (b > a) dropped.add(section);
+            else if (same) dropped.add(other); else { dropped.add(section); dropped.add(other); }
         }
     }
-    return pairs.filter(section => !crossed.has(section));
+    return pairs.filter(section => !dropped.has(section)).map(({ rank, ...rest }) => rest.manual ? { ...rest } : rest);
 }

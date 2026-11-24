@@ -8,14 +8,12 @@ export const PRESET_GROUPS_SCHEMA = 5;
 export function resolveSections(entries, manual = []) {
     const index = new Map(entries.map((entry, i) => [entry.identifier, i]));
     const auto = findPresetSections(entries);
-    const keep = new Set();
     for (const group of manual) {
         const a = index.get(group.start), b = index.get(group.end);
         if (a === undefined || b === undefined) continue;
-        const section = { start: Math.min(a, b), end: Math.max(a, b), name: group.name || '新分组', manual: true };
-        keep.add(section); auto.push(section);
+        auto.push({ start: Math.min(a, b), end: Math.max(a, b), name: group.name || '新分组', manual: true, rank: 3 });
     }
-    return removeCrossed(auto, keep);
+    return removeCrossed(auto);
 }
 
 export function folderLayout(entries, manual = [], names = {}) {

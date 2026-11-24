@@ -158,6 +158,21 @@ export class PresetEntrySelection {
             globalThis.toastr?.error?.('保存失败，选择已保留，请重试', '预设批量编辑');
         } finally { this.host.busy = false; if (this.host.started) this.render(); }
     }
+    enter(context = this.host.context()) {
+        if (!context) return false;
+        if (!this.mode || !this.current()) this.selected.clear();
+        this.mode = true; this.context = context; this.scopeKey = this.scope(); return true;
+    }
+    startGroup(context, id) {
+        if (this.mode && this.selected.size) {
+            if (id) this.selected.add(id);
+            this.host.groups.run(() => this.host.groups.createGroup(new Set(this.selected)).then(done => { if (done) this.exit(); }));
+            return;
+        }
+        if (!this.enter(context)) return;
+        this.selected.add(id); this.anchor = id; this.render();
+        globalThis.toastr?.info?.('再点选分组的最后一个条目，然后点「建为分组」', '新建分组');
+    }
     exit() {
         this.cancelHold(); this.mode = false; this.context = null; this.selected.clear(); this.anchor = null;
         this.render();

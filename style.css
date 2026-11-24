@@ -1267,7 +1267,7 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
 }
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header > button.cla-preset-fold-icon:hover { opacity: 1; }
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header > button.cla-preset-fold-icon[hidden] { display: none !important; }
-#completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header > button.fa-toggle-on { opacity: 1; color: var(--SmartThemeQuoteColor, inherit) !important; }
+#completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header > button.cla-on { opacity: 1; color: var(--SmartThemeQuoteColor, inherit) !important; }
 @media (pointer: coarse) {
     #completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header > button.cla-preset-fold-icon { flex-basis: 38px !important; width: 38px !important; }
 }

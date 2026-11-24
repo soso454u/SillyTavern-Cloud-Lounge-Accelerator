@@ -217,6 +217,12 @@ export class PresetEntryGroups {
                 if (currentScope()) this.setFold(this.context(), [...this.folderNodes.keys()], folded);
             };
             tools.append(this.button('全部展开', () => toggleAll(false)), this.button('全部折叠', () => toggleAll(true)));
+            this.selectButton = this.button('多选 / 新建分组', () => {
+                if (!currentScope()) return;
+                const selection = this.host.selection;
+                if (selection.mode) selection.exit(); else { selection.enter(); selection.render(); globalThis.toastr?.info?.('点选条目，选好首尾后点「建为分组」', '多选'); }
+            });
+            views.append(this.selectButton);
             settings.append(tools);
             this.feedback = this.node('small', '', 'cla-preset-group-feedback'); this.feedback.setAttribute('role', 'status');
             views.append(settings); this.root.append(bar, views, this.feedback);
@@ -327,7 +333,7 @@ export class PresetEntryGroups {
             record.button.setAttribute('aria-expanded', String(!record.folded));
             record.arrow.textContent = record.folded ? '▸' : '▾';
             const on = record.enabled > 0;
-            record.power.classList.toggle('fa-toggle-on', on); record.power.classList.toggle('fa-toggle-off', !on);
+            record.power.glyph.classList.toggle('fa-toggle-on', on); record.power.glyph.classList.toggle('fa-toggle-off', !on); record.power.classList.toggle('cla-on', on);
             record.power.title = on ? `整组禁用（已启用 ${record.enabled}/${record.ids?.length || 0}）` : '整组启用';
             record.power.setAttribute('aria-label', record.power.title);
             record.subFold.hidden = !record.subs?.length;
@@ -346,7 +352,7 @@ export class PresetEntryGroups {
             const arrow = this.node('span', '', 'cla-preset-folder-arrow'); arrow.setAttribute('aria-hidden', 'true');
             const name = this.node('span', '', 'cla-preset-fold-name'), count = this.node('small', '', 'cla-preset-fold-count');
             button.append(arrow, name, count);
-            const icon = (cls, title, action) => { const b = this.button('', action, `cla-preset-fold-icon fa-solid ${cls}`); b.title = title; b.setAttribute('aria-label', title); return b; };
+            const icon = (cls, title, action) => { const b = this.button('', action, 'cla-preset-fold-icon'); b.append(b.glyph = this.node('i', '', `fa-solid ${cls}`)); b.glyph.setAttribute('aria-hidden', 'true'); b.title = title; b.setAttribute('aria-label', title); return b; };
             const rename = icon('fa-pen', '改名', () => this.renameFolder(record.folder));
             const subFold = icon('fa-angles-up', '折叠/展开全部子分组', () => {
                 const subs = record.subs || []; const allFolded = subs.every(id => this.folderNodes.get(id)?.folded);
