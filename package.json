@@ -1,6 +1,6 @@
 {
   "name": "sillytavern-cloud-lounge-accelerator",
-  "version": "2.1.76",
+  "version": "2.1.77",
   "description": "A safe page, chat, and interaction accelerator for cloud-hosted SillyTavern instances.",
   "author": "soso454u",
   "type": "module",

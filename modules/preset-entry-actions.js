@@ -1,4 +1,5 @@
 import { PresetEntryGroups } from './preset-entry-groups.js';
+import { PresetEntrySelection } from './preset-entry-selection.js';
 
 const ROW = '[data-pm-identifier]';
 const OWN = '[data-cla-preset-action]';
@@ -16,11 +17,12 @@ export class PresetEntryActions {
             // Passing no header preserves this safe DOM node and its text.
             return Popup.show.confirm(null, content);
         } };
-    }, isGenerating = () => false, extensionSettings = {}, saveSettings = () => {} } = {}) {
+    }, isGenerating = () => false, extensionSettings = {}, saveSettings = () => {}, eventSource, eventTypes } = {}) {
         this.document = documentRef;
         this.loadApi = loadApi;
         this.isGenerating = isGenerating;
-        this.groups = new PresetEntryGroups({ host: this, extensionSettings, saveSettings });
+        this.groups = new PresetEntryGroups({ host: this, extensionSettings, saveSettings, eventSource, eventTypes });
+        this.selection = new PresetEntrySelection({ host: this });
         this.started = false;
         this.generation = 0;
         this.nodes = new Set();
@@ -29,6 +31,11 @@ export class PresetEntryActions {
         this.onClick = this.onClick.bind(this);
         this.onKey = this.onKey.bind(this);
         this.closeMenu = this.closeMenu.bind(this);
+        this.onMenuScroll = event => {
+            if (this.menu?.contains(event.target)) return;
+            const rect = this.menuButton?.getBoundingClientRect();
+            if (!rect || !this.menuAnchorRect || Math.abs(rect.top - this.menuAnchorRect.top) > 1 || Math.abs(rect.left - this.menuAnchorRect.left) > 1) this.closeMenu();
+        };
     }
 
     async start() {
@@ -57,8 +64,10 @@ export class PresetEntryActions {
             manager.renderPromptManagerListItems = wrapped;
             this.wrappedRender = wrapped;
             this.started = true;
+            this.selection.start();
             this.document.addEventListener('click', this.onClick, true);
             this.document.addEventListener('keydown', this.onKey, true);
+            this.groups.start();
             this.decorate();
             return true;
         } catch (error) {
@@ -97,7 +106,7 @@ export class PresetEntryActions {
         this.closeMenu();
         for (const node of this.nodes) if (!node.isConnected) this.nodes.delete(node);
         const list = this.manager?.listElement;
-        if (!list?.isConnected) { this.groups.clear(); return; }
+        if (!list?.isConnected) { this.groups.clear(); this.selection.render(); return; }
         this.groups.render();
         const context = this.context();
         for (const row of list.querySelectorAll(ROW)) {
@@ -133,6 +142,11 @@ export class PresetEntryActions {
         const menu = this.document.createElement('div');
         menu.className = 'cla-preset-entry-menu';
         menu.setAttribute('role', 'menu');
+        if (!grouping) {
+            const position = this.document.createElement('small');
+            position.textContent = `原始位置：第 ${context.order.findIndex(item => item.identifier === id) + 1} 项`;
+            menu.append(position);
+        }
         const groupContext = this.groups.context();
         if (grouping) this.groups.assignmentMenu(menu, groupContext, id);
         const actions = grouping ? [] : [['before', '在上方新建'], ['after', '在下方新建'], ['copy', '复制到下方'],
@@ -150,13 +164,18 @@ export class PresetEntryActions {
             }
             menu.append(item);
         }
+        this.showMenu(menu, button);
+    }
+
+    showMenu(menu, button) {
         this.document.body.append(menu);
         this.menu = menu;
         this.menuButton = button;
-        this.document.addEventListener('scroll', this.closeMenu, true);
+        this.document.addEventListener('scroll', this.onMenuScroll, true);
         this.document.defaultView?.addEventListener('resize', this.closeMenu);
         button.setAttribute('aria-expanded', 'true');
         const rect = button.getBoundingClientRect();
+        this.menuAnchorRect = { top: rect.top, left: rect.left };
         const viewport = this.document.documentElement;
         const width = menu.offsetWidth;
         const height = menu.offsetHeight;
@@ -167,7 +186,7 @@ export class PresetEntryActions {
 
     closeMenu() {
         if (!this.menu) return;
-        this.document.removeEventListener('scroll', this.closeMenu, true);
+        this.document.removeEventListener('scroll', this.onMenuScroll, true);
         this.document.defaultView?.removeEventListener('resize', this.closeMenu);
         this.menuButton?.setAttribute('aria-expanded', 'false');
         this.menu?.remove();
@@ -351,7 +370,8 @@ export class PresetEntryActions {
             this.manager.clearEditForm();
         }
         this.pending = null;
-        this.groups.clear();
+        this.selection.stop();
+        this.groups.stop();
         for (const node of this.nodes) node.remove();
         this.nodes.clear();
     }

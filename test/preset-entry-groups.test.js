@@ -1,113 +1,137 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { identifyPresetGroup, classifyPresetEntries, parsePresetSectionMarker, normalizePresetGroup, PresetEntryGroups, PRESET_GROUPS_KEY, readPresetGroups } from '../modules/preset-entry-groups.js';
+import { readFile } from 'node:fs/promises';
+import { emptyFolders, normalizeFolderState, assignedFolder, folderPath, folderTree, createFolder, renameFolder, moveFolder, deleteFolder, assignEntries, importFolderMetadata, promptFingerprint } from '../modules/preset-folder-model.js';
+import { semanticSuggestion, folderSuggestions } from '../modules/preset-folder-suggestions.js';
+import { findPresetSections } from '../modules/preset-section-boundaries.js';
+import { PresetEntryGroups, PRESET_GROUPS_KEY } from '../modules/preset-entry-groups.js';
 
-test('preset names recognize brackets, categories and numbered packs without reading content', () => {
-    for (const [name, group] of [
-        ['【文风】描写', '文风'], ['[规则]约束', '规则'], ['「世界观」背景', '世界观'],
-        ['身份：设定', '身份'], ['文风·描写', '文风'], ['00b | 世界观 | 背景', '世界观'],
-        ['普通条目', '未分类'], ['[ ]空前缀', '未分类'],
-    ]) assert.equal(identifyPresetGroup({ identifier: 'a', name, get content() { throw Error('body accessed'); } }), group);
-    assert.equal(identifyPresetGroup({ identifier: 'a', name: '[规则]约束' }, { autoPrefix: false }), '未分类');
+const prompts = () => [{ identifier: 'later', name: '[看似分类]示例', role: 'system', content: 'ordinary rule', injection_position: 1, injection_depth: 4, injection_order: 25 },
+    { identifier: 'first', name: 'plain', content: 'retain exact body', marker: false }, { identifier: 'marker', name: 'history', marker: true, system_prompt: true }];
+const ordered = items => [items[1], items[2], items[0]];
+let sequence = 0; const uuid = () => `folder-${++sequence}`;
+
+test('folders have stable IDs, arbitrary nesting, safe parent changes and deletion without native mutation', () => {
+    const native = { prompts: prompts(), prompt_order: [{ character_id: 1, order: [{ identifier: 'first', enabled: true }, { identifier: 'marker', enabled: true }, { identifier: 'later', enabled: false }] }] };
+    const before = JSON.stringify(native), state = emptyFolders();
+    const parent = createFolder(state, '资料', null, uuid), child = createFolder(state, '风格', parent, uuid), deep = createFolder(state, '成人文风', child, uuid);
+    assignEntries(state, native.prompts, ['first', 'marker'], deep); renameFolder(state, child, '文风');
+    assert.equal(folderPath(state, deep), '资料 / 文风 / 成人文风');
+    assert.throws(() => moveFolder(state, parent, deep), /不能移入/);
+    deleteFolder(state, child); assert.equal(state.folders.find(folder => folder.id === deep).parentId, parent);
+    assert.equal(assignedFolder(state, 'first'), deep); deleteFolder(state, deep);
+    assert.equal(assignedFolder(state, 'first'), parent); deleteFolder(state, parent);
+    assert.equal(assignedFolder(state, 'first'), null); assert.equal(state.folders.length, 0);
+    assert.equal(JSON.stringify(native), before);
 });
 
-test('manual assignment (including ungrouped) wins; custom rules use first match and ignore case', () => {
-    const prompt = { identifier: '__proto__', name: '[规则]STYLE 描写' };
-    const state = { rules: [{ mode: 'contains', value: 'style', group: '文风' }, { mode: 'prefix', value: '[规则]', group: '规则' }] };
-    assert.equal(identifyPresetGroup(prompt, state), '文风');
-    state.assignments = JSON.parse('{"__proto__":"手动"}');
-    assert.equal(identifyPresetGroup(prompt, state), '手动');
-    state.assignments = JSON.parse('{"__proto__":"未分类"}');
-    assert.equal(identifyPresetGroup(prompt, state), '未分类');
-    assert.equal(identifyPresetGroup({ identifier: 'x', name: 'STYLES' }, { rules: [{ mode: 'prefix', value: 'style', group: '文风' }] }), '文风');
+test('initial display order comes from prompt_order, not prompts storage; explicit folder order remains separate', () => {
+    const items = prompts(), state = emptyFolders();
+    const later = createFolder(state, '后段', null, uuid), first = createFolder(state, '前段', null, uuid);
+    assignEntries(state, items, ['first'], first); assignEntries(state, items, ['later'], later);
+    assert.deepEqual(folderTree(state, ordered(items)).map(folder => folder.id), [first, later, null]);
+    state.order['@root'] = [later, first];
+    assert.equal(folderTree(state, ordered(items))[0].id, later);
+    assert.deepEqual(ordered(items).map(item => item.identifier), ['first', 'marker', 'later']);
 });
 
-test('paired wrapper headings group intervening entries in native order, including disabled headings', () => {
-    const entries = ['====↓[文风]', '自适应文风', '晋江', '窄门', '文学灵气', '====↑[文风]', '普通条目']
-        .map((name, index) => ({ identifier: String(index), name, enabled: false }));
-    const before = JSON.stringify(entries);
-    assert.deepEqual([...classifyPresetEntries(entries).values()], ['文风', '文风', '文风', '文风', '文风', '文风', '未分类']);
-    assert.equal(classifyPresetEntries(entries, { autoSections: false }).get('1'), '未分类');
-    assert.equal(classifyPresetEntries(entries, { autoPrefix: false }).get('1'), '文风');
-    const overrides = { assignments: { 1: '我的分类', 2: '未分类' }, rules: [{ mode: 'contains', value: '窄门', group: '作品' }] };
-    assert.deepEqual([...classifyPresetEntries(entries, overrides).values()], ['文风', '我的分类', '未分类', '作品', '文风', '文风', '未分类']);
-    assert.equal(JSON.stringify(entries), before);
-    assert.deepEqual(parsePresetSectionMarker('＝＝⬇【文风开始】＝＝'), { direction: 'start', group: '文风' });
-    assert.deepEqual(parsePresetSectionMarker('──⬆【文风结束】──'), { direction: 'end', group: '文风' });
-    assert.equal(parsePresetSectionMarker('正文里提到 ↓[文风]'), null);
+test('legacy migration retains only explicit references, archives old metadata, and never guesses from a name', () => {
+    const old = { groups: ['自建'], assignments: { first: '自建', missing: '过期' }, autoPrefix: true, rules: [{ group: '猜测', value: 'plain' }] };
+    const state = normalizeFolderState(old, prompts(), 'scope');
+    assert.equal(state.schema, 4); assert.equal(state.folders.length, 1);
+    assert.equal(assignedFolder(state, 'later'), null); assert.equal(state.assignments.missing, undefined);
+    assert.ok(assignedFolder(state, 'first')); assert.deepEqual(state.legacyBackup, old);
+    assert.deepEqual(normalizeFolderState(state, prompts()), state);
 });
 
-test('nested wrappers select the innermost group; unpaired, mismatched and crossing wrappers cannot swallow later entries', () => {
-    const classify = names => [...classifyPresetEntries(names.map((name, index) => ({ identifier: String(index), name }))).values()];
-    assert.deepEqual(classify(['↓[规则]', '外部', '↓[文风]', '内部', '↑[文风]', '外部2', '↑[规则]', '组外']),
-        ['规则', '规则', '文风', '文风', '文风', '规则', '规则', '未分类']);
-    for (const names of [['↓[规则]', '普通', '组外'], ['↓[规则]', '普通', '↑[文风]', '组外'],
-        ['↓[规则]', '↓[文风]', '普通', '↑[规则]', '↑[文风]', '组外']]) {
-        assert.ok(classify(names).every(group => group === '未分类'));
-    }
+test('metadata round-trip checks identifiers and content signatures; imports cannot rebind changed content', () => {
+    const items = prompts(), state = emptyFolders(), folder = createFolder(state, '保留', null, uuid);
+    assignEntries(state, items, ['first', 'later'], folder);
+    const exported = JSON.parse(JSON.stringify(state));
+    assert.equal(importFolderMetadata(exported, items).skipped, 0);
+    const incoming = structuredClone(items); incoming[1].content = 'a different preset with the same identifier';
+    const result = importFolderMetadata(exported, incoming);
+    assert.equal(result.skipped, 1); assert.equal(assignedFolder(result.state, 'first'), null); assert.equal(assignedFolder(result.state, 'later'), folder);
+    assert.equal(promptFingerprint(items[1]), exported.fingerprints.first);
+    assert.throws(() => importFolderMetadata({ folders: [] }, items), /分类文件/);
 });
 
-function fixture() {
-    const extensionSettings = {}; let name = 'A', saves = 0;
-    const prompts = [{ identifier: 'a', name: '[规则]A' }, { identifier: 'b', name: '普通条目' }];
-    const order = [{ identifier: 'a', enabled: true }, { identifier: 'b', enabled: false }];
-    let native = { prompts, order, characterId: '1' };
-    const host = { context: () => native, current: context => context.prompts === native.prompts && context.order === native.order && context.characterId === native.characterId };
-    const groups = new PresetEntryGroups({ host, extensionSettings, getPresetName: () => name, saveSettings: () => saves++ });
-    groups.render = () => {};
-    return { groups, extensionSettings, prompts, order, saves: () => saves, change: (preset, character = '1') => { name = preset; native = { ...native, characterId: character }; } };
-}
-
-test('create, batch assign, rename, delete and resume auto save metadata only, isolated by preset and character', () => {
-    const f = fixture(), g = f.groups, context = g.context();
-    const before = JSON.stringify({ prompts: f.prompts, order: f.order });
-    g.create(context, '自定义'); g.assign(context, ['a', 'b'], '自定义');
-    assert.equal(f.saves(), 2);
-    g.rename(context, '自定义', '我的组');
-    assert.deepEqual(g.state().assignments, { a: '我的组', b: '我的组' });
-    g.remove(context, '我的组');
-    assert.deepEqual(g.state().assignments, { a: '未分类', b: '未分类' });
-    g.assign(context, ['a'], '@auto');
-    assert.equal(identifyPresetGroup(f.prompts[0], g.state()), '规则');
-    f.change('B'); assert.deepEqual(g.state().assignments, {});
-    assert.throws(() => g.create(context, '过期操作'), /切换/);
-    f.change('A', '2'); assert.deepEqual(g.state().assignments, {});
-    f.change('A'); assert.equal(g.state().assignments.b, '未分类');
-    assert.equal(JSON.stringify({ prompts: f.prompts, order: f.order }), before);
-    assert.ok(f.extensionSettings[PRESET_GROUPS_KEY]);
-    assert.deepEqual(readPresetGroups(JSON.parse(JSON.stringify(f.extensionSettings)), context.key), g.state());
+test('user decisions, including unclassified, override reviewed suggestions; mixed adult style is a style subfolder suggestion', () => {
+    const state = emptyFolders(), items = prompts(), folder = createFolder(state, '用户归属', null, uuid), other = createFolder(state, '建议', null, uuid);
+    assignEntries(state, items, ['first'], folder); assignEntries(state, items, ['later'], null);
+    assignEntries(state, items, ['first', 'later'], other, 'accepted');
+    assert.equal(assignedFolder(state, 'first'), folder); assert.equal(assignedFolder(state, 'later'), null);
+    assert.equal(semanticSuggestion({ name: '[NSFW]成人', content: 'plain unknown words' }), null);
+    assert.equal(semanticSuggestion({ content: 'Literary style and prose sentence rhythm may mention desire as an aesthetic.' }).path[0], '文风');
+    const mixed = semanticSuggestion({ content: 'Literary style, prose sentence rhythm, sexual scenes and sexual anatomy with foreplay.' });
+    assert.deepEqual(mixed.path, ['文风', '成人文风']); assert.equal(mixed.confidence, '混合内容');
+    assert.equal(semanticSuggestion({ content: 'Unstructured ambiguous instruction' }), null);
 });
 
-test('reject duplicate/invalid names and missing IDs; rename/delete cover rules and absent library entries', () => {
-    const f = fixture(), g = f.groups, context = g.context();
-    for (const name of ['', '未分类', '@auto', 'a\nb', 'a'.repeat(61)]) assert.throws(() => normalizePresetGroup(name));
-    assert.throws(() => g.create(context, '规则'), /同名/);
-    assert.throws(() => g.assign(context, ['missing'], '新组'), /不在当前列表/);
-    g.commit(context, { ...g.state(), groups: ['文风'], assignments: { absent: '文风' }, rules: [{ mode: 'contains', value: '普通', group: '文风' }] });
-    g.rename(context, '文风', '描写');
-    assert.equal(g.state().rules[0].group, '描写'); assert.equal(g.state().assignments.absent, '描写');
-    g.remove(context, '描写');
-    assert.deepEqual(g.state().rules, []); assert.equal(g.state().assignments.absent, '未分类');
-    g.saveSettings = () => { throw Error('save failed'); };
-    const before = JSON.stringify(f.extensionSettings);
-    assert.throws(() => g.create(context, '保存失败'), /save failed/);
-    assert.equal(JSON.stringify(f.extensionSettings), before);
+test('boundaries are optional preview context, handle repeated arrows and split brackets without altering data', () => {
+    const entries = ['====↓[任意名称]↓====', 'ordinary', '====↑[任意名称]↑====', '『 Outer', 'nested', 'Outer 』'].map((name, i) => ({ identifier: String(i), name, content: '' }));
+    const before = JSON.stringify(entries), state = emptyFolders();
+    assert.equal(findPresetSections(entries).length, 2);
+    assert.equal(folderSuggestions(entries, state, 'boundaries').length, 6);
+    assert.equal(folderSuggestions(entries, state, 'content').length, 0);
+    assert.deepEqual(state.assignments, {}); assert.equal(JSON.stringify(entries), before);
+    assert.equal(findPresetSections([{ name: '====↓[缺少结束]↓====' }, { name: 'ordinary' }]).length, 0);
 });
 
-test('group order and fold state persist separately from native execution order; stale dragging cannot write', () => {
-    const f = fixture(), g = f.groups, context = g.context();
-    const before = JSON.stringify(f.order);
-    g.create(context, '我的组');
-    assert.equal(g.collapsedNames(context).has('规则'), true);
-    assert.equal(g.collapsedNames(context).has('未分类'), false);
-    g.moveGroup(context, '我的组', '规则', false);
-    assert.equal(g.orderedNames(context)[0], '我的组');
-    g.commit(context, { ...g.state(), collapsed: ['规则'] });
-    g.rename(context, '规则', '要求');
-    assert.deepEqual(g.state().collapsed, ['要求']);
-    assert.ok(g.state().groupOrder.includes('要求'));
-    assert.equal(JSON.stringify(f.order), before);
-    f.change('B'); assert.deepEqual(g.state().groupOrder, []);
-    assert.throws(() => g.moveGroup(context, '我的组', '要求', true), /切换/);
-    f.change('A'); assert.equal(g.orderedNames(g.context())[0], '我的组');
+test('scope isolation and stale UI guards protect the native preset and newer settings', () => {
+    const items = prompts(), settings = {}, context = { prompts: items, order: ordered(items).map(item => ({ identifier: item.identifier, enabled: true })), characterId: '1' };
+    let preset = 'A', saves = 0;
+    const host = { context: () => context, current: value => value?.prompts === context.prompts && value?.order === context.order };
+    const groups = new PresetEntryGroups({ host, extensionSettings: settings, saveSettings: () => saves++, getPresetName: () => preset }); groups.render = () => {};
+    const snapshot = JSON.stringify(context), first = groups.context();
+    const folder = groups.create(first, '文件夹'); groups.assign(first, ['first'], folder);
+    assert.equal(saves, 2); preset = 'B'; assert.equal(groups.state().folders.length, 0);
+    assert.throws(() => groups.create(first, '过期'), /切换/); preset = 'A'; assert.equal(groups.state().folders.length, 1);
+    const before = JSON.stringify(settings); groups.saveSettings = () => { throw Error('offline'); };
+    assert.throws(() => groups.create(groups.context(), '失败'), /offline/); assert.equal(JSON.stringify(settings), before);
+    assert.equal(JSON.stringify(context), snapshot); assert.ok(settings[PRESET_GROUPS_KEY]);
+});
+
+test('identifier dictionaries and imported parent cycles are handled as data', () => {
+    const items = [{ identifier: '__proto__', content: 'original' }], state = emptyFolders(), id = createFolder(state, '安全', null, uuid);
+    assignEntries(state, items, ['__proto__'], id);
+    assert.equal(Object.hasOwn(state.assignments, '__proto__'), true);
+    assert.equal(assignedFolder(normalizeFolderState(JSON.parse(JSON.stringify(state)), items), '__proto__'), id);
+    const cycle = normalizeFolderState({ schema: 4, folders: [{ id: 'a', name: 'A', parentId: 'b' }, { id: 'b', name: 'B', parentId: 'a' }] });
+    assert.ok(cycle.folders.some(folder => folder.parentId === null));
+});
+
+test('same-name native imports invalidate changed content references without mutating native data', () => {
+    const items = prompts(), context = { prompts: items, order: ordered(items).map(item => ({ identifier: item.identifier })), characterId: '1' }, settings = {}, listeners = new Map();
+    const host = { context: () => context, current: value => value?.prompts === items && value?.order === context.order };
+    const groups = new PresetEntryGroups({ host, extensionSettings: settings, getPresetName: () => 'A', saveSettings() {},
+        eventSource: { on: (type, handler) => listeners.set(type, handler), removeListener: type => listeners.delete(type) }, eventTypes: { OAI_PRESET_IMPORT_READY: 'import' } });
+    groups.render = () => {}; groups.start(); const folder = groups.create(groups.context(), '目录'); groups.assign(groups.context(), ['first'], folder);
+    const incoming = structuredClone(items); incoming[1].content = 'Different import'; const snapshot = JSON.stringify(context);
+    listeners.get('import')({ presetName: 'A', data: { prompts: incoming } });
+    assert.equal(assignedFolder(groups.state(), 'first'), null); assert.equal(JSON.stringify(context), snapshot);
+    groups.stop(); assert.equal(listeners.size, 0);
+});
+
+test('folder dragging saves only stable folder IDs and preserves unrelated parent order', () => {
+    const items = prompts(), context = { prompts: items, order: ordered(items).map(prompt => ({ identifier: prompt.identifier, enabled: true })), characterId: '1' }, settings = {};
+    const host = { context: () => context, current: value => value?.order === context.order && value?.prompts === items };
+    const groups = new PresetEntryGroups({ host, extensionSettings: settings, getPresetName: () => 'A' }); groups.render = () => {};
+    const snapshot = JSON.stringify(context), a = groups.create(groups.context(), 'A'), b = groups.create(groups.context(), 'B'), child = groups.create(groups.context(), '子层', a);
+    groups.moveGroup(groups.context(), b, a, false);
+    assert.deepEqual(groups.state().order['@root'], [b, a]);
+    assert.throws(() => groups.moveGroup(groups.context(), child, b, false), /同一级/);
+    assert.equal(JSON.stringify(context), snapshot);
+});
+
+test('real preset compatibility: classify references, fold and delete folders while every native byte remains unchanged', { skip: !process.env.CLA_PRESET_FIXTURE }, async () => {
+    const data = JSON.parse(await readFile(process.env.CLA_PRESET_FIXTURE, 'utf8')), before = JSON.stringify(data);
+    const byId = new Map(data.prompts.map(prompt => [prompt.identifier, prompt])), holder = data.prompt_order.find(group => group.order?.length), entries = holder.order.map(item => byId.get(item.identifier)).filter(Boolean);
+    const state = emptyFolders(), parent = createFolder(state, '测试目录', null, uuid), child = createFolder(state, '测试子目录', parent, uuid);
+    assignEntries(state, data.prompts, entries.slice(0, 8).map(prompt => prompt.identifier), child); state.collapsed.push(parent);
+    assert.equal(folderTree(state, entries).flatMap(folder => folder.items).length, entries.length - 8);
+    assert.ok(folderSuggestions(entries, state, 'boundaries').every(item => !Object.hasOwn(state.assignments, item.id)));
+    deleteFolder(state, child); deleteFolder(state, parent);
+    assert.equal(JSON.stringify(data), before);
+    assert.deepEqual(entries.map(entry => entry.identifier), holder.order.filter(item => byId.has(item.identifier)).map(item => item.identifier));
 });

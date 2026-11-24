@@ -28,7 +28,7 @@ export function createDeferredRuntime({
     });
     const regexUiAdapter = new RegexUiAdapter({ onSaved: () => regexRefresh.noteChange(), extensionSettings });
     const miniFeatures = new MiniFeatures({ regexUiAdapter, factories: {
-        presetEntryActions: () => new PresetEntryActions({ isGenerating, extensionSettings, saveSettings: () => scriptApi.saveSettingsDebounced() }),
+        presetEntryActions: () => new PresetEntryActions({ isGenerating, extensionSettings, eventSource, eventTypes, saveSettings: () => scriptApi.saveSettingsDebounced() }),
         presetTokenPreview: () => new PresetTokenPreview({ sentOptions: { eventSource, eventTypes, getCurrentChatId, getRequestHeaders } }),
         chatHistoryBatch: () => new ChatHistoryBatchActions({ scriptApi }),
         secretKeyBatch: () => new SecretKeyBatchActions(),
