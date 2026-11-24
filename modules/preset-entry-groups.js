@@ -281,7 +281,6 @@ export class PresetEntryGroups {
                             }
                             this.rowStyles.delete(row);
                         }
-                        if (ancestors.length) this.rowStyle(row, 'margin-left', `${Math.min(ancestors.length, 4) * 14}px`);
                         if (!visible(node.entry, groupNames)) this.rowStyle(row, 'display', 'none');
                         else matches = true;
                         continue;
@@ -289,7 +288,6 @@ export class PresetEntryGroups {
                     alive.add(node.id);
                     const record = this.drawFolder(node);
                     record.ancestors = ancestors;
-                    record.element.style.setProperty('--cla-fold-depth', String(Math.min(ancestors.length, 4)));
                     record.folded = query ? (this.searchFolders.get(node.id) ?? false) : !expanded.has(node.id);
                     const firstEntry = node.id && rows.get(JSON.parse(node.id)[0]);
                     if (firstEntry && record.element.nextElementSibling !== firstEntry) list.insertBefore(record.element, firstEntry);

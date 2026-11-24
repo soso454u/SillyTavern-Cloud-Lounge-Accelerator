@@ -1271,8 +1271,7 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
     #completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header > button.cla-preset-fold-icon { flex-basis: 38px !important; width: 38px !important; }
 }
 
-/* Folder state: closed/open folder icon, highlighted open header, indented children */
-#completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder { margin-left: calc(var(--cla-fold-depth, 0) * 14px) !important; width: auto; }
+/* Folder state: closed/open folder icon, highlighted open header */
 .cla-preset-folder-arrow { flex: 0 0 18px; opacity: 0.85; text-align: center; }
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder:not(.collapsed) > .cla-preset-fold-header {
     border-color: var(--SmartThemeQuoteColor, currentColor);
