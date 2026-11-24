@@ -1254,3 +1254,20 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
     transition: none !important;
     touch-action: manipulation;
 }
+
+/* Folder header icon buttons: rename, fold children, group toggle, delete manual group */
+#completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header > button.cla-preset-fold-icon {
+    display: inline-flex !important;
+    flex: 0 0 30px !important;
+    width: 30px !important;
+    justify-content: center;
+    padding: 0 !important;
+    opacity: 0.65;
+    font-size: 0.95em;
+}
+#completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header > button.cla-preset-fold-icon:hover { opacity: 1; }
+#completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header > button.cla-preset-fold-icon[hidden] { display: none !important; }
+#completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header > button.fa-toggle-on { opacity: 1; color: var(--SmartThemeQuoteColor, inherit) !important; }
+@media (pointer: coarse) {
+    #completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header > button.cla-preset-fold-icon { flex-basis: 38px !important; width: 38px !important; }
+}

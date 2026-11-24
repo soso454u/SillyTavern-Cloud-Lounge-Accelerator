@@ -1,17 +1,37 @@
-import { findPresetSections } from './preset-section-boundaries.js';
+import { findPresetSections, removeCrossed } from './preset-section-boundaries.js';
 
 export const PRESET_GROUPS_KEY = 'cloud_lounge_accelerator_preset_groups';
 export const PRESET_GROUPS_SCHEMA = 5;
 
-export function folderLayout(entries) {
+// manual: [{ start: identifier, end: identifier, name }]. Manual groups are
+// metadata only; they never reorder or edit native prompt rows.
+export function resolveSections(entries, manual = []) {
+    const index = new Map(entries.map((entry, i) => [entry.identifier, i]));
+    const auto = findPresetSections(entries);
+    const keep = new Set();
+    for (const group of manual) {
+        const a = index.get(group.start), b = index.get(group.end);
+        if (a === undefined || b === undefined) continue;
+        const section = { start: Math.min(a, b), end: Math.max(a, b), name: group.name || '新分组', manual: true };
+        keep.add(section); auto.push(section);
+    }
+    return removeCrossed(auto, keep);
+}
+
+export function folderLayout(entries, manual = [], names = {}) {
     const roots = [];
     const open = [];
-    const starts = new Map(findPresetSections(entries).map(section => [section.start, section]));
+    const starts = new Map();
+    for (const section of resolveSections(entries, manual)) {
+        if (!starts.has(section.start)) starts.set(section.start, []);
+        starts.get(section.start).push(section);
+    }
+    for (const list of starts.values()) list.sort((a, b) => b.end - a.end);
     for (const [index, entry] of entries.entries()) {
-        const section = starts.get(index);
-        if (section) {
+        for (const section of starts.get(index) || []) {
             const id = JSON.stringify([entry.identifier, entries[section.end].identifier]);
-            const folder = { id, name: section.name, total: section.end - index + 1, children: [] };
+            const original = section.name;
+            const folder = { id, name: names[id] || original, original, manual: !!section.manual, total: section.end - index + 1, children: [] };
             (open.at(-1)?.folder.children ?? roots).push(folder);
             open.push({ end: section.end, folder });
         }

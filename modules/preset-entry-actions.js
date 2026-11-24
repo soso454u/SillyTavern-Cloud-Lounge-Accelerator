@@ -16,7 +16,7 @@ export class PresetEntryActions {
             // A header makes the native helper interpolate text as HTML.
             // Passing no header preserves this safe DOM node and its text.
             return Popup.show.confirm(null, content);
-        } };
+        }, prompt: (title, value) => Popup.show.input(null, title, value) };
     }, isGenerating = () => false, extensionSettings = {}, saveSettings = () => {} } = {}) {
         this.document = documentRef;
         this.loadApi = loadApi;
@@ -52,6 +52,7 @@ export class PresetEntryActions {
             this.manager = manager;
             this.groups.getPresetName = api.getPresetName || (() => '');
             this.confirm = api.confirm;
+            this.prompt = api.prompt;
             this.originalRender = manager.renderPromptManagerListItems;
             const originalRender = this.originalRender;
             const adapter = this;

@@ -23,6 +23,67 @@ export class PresetEntryGroups {
         const byId = new Map(context.prompts.map(prompt => [prompt.identifier, prompt]));
         return context.order.map(item => byId.get(item.identifier)).filter(Boolean);
     }
+    presetKey(context) { return JSON.stringify(['openai', context.presetName]); }
+    meta(context) {
+        const saved = this.extensionSettings[PRESET_GROUPS_KEY];
+        const item = saved?.schema === PRESET_GROUPS_SCHEMA ? saved.presets?.[this.presetKey(context)] : null;
+        return { names: { ...(item?.names || {}) }, manual: [...(item?.manual || [])] };
+    }
+    saveMeta(context, meta) {
+        const previous = this.extensionSettings[PRESET_GROUPS_KEY];
+        const base = previous?.schema === PRESET_GROUPS_SCHEMA ? previous : { schema: PRESET_GROUPS_SCHEMA, expandedByPreset: {} };
+        this.writeSettings({ ...base, presets: { ...(base.presets || {}), [this.presetKey(context)]: meta } });
+    }
+    async ask(title, value) {
+        if (this.host.prompt) { const result = await this.host.prompt(title, value); return typeof result === 'string' ? result : null; }
+        return globalThis.prompt?.(title, value) ?? null;
+    }
+    async renameFolder(folder) {
+        const context = this.context(); if (!this.valid(context)) return;
+        const value = await this.ask(`分组显示名（留空恢复「${folder.original}」）`, folder.name);
+        if (value === null || !this.valid(context)) return;
+        const meta = this.meta(context), name = value.trim().slice(0, 60);
+        const manual = meta.manual.find(group => JSON.stringify([group.start, group.end]) === folder.id);
+        if (manual) manual.name = name || manual.name;
+        else if (name && name !== folder.original) meta.names[folder.id] = name; else delete meta.names[folder.id];
+        this.saveMeta(context, meta); this.render();
+    }
+    createGroup(ids) {
+        const context = this.context(); if (!this.valid(context)) throw new Error('预设已切换');
+        const order = context.order.map(item => item.identifier).filter(id => ids.has(id));
+        if (!order.length) throw new Error('请先选择条目');
+        return this.ask('新分组名称（从第一个选中条目到最后一个）', '新分组').then(value => {
+            if (value === null || !this.valid(context)) return false;
+            const meta = this.meta(context);
+            meta.manual.push({ start: order[0], end: order.at(-1), name: value.trim().slice(0, 60) || '新分组' });
+            this.saveMeta(context, meta); this.render(); return true;
+        });
+    }
+    removeGroup(folder) {
+        const context = this.context(); if (!this.valid(context)) return;
+        const meta = this.meta(context);
+        meta.manual = meta.manual.filter(group => JSON.stringify([group.start, group.end]) !== folder.id);
+        this.saveMeta(context, meta); this.render();
+    }
+    async toggleFolder(record) {
+        const context = this.host.context();
+        if (!context || this.host.busy) return;
+        const manager = this.host.manager, ids = new Set(record.ids);
+        const allowed = new Set(context.prompts.filter(p => ids.has(p.identifier) && manager.isPromptToggleAllowed?.(p)).map(p => p.identifier));
+        if (!allowed.size) return;
+        const enable = !context.order.some(item => allowed.has(item.identifier) && item.enabled);
+        const order = context.order.map(item => allowed.has(item.identifier) ? { ...item, enabled: enable } : item);
+        this.host.busy = true;
+        try {
+            await this.host.write([{ owner: context.holder, key: 'order', next: order }]);
+            const counts = manager.tokenHandler?.getCounts?.();
+            if (counts) for (const id of allowed) counts[id] = null;
+            manager.render();
+        } catch (error) {
+            console.error('[Cloud Lounge Accelerator] 整组开关保存失败', error);
+            globalThis.toastr?.error?.('保存失败，请重试', '预设分类');
+        } finally { this.host.busy = false; }
+    }
     expanded(context) {
         const saved = this.extensionSettings[PRESET_GROUPS_KEY];
         return new Set(saved?.schema === PRESET_GROUPS_SCHEMA ? saved.expandedByPreset?.[context.key] : []);
@@ -114,7 +175,7 @@ export class PresetEntryGroups {
         if (!searching) {
             const previous = this.extensionSettings[PRESET_GROUPS_KEY];
             const expandedByPreset = previous?.schema === PRESET_GROUPS_SCHEMA ? previous.expandedByPreset : {};
-            this.writeSettings({ schema: PRESET_GROUPS_SCHEMA, expandedByPreset: { ...expandedByPreset, [context.key]: [...expanded] } });
+            this.writeSettings({ ...(previous?.schema === PRESET_GROUPS_SCHEMA ? previous : {}), schema: PRESET_GROUPS_SCHEMA, expandedByPreset: { ...expandedByPreset, [context.key]: [...expanded] } });
         }
         else for (const id of ids) this.searchFolders.set(id, folded);
         preservePresetAnchor(anchor || this.root, () => {
@@ -207,7 +268,8 @@ export class PresetEntryGroups {
         } else {
             this.protectSortable(list, true);
             list.classList.add('cla-preset-grouped-list');
-            const layout = [...folderLayout(entries), ...displayEntries.slice(entries.length).map(entry => ({ entry }))];
+            const meta = this.meta(context);
+            const layout = [...folderLayout(entries, meta.manual, meta.names), ...displayEntries.slice(entries.length).map(entry => ({ entry }))];
             const alive = new Set();
             const expanded = this.expanded(context);
             this.rowMembership.clear();
@@ -235,6 +297,10 @@ export class PresetEntryGroups {
                     record.folded = query ? (this.searchFolders.get(node.id) ?? false) : !expanded.has(node.id);
                     const firstEntry = node.id && rows.get(JSON.parse(node.id)[0]);
                     if (firstEntry && record.element.nextElementSibling !== firstEntry) list.insertBefore(record.element, firstEntry);
+                    const ids = [], subs = [];
+                    const walk = list => { for (const child of list) { if (child.entry) ids.push(child.entry.identifier); else { subs.push(child.id); walk(child.children); } } };
+                    walk(node.children); record.ids = ids; record.subs = subs; record.folder = node;
+                    record.enabled = ids.filter(id => orderEntries.get(id)?.enabled).length;
                     const childMatches = draw(node.children, [...ancestors, node.id], `${groupNames} ${node.name}`);
                     record.filtered = filtering && !childMatches;
                     if (childMatches) matches = true;
@@ -260,6 +326,12 @@ export class PresetEntryGroups {
             record.element.classList.toggle('collapsed', record.folded);
             record.button.setAttribute('aria-expanded', String(!record.folded));
             record.arrow.textContent = record.folded ? '▸' : '▾';
+            const on = record.enabled > 0;
+            record.power.classList.toggle('fa-toggle-on', on); record.power.classList.toggle('fa-toggle-off', !on);
+            record.power.title = on ? `整组禁用（已启用 ${record.enabled}/${record.ids?.length || 0}）` : '整组启用';
+            record.power.setAttribute('aria-label', record.power.title);
+            record.subFold.hidden = !record.subs?.length;
+            record.remove.hidden = !record.folder?.manual;
         }
         for (const [row, ancestors] of this.rowMembership) {
             row.classList.toggle('cla-preset-fold-hidden', ancestorFolded(ancestors));
@@ -274,8 +346,16 @@ export class PresetEntryGroups {
             const arrow = this.node('span', '', 'cla-preset-folder-arrow'); arrow.setAttribute('aria-hidden', 'true');
             const name = this.node('span', '', 'cla-preset-fold-name'), count = this.node('small', '', 'cla-preset-fold-count');
             button.append(arrow, name, count);
-            header.append(button); element.append(header);
-            record = { element, header, button, arrow, name, count }; this.folderNodes.set(folder.id, record);
+            const icon = (cls, title, action) => { const b = this.button('', action, `cla-preset-fold-icon fa-solid ${cls}`); b.title = title; b.setAttribute('aria-label', title); return b; };
+            const rename = icon('fa-pen', '改名', () => this.renameFolder(record.folder));
+            const subFold = icon('fa-angles-up', '折叠/展开全部子分组', () => {
+                const subs = record.subs || []; const allFolded = subs.every(id => this.folderNodes.get(id)?.folded);
+                this.setFold(this.context(), subs, !allFolded, header);
+            });
+            const power = icon('fa-toggle-off', '整组启用', () => this.toggleFolder(record));
+            const remove = icon('fa-trash-can', '删除这个手动分组（不删条目）', () => this.removeGroup(record.folder));
+            header.append(button, rename, subFold, power, remove); element.append(header);
+            record = { element, header, button, arrow, name, count, power, subFold, remove }; this.folderNodes.set(folder.id, record);
         }
         record.name.textContent = folder.name; record.count.textContent = String(folder.total);
         record.button.setAttribute('aria-label', `${folder.name}，${folder.total} 条`);

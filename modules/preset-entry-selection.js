@@ -123,7 +123,7 @@ export class PresetEntrySelection {
         toolbar.setAttribute('role', 'toolbar'); toolbar.setAttribute('aria-label', '预设条目批量编辑');
         toolbar.append(ui.node('small', `已选 ${this.selected.size} 项`));
         for (const [label, action] of [['启用', () => void this.update('enable')],
-            ['禁用', () => void this.update('disable')], ['取消', () => this.exit()]]) {
+            ['禁用', () => void this.update('disable')], ['建为分组', () => this.host.groups.createGroup(new Set(this.selected)).then(done => { if (done) this.exit(); })], ['取消', () => this.exit()]]) {
             const button = ui.button(label, action);
             button.disabled = label !== '取消' && (this.host.busy || this.selected.size === 0); toolbar.append(button);
         }

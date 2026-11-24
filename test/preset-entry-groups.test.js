@@ -52,7 +52,7 @@ test('real v1.35 recognizes paired dividers and keeps identity rows above writin
     const ordered = preset.prompt_order[0].order.map(row => byId.get(row.identifier));
     const before = JSON.stringify(preset);
     assert.deepEqual(findPresetSections(ordered).map(x => x.name),
-        ['写作规则', '不要动', '规则', '小剧场', 'NSFW', '文风', '视角模式', '选一', '思维链', '不一定管用的破限']);
+        ['写作规则', '不要动', 'USER信息', '规则', '小剧场', 'NSFW', '缱绻 (二选一)', '⦉ User攻 ⦊', '文风', '视角模式', '选一', '思维链', '不一定管用的破限']);
     const layout = folderLayout(ordered);
     const writing = layout.findIndex(node => node.name === '写作规则');
     assert.deepEqual(layout.slice(0, writing).filter(node => /^身份\d$/u.test(node.entry?.name)).map(node => node.entry.name),
