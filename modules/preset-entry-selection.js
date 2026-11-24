@@ -15,7 +15,7 @@ export class PresetEntrySelection {
             if (this.gesture?.active || this.host.busy) return;
             const context = this.host.context(); if (!context) return;
             this.cancelHold(); this.mode = true; this.context = context; this.scopeKey = this.scope();
-            this.selected.add(name.closest(ROW).dataset.pmIdentifier); this.render(); this.openGroups(name);
+            this.selected.add(name.closest(ROW).dataset.pmIdentifier); this.render();
         };
         this.touchMove = event => { if (this.gesture?.active && event.cancelable) event.preventDefault(); };
         this.blur = () => this.cancelHold();
@@ -71,7 +71,7 @@ export class PresetEntrySelection {
         if (event.pointerId !== this.gesture?.pointer) return;
         const active = this.gesture.active;
         if (active) { event.preventDefault(); this.suppressUntil = Date.now() + 450; }
-        if (event.type === 'pointercancel' && active) this.exit(); else this.cancelHold();
+        this.cancelHold();
     }
     cancelHold() {
         clearTimeout(this.timer); this.timer = null;
@@ -122,13 +122,10 @@ export class PresetEntrySelection {
         const ui = this.host.groups, toolbar = this.toolbar = ui.node('div', '', 'cla-preset-bulk-toolbar');
         toolbar.setAttribute('role', 'toolbar'); toolbar.setAttribute('aria-label', '预设条目批量编辑');
         toolbar.append(ui.node('small', `已选 ${this.selected.size} 项`));
-        for (const [label, action] of [['全选', () => {
-            for (const row of list.querySelectorAll(ROW)) if (!row.classList.contains('cla-preset-group-hidden')) this.selected.add(row.dataset.pmIdentifier);
-            this.render();
-        }], ['移动到分类', button => this.openGroups(button)], ['启用', () => void this.update('enable')], ['禁用', () => void this.update('disable')],
-            ['移出分类', () => { if (this.current()) { this.host.groups.assign(this.host.groups.context(), [...this.selected], null); this.exit(); } }], ['取消', () => this.exit()]]) {
+        for (const [label, action] of [['批量移动', button => this.openGroups(button)], ['启用', () => void this.update('enable')],
+            ['禁用', () => void this.update('disable')], ['取消', () => this.exit()]]) {
             let button; button = ui.button(label, () => action(button));
-            button.disabled = this.host.busy || (!['取消', '全选'].includes(label) && this.selected.size === 0); toolbar.append(button);
+            button.disabled = label !== '取消' && (this.host.busy || this.selected.size === 0); toolbar.append(button);
         }
         list.before(toolbar);
     }

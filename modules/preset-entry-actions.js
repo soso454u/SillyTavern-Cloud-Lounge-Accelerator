@@ -168,6 +168,9 @@ export class PresetEntryActions {
     }
 
     showMenu(menu, button) {
+        // SillyTavern closes unpinned drawers on an outside press. This menu
+        // lives under body for viewport positioning but belongs to its drawer.
+        for (const type of ['mousedown', 'touchstart']) menu.addEventListener(type, event => event.stopPropagation());
         this.document.body.append(menu);
         this.menu = menu;
         this.menuButton = button;

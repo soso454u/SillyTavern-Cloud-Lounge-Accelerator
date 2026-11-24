@@ -1,9 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { emptyFolders, normalizeFolderState, assignedFolder, folderPath, folderTree, createFolder, renameFolder, moveFolder, deleteFolder, assignEntries, importFolderMetadata, promptFingerprint } from '../modules/preset-folder-model.js';
-import { semanticSuggestion, folderSuggestions } from '../modules/preset-folder-suggestions.js';
-import { findPresetSections } from '../modules/preset-section-boundaries.js';
+import { emptyFolders, normalizeFolderState, assignedFolder, folderPath, folderTree, createFolder, renameFolder, moveFolder, deleteFolder, assignEntries, classifyUnassignedEntries, importFolderMetadata, promptFingerprint } from '../modules/preset-folder-model.js';
+import { classifyPresetEntry } from '../modules/preset-folder-suggestions.js';
 import { PresetEntryGroups, PRESET_GROUPS_KEY } from '../modules/preset-entry-groups.js';
 
 const prompts = () => [{ identifier: 'later', name: '[看似分类]示例', role: 'system', content: 'ordinary rule', injection_position: 1, injection_depth: 4, injection_order: 25 },
@@ -56,26 +55,43 @@ test('metadata round-trip checks identifiers and content signatures; imports can
     assert.throws(() => importFolderMetadata({ folders: [] }, items), /分类文件/);
 });
 
-test('user decisions, including unclassified, override reviewed suggestions; mixed adult style is a style subfolder suggestion', () => {
-    const state = emptyFolders(), items = prompts(), folder = createFolder(state, '用户归属', null, uuid), other = createFolder(state, '建议', null, uuid);
-    assignEntries(state, items, ['first'], folder); assignEntries(state, items, ['later'], null);
-    assignEntries(state, items, ['first', 'later'], other, 'accepted');
-    assert.equal(assignedFolder(state, 'first'), folder); assert.equal(assignedFolder(state, 'later'), null);
-    assert.equal(semanticSuggestion({ name: '[NSFW]成人', content: 'plain unknown words' }), null);
-    assert.equal(semanticSuggestion({ content: 'Literary style and prose sentence rhythm may mention desire as an aesthetic.' }).path[0], '文风');
-    const mixed = semanticSuggestion({ content: 'Literary style, prose sentence rhythm, sexual scenes and sexual anatomy with foreplay.' });
-    assert.deepEqual(mixed.path, ['文风', '成人文风']); assert.equal(mixed.confidence, '混合内容');
-    assert.equal(semanticSuggestion({ content: 'Unstructured ambiguous instruction' }), null);
+test('classifies by body function, avoids ambiguous instructions and never overwrites manual choices', () => {
+    const state = emptyFolders();
+    const entries = [
+        { identifier: 'before', name: '====↓[涩调]↓====', content: '' },
+        { identifier: 'style', name: '基调', content: 'Use a literary style with varied prose sentence rhythm and imagery.' },
+        { identifier: 'world', name: '写卡', content: 'Preserve story continuity and follow world rules. Character actions should have consequences on the timeline.' },
+        { identifier: 'mixed', content: 'Literary style, prose sentence rhythm, sexual scenes and sexual anatomy with foreplay.' },
+        { identifier: 'adult', content: 'For sexual scenes, follow the consent rules and agree on a safeword.' },
+        { identifier: 'plain', name: '[NSFW]成人', content: 'Unstructured ambiguous instruction.' },
+        { identifier: 'after', name: '====↑[涩调]↑====', content: '' },
+    ];
+    assignEntries(state, entries, ['world'], null);
+    assert.ok(classifyUnassignedEntries(state, entries));
+    assert.deepEqual(classifyPresetEntry(entries[2]), ['剧情与世界规则']);
+    assert.equal(folderPath(state, assignedFolder(state, 'style')), '文风');
+    assert.equal(folderPath(state, assignedFolder(state, 'adult')), 'NSFW / 玩法规则');
+    assert.deepEqual(state.assignments.world, { folderId: null, source: 'manual' });
+    assert.equal(state.assignments.mixed, undefined);
+    assert.equal(state.assignments.plain, undefined);
+    assert.equal(state.assignments.before, undefined);
+    assert.equal(state.assignments.after, undefined);
+    const [nsfw] = state.folders.filter(folder => folder.name === 'NSFW');
+    assert.equal(folderTree(state, entries).find(folder => folder.id === nsfw.id).total, 1);
+    assert.ok(state.collapsed.includes(nsfw.id));
+    assert.ok(state.collapsed.includes(assignedFolder(state, 'adult')));
+    assignEntries(state, entries, ['adult'], null);
+    assert.equal(classifyUnassignedEntries(state, entries), false);
+    assert.equal(assignedFolder(state, 'adult'), null);
 });
 
-test('boundaries are optional preview context, handle repeated arrows and split brackets without altering data', () => {
-    const entries = ['====↓[任意名称]↓====', 'ordinary', '====↑[任意名称]↑====', '『 Outer', 'nested', 'Outer 』'].map((name, i) => ({ identifier: String(i), name, content: '' }));
-    const before = JSON.stringify(entries), state = emptyFolders();
-    assert.equal(findPresetSections(entries).length, 2);
-    assert.equal(folderSuggestions(entries, state, 'boundaries').length, 6);
-    assert.equal(folderSuggestions(entries, state, 'content').length, 0);
-    assert.deepEqual(state.assignments, {}); assert.equal(JSON.stringify(entries), before);
-    assert.equal(findPresetSections([{ name: '====↓[缺少结束]↓====' }, { name: 'ordinary' }]).length, 0);
+test('respects saved expanded folders while defaulting newly created folders to folded', () => {
+    const state = emptyFolders(), parent = createFolder(state, '自建', null, uuid);
+    state.collapsed = [];
+    const saved = normalizeFolderState(state);
+    const child = createFolder(saved, '新子目录', parent, uuid);
+    assert.deepEqual(saved.collapsed, [child]);
+    assert.deepEqual(normalizeFolderState(saved).collapsed, [child]);
 });
 
 test('scope isolation and stale UI guards protect the native preset and newer settings', () => {
@@ -113,24 +129,16 @@ test('same-name native imports invalidate changed content references without mut
     groups.stop(); assert.equal(listeners.size, 0);
 });
 
-test('folder dragging saves only stable folder IDs and preserves unrelated parent order', () => {
-    const items = prompts(), context = { prompts: items, order: ordered(items).map(prompt => ({ identifier: prompt.identifier, enabled: true })), characterId: '1' }, settings = {};
-    const host = { context: () => context, current: value => value?.order === context.order && value?.prompts === items };
-    const groups = new PresetEntryGroups({ host, extensionSettings: settings, getPresetName: () => 'A' }); groups.render = () => {};
-    const snapshot = JSON.stringify(context), a = groups.create(groups.context(), 'A'), b = groups.create(groups.context(), 'B'), child = groups.create(groups.context(), '子层', a);
-    groups.moveGroup(groups.context(), b, a, false);
-    assert.deepEqual(groups.state().order['@root'], [b, a]);
-    assert.throws(() => groups.moveGroup(groups.context(), child, b, false), /同一级/);
-    assert.equal(JSON.stringify(context), snapshot);
-});
-
 test('real preset compatibility: classify references, fold and delete folders while every native byte remains unchanged', { skip: !process.env.CLA_PRESET_FIXTURE }, async () => {
     const data = JSON.parse(await readFile(process.env.CLA_PRESET_FIXTURE, 'utf8')), before = JSON.stringify(data);
-    const byId = new Map(data.prompts.map(prompt => [prompt.identifier, prompt])), holder = data.prompt_order.find(group => group.order?.length), entries = holder.order.map(item => byId.get(item.identifier)).filter(Boolean);
+    const byId = new Map(data.prompts.map(prompt => [prompt.identifier, prompt])), holder = data.prompt_order.toSorted((a, b) => b.order.length - a.order.length)[0], entries = holder.order.map(item => byId.get(item.identifier)).filter(Boolean);
     const state = emptyFolders(), parent = createFolder(state, '测试目录', null, uuid), child = createFolder(state, '测试子目录', parent, uuid);
     assignEntries(state, data.prompts, entries.slice(0, 8).map(prompt => prompt.identifier), child); state.collapsed.push(parent);
     assert.equal(folderTree(state, entries).flatMap(folder => folder.items).length, entries.length - 8);
-    assert.ok(folderSuggestions(entries, state, 'boundaries').every(item => !Object.hasOwn(state.assignments, item.id)));
+    const classified = classifyUnassignedEntries(state, entries);
+    assert.ok(classified);
+    assert.equal(folderTree(state, entries).reduce((sum, folder) => sum + folder.total, 0), entries.length);
+    assert.ok(entries.slice(0, 8).every(prompt => assignedFolder(state, prompt.identifier) === child));
     deleteFolder(state, child); deleteFolder(state, parent);
     assert.equal(JSON.stringify(data), before);
     assert.deepEqual(entries.map(entry => entry.identifier), holder.order.filter(item => byId.has(item.identifier)).map(item => item.identifier));

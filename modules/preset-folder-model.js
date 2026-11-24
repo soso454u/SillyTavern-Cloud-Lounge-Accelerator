@@ -1,6 +1,9 @@
+import { ADULT_CATEGORY_ORDER, classifyPresetEntry, PRESET_CATEGORY_ORDER } from './preset-folder-suggestions.js';
+
 export const PRESET_GROUPS_KEY = 'cloud_lounge_accelerator_preset_groups';
 export const UNGROUPED = '未分类';
 export const ROOT = '@root';
+export const UNGROUPED_ID = '@ungrouped';
 const signatures = new WeakMap();
 export function hashText(text) {
     let a = 2166136261, b = 2246822519;
@@ -18,7 +21,7 @@ export function normalizePresetGroup(value) {
     if (!name || name.length > 60 || /[\u0000-\u001f\u007f]/u.test(name)) throw new Error('文件夹名称请输入 1–60 个字符');
     return name;
 }
-export function emptyFolders() { return { schema: 4, folders: [], assignments: {}, collapsed: [], order: {}, fingerprints: {} }; }
+export function emptyFolders() { return { schema: 4, folders: [], assignments: {}, collapsed: [UNGROUPED_ID], order: {}, fingerprints: {} }; }
 export function normalizeFolderState(raw, prompts = [], scope = '') {
     const state = emptyFolders(), known = new Set(prompts.map(prompt => prompt.identifier));
     if (raw?.schema !== 4) {
@@ -30,12 +33,20 @@ export function normalizeFolderState(raw, prompts = [], scope = '') {
             return names.get(name);
         };
         for (const name of Array.isArray(raw?.groups) ? raw.groups : []) if (typeof name === 'string' && name && name !== UNGROUPED) folder(name);
-        for (const [id, name] of Object.entries(raw?.assignments || {})) if (known.has(id) && typeof name === 'string' && name && name !== UNGROUPED) state.assignments = { ...state.assignments, [id]: { folderId: folder(name), source: 'manual' } };
+        for (const [id, name] of Object.entries(raw?.assignments || {})) {
+            if (!known.has(id)) continue;
+            if (name === null || name === UNGROUPED || (typeof name === 'string' && name)) {
+                state.assignments = { ...state.assignments, [id]: { folderId: name && name !== UNGROUPED ? folder(name) : null, source: 'manual' } };
+            }
+        }
+        if (Array.isArray(raw?.collapsed)) {
+            state.collapsed = raw.collapsed.flatMap(name => name === UNGROUPED || name === UNGROUPED_ID ? [UNGROUPED_ID] : names.has(name) ? [names.get(name)] : []);
+        }
         if (raw && Object.keys(raw).length) state.legacyBackup = structuredClone(raw);
     } else {
         const ids = new Set();
         for (const item of Array.isArray(raw.folders) ? raw.folders : []) {
-            if (!item || typeof item.id !== 'string' || !item.id || item.id === ROOT || item.id === '@ungrouped' || ids.has(item.id)) continue;
+            if (!item || typeof item.id !== 'string' || !item.id || item.id === ROOT || item.id === UNGROUPED_ID || ids.has(item.id)) continue;
             let name; try { name = normalizePresetGroup(item.name); } catch { continue; }
             ids.add(item.id); state.folders.push({ id: item.id, name, parentId: typeof item.parentId === 'string' ? item.parentId : null });
         }
@@ -44,10 +55,12 @@ export function normalizeFolderState(raw, prompts = [], scope = '') {
             const visited = new Set([folder.id]); let parent = folder.parentId;
             while (parent) { if (!byId.has(parent) || visited.has(parent)) { folder.parentId = null; break; } visited.add(parent); parent = byId.get(parent).parentId; }
         }
-        for (const [id, record] of Object.entries(raw.assignments || {})) if (record && (record.folderId === null || ids.has(record.folderId))) state.assignments = { ...state.assignments, [id]: { folderId: record.folderId, source: record.source === 'accepted' ? 'accepted' : 'manual' } };
-        state.collapsed = [...new Set((Array.isArray(raw.collapsed) ? raw.collapsed : []).filter(id => ids.has(id) || id === '@ungrouped'))];
+        state.assignments = Object.fromEntries(Object.entries(raw.assignments || {})
+            .filter(([, record]) => record && (record.folderId === null || ids.has(record.folderId)))
+            .map(([id, record]) => [id, { folderId: record.folderId, source: ['accepted', 'auto'].includes(record.source) ? record.source : 'manual' }]));
+        state.collapsed = [...new Set((Array.isArray(raw.collapsed) ? raw.collapsed : []).filter(id => ids.has(id) || id === UNGROUPED_ID))];
         for (const [parent, order] of Object.entries(raw.order || {})) if (Array.isArray(order)) state.order = { ...state.order, [parent]: [...new Set(order.filter(id => ids.has(id)))] };
-        for (const [id, signature] of Object.entries(raw.fingerprints || {})) if (typeof signature === 'string') state.fingerprints = { ...state.fingerprints, [id]: signature };
+        state.fingerprints = Object.fromEntries(Object.entries(raw.fingerprints || {}).filter(([, signature]) => typeof signature === 'string'));
         if (raw.legacyBackup) state.legacyBackup = structuredClone(raw.legacyBackup);
     }
     return state;
@@ -62,7 +75,10 @@ export function createFolder(state, name, parentId = null, newId = () => globalT
     name = normalizePresetGroup(name);
     if (parentId && !state.folders.some(folder => folder.id === parentId)) throw new Error('上级文件夹已不存在');
     if (state.folders.some(folder => folder.parentId === parentId && folder.name === name)) throw new Error('同一级已有同名文件夹');
-    const id = newId(); state.folders.push({ id, name, parentId }); return id;
+    const id = newId();
+    state.folders.push({ id, name, parentId });
+    state.collapsed.push(id);
+    return id;
 }
 export function renameFolder(state, id, name) {
     name = normalizePresetGroup(name);
@@ -90,32 +106,64 @@ export function deleteFolder(state, id) {
     for (const [parent, order] of Object.entries(state.order)) state.order = { ...state.order, [parent]: order.flatMap(item => item === id ? children.map(child => child.id) : [item]) };
     delete state.order[id];
 }
+function saveAssignment(state, prompt, folderId, source) {
+    const set = (object, value) => Object.defineProperty(object, prompt.identifier, {
+        value, enumerable: true, writable: true, configurable: true,
+    });
+    set(state.assignments, { folderId, source });
+    set(state.fingerprints, promptFingerprint(prompt));
+}
+
 export function assignEntries(state, prompts, ids, folderId, source = 'manual') {
     const byId = new Map(prompts.map(prompt => [prompt.identifier, prompt]));
     if (!ids.length || ids.some(id => !byId.has(id))) throw new Error('条目已变化，请重新选择');
     if (folderId && !state.folders.some(folder => folder.id === folderId)) throw new Error('文件夹已不存在');
     for (const id of ids) {
-        // Accepted suggestions can never replace a user decision or valid saved relationship.
-        if (source === 'accepted' && Object.hasOwn(state.assignments, id)) continue;
-        state.assignments = { ...state.assignments, [id]: { folderId, source } };
-        state.fingerprints = { ...state.fingerprints, [id]: promptFingerprint(byId.get(id)) };
+        if (source !== 'manual' && Object.hasOwn(state.assignments, id)) continue;
+        saveAssignment(state, byId.get(id), folderId, source);
     }
 }
+export function classifyUnassignedEntries(state, entries) {
+    let changed = false;
+    for (const prompt of entries) {
+        const id = prompt.identifier;
+        if (Object.hasOwn(state.assignments, id)) continue;
+        const path = classifyPresetEntry(prompt);
+        if (!path) continue;
+        let parentId = null;
+        for (const name of path) {
+            const folder = state.folders.find(item => item.parentId === parentId && item.name === name);
+            parentId = folder?.id || createFolder(state, name, parentId);
+        }
+        saveAssignment(state, prompt, parentId, 'auto');
+        changed = true;
+    }
+    return changed;
+}
+
 export function folderTree(state, orderedEntries) {
-    const nodes = new Map(state.folders.map(folder => [folder.id, { ...folder, items: [], children: [], rank: Infinity }]));
-    const roots = [], ungrouped = { id: null, name: UNGROUPED, parentId: null, items: [], children: [], rank: Infinity };
+    const nodes = new Map(state.folders.map(folder => [folder.id, { ...folder, items: [], children: [], total: 0, rank: Infinity }]));
+    const roots = [], ungrouped = { id: null, name: UNGROUPED, parentId: null, items: [], children: [], total: 0, rank: Infinity };
     orderedEntries.forEach((entry, index) => {
         const node = nodes.get(assignedFolder(state, entry.identifier)) || ungrouped;
-        node.items.push(entry); node.rank = Math.min(node.rank, index);
+        node.items.push(entry); node.total++; node.rank = Math.min(node.rank, index);
         let parent = node.parentId;
-        while (parent && nodes.has(parent)) { const ancestor = nodes.get(parent); ancestor.rank = Math.min(ancestor.rank, index); parent = ancestor.parentId; }
+        while (parent && nodes.has(parent)) { const ancestor = nodes.get(parent); ancestor.total++; ancestor.rank = Math.min(ancestor.rank, index); parent = ancestor.parentId; }
     });
     for (const node of nodes.values()) { const parent = nodes.get(node.parentId); if (parent) parent.children.push(node); else roots.push(node); }
     roots.push(ungrouped);
     const sort = (items, parent) => {
         const key = parent || ROOT, order = Object.hasOwn(state.order, key) && Array.isArray(state.order[key]) ? state.order[key] : [];
         const saved = new Map(order.map((id, index) => [id, index]));
-        items.sort((a, b) => a.id === null ? 1 : b.id === null ? -1 : saved.size ? (saved.get(a.id) ?? saved.size) - (saved.get(b.id) ?? saved.size) || a.rank - b.rank : a.rank - b.rank);
+        const categories = parent === null ? PRESET_CATEGORY_ORDER
+            : nodes.get(parent)?.name === 'NSFW' ? ADULT_CATEGORY_ORDER : [];
+        const rank = folder => {
+            const index = categories.indexOf(folder.name);
+            return index < 0 ? categories.length : index;
+        };
+        items.sort((a, b) => a.id === null ? 1 : b.id === null ? -1 :
+            (saved.get(a.id) ?? saved.size) - (saved.get(b.id) ?? saved.size)
+            || rank(a) - rank(b) || a.rank - b.rank);
         for (const node of items) sort(node.children, node.id);
     };
     sort(roots, null); return roots;
