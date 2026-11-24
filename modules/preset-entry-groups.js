@@ -190,7 +190,7 @@ export class PresetEntryGroups {
     clearDisplay() {
         this.groupedDrag?.destroy(); this.groupedDrag = null;
         this.statusObserver?.disconnect(); this.statusObserver = null;
-        for (const node of this.folderNodes.values()) node.element.remove();
+        for (const node of this.folderNodes.values()) { node.element.remove(); node.end.remove(); }
         this.folderNodes.clear();
         for (const row of this.rowMembership.keys()) row.classList.remove('cla-preset-fold-hidden');
         this.rowMembership.clear();
@@ -350,6 +350,8 @@ export class PresetEntryGroups {
                     const ids = [], subs = [];
                     const walk = list => { for (const child of list) { if (child.entry) ids.push(child.entry.identifier); else { subs.push(child.id); walk(child.children); } } };
                     walk(node.children); record.ids = ids; record.subs = subs; record.folder = node;
+                    const lastEntry = rows.get(ids.at(-1));
+                    if (lastEntry && lastEntry.nextElementSibling !== record.end) lastEntry.after(record.end);
                     const childMatches = draw(node.children, [...ancestors, node.id], `${groupNames} ${node.name}`);
                     record.filtered = filtering && !childMatches;
                     if (childMatches) matches = true;
@@ -359,7 +361,7 @@ export class PresetEntryGroups {
             draw(layout);
             for (const [id, record] of this.folderNodes) {
                 if (!alive.has(id)) {
-                    record.element.remove();
+                    record.element.remove(); record.end.remove();
                     this.folderNodes.delete(id);
                 }
             }
@@ -377,6 +379,7 @@ export class PresetEntryGroups {
         const ancestorFolded = ids => ids.some(id => this.folderNodes.get(id)?.folded);
         for (const record of this.folderNodes.values()) {
             record.element.hidden = record.filtered || ancestorFolded(record.ancestors);
+            record.end.hidden = record.element.hidden || record.folded;
             record.element.classList.toggle('collapsed', record.folded);
             record.button.setAttribute('aria-expanded', String(!record.folded));
             record.arrow.className = `cla-preset-folder-arrow fa-solid ${record.folded ? 'fa-folder' : 'fa-folder-open'}`;
@@ -390,6 +393,8 @@ export class PresetEntryGroups {
         let record = this.folderNodes.get(folder.id);
         if (!record) {
             const element = this.node('li', '', 'cla-preset-folder'); element.dataset.claPresetGroup = folder.id;
+            const end = this.node('li', '', 'cla-preset-folder-end'); end.dataset.claPresetEnd = folder.id;
+            end.setAttribute('role', 'separator');
             const header = this.node('div', '', 'cla-preset-fold-header'); header.dataset.claPresetGroup = folder.id;
             const button = this.button('', () => this.setFold(this.context(), [folder.id], !element.classList.contains('collapsed'), header), 'cla-preset-fold-toggle');
             const arrow = this.node('span', '', 'cla-preset-folder-arrow'); arrow.setAttribute('aria-hidden', 'true');
@@ -403,9 +408,11 @@ export class PresetEntryGroups {
             });
             const remove = icon('fa-xmark', '删除分组（条目保留在原位）', () => this.removeGroup(record.folder));
             header.append(button, rename, subFold, remove); element.append(header);
-            record = { element, header, button, arrow, name, count, subFold, remove }; this.folderNodes.set(folder.id, record);
+            record = { element, end, header, button, arrow, name, count, subFold, remove }; this.folderNodes.set(folder.id, record);
         }
         record.name.textContent = folder.name; record.count.textContent = String(folder.total);
+        record.end.textContent = `${folder.name} · 结束`;
+        record.end.setAttribute('aria-label', `${folder.name}分组结束`);
         record.button.setAttribute('aria-label', `${folder.name}，${folder.total} 条`);
         return record;
     }

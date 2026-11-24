@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 
 const { chromium } = createRequire(import.meta.url)('playwright');
+const { version } = JSON.parse(await readFile(new URL('../manifest.json',import.meta.url),'utf8'));
 const nativeRoot = process.env.CLA_SILLYTAVERN_PUBLIC;
 assert.ok(nativeRoot, 'Set CLA_SILLYTAVERN_PUBLIC');
 const theme = process.env.CLA_PRESET_THEME_CSS ? await readFile(process.env.CLA_PRESET_THEME_CSS,'utf8') : null;
@@ -97,6 +98,7 @@ try {
         const initial = await page.evaluate(() => order());
         const data = await page.evaluate(() => JSON.stringify(actions.context().prompts));
         assert.equal(await folder('Outer').count(),1);
+        assert.equal(await page.locator('.cla-preset-folder-end:visible').count(),0);
         // Single item crosses a folded 120-row section, keeping all hidden rows.
         await drag(row('n0'), folder('Outer'), 0, true);
         const firstMove = await page.evaluate(() => order());
@@ -123,7 +125,7 @@ try {
         const helper = await page.locator('.ui-sortable-helper').boundingBox();
         await move({x:point(b,true).x,y:point(b,true).y+20}); await page.waitForTimeout(20);
         assert.ok(Math.abs((await page.locator('.ui-sortable-helper').boundingBox()).y-helper.y)>=10);
-        await page.screenshot({path:`/tmp/cla-preset-2.1.89-native-${mobile?'touch':'desktop'}.png`,clip:{x:0,y:0,width:mobile?390:650,height:600}});
+        await page.screenshot({path:`/tmp/cla-preset-${version}-native-${mobile?'touch':'desktop'}.png`,clip:{x:0,y:0,width:mobile?390:650,height:600}});
         // Cancellation restores the native position without saving.
         await page.keyboard.press('Escape'); await up();
         assert.deepEqual(await page.evaluate(() => order()),moved);
@@ -165,6 +167,25 @@ try {
         assert.equal(await page.evaluate(() => saves),8);
         assert.equal(await page.evaluate(() => JSON.stringify(actions.context().prompts)),data);
         assert.equal(new Set(await page.evaluate(() => order())).size,240);
+        // A visible end marker separates an expanded group from the next row.
+        const boundary = await page.evaluate(() => {
+            const g=actions.groups,context=g.context(),ids=context.order.slice(0,5).map(p=>p.identifier);
+            ids.forEach((id,i)=>{context.prompts.find(p=>p.identifier===id).name='身份'+(i+1)});
+            context.prompts.find(p=>p.identifier===context.order[5].identifier).name='语言、叙述规则';
+            g.saveMeta(context,{names:{},manual:[{start:ids[0],end:ids[4],name:'新分组'}],hidden:[]});g.render();
+            g.setFold(g.context(),[...g.folderNodes.keys()],true);
+            const collapsed=[...g.folderNodes.values()].every(r=>r.end.hidden);
+            const id=JSON.stringify([ids[0],ids[4]]);g.setFold(g.context(),[id],false);
+            const record=g.folderNodes.get(id),last=[...list.querySelectorAll('[data-pm-identifier]')].find(row=>row.dataset.pmIdentifier===ids[4]);
+            document.querySelector('#scroll').scrollTop=0;window.scrollTo(0,0);
+            return {collapsed,text:record.end.textContent,hidden:record.end.hidden,afterLast:last.nextElementSibling===record.end,
+                gap:record.end.nextElementSibling.getBoundingClientRect().top-record.end.getBoundingClientRect().bottom};
+        });
+        assert.deepEqual({...boundary,gap:undefined},{collapsed:true,text:'新分组 · 结束',hidden:false,afterLast:true,gap:undefined});
+        assert.ok(boundary.gap>=12,JSON.stringify(boundary));
+        await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+        await page.evaluate(()=>{document.querySelector('#scroll').scrollTop=0;window.scrollTo(0,0)});
+        await page.screenshot({path:`/tmp/cla-preset-${version}-boundary-${mobile?'touch':'desktop'}.png`,clip:{x:0,y:0,width:mobile?390:650,height:700}});
         assert.deepEqual(errors,[]);
         console.log(`${mobile?'Touch':'Desktop'}: native helper follows pointer; visible placeholder; immediate/rapid drops with pending saves; single/multi/folder moves preserve 240 rows; cancel, rollback and raw view passed (${await page.evaluate(() => renders)} full rerenders).`);
         await page.close();

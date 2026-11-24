@@ -892,6 +892,27 @@ body .cla-preset-entry-menu button.menu_button[data-cla-preset-action] {
 }
 html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable > li.completion_prompt_manager_prompt.cla-preset-fold-hidden[data-pm-identifier],
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder[hidden] { display: none !important; }
+#completion_prompt_manager #completion_prompt_manager_list > .cla-preset-folder-end {
+    display: flex !important;
+    justify-content: flex-end;
+    align-items: center;
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 22px;
+    margin: 0 0 16px !important;
+    padding: 1px 10px 4px !important;
+    border: 0 !important;
+    border-bottom: 2px solid color-mix(in srgb, var(--SmartThemeBodyColor, #666) 55%, transparent) !important;
+    border-left: 3px solid color-mix(in srgb, var(--SmartThemeBodyColor, #666) 55%, transparent) !important;
+    border-radius: 0 0 7px 7px;
+    background: none !important;
+    color: var(--SmartThemeBodyColor, inherit);
+    font-size: 0.75em;
+    line-height: 1.4;
+    opacity: 0.8;
+    pointer-events: none;
+}
+#completion_prompt_manager #completion_prompt_manager_list > .cla-preset-folder-end[hidden] { display: none !important; }
 #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
     .completion_prompt_manager_prompt_disabled .completion_prompt_manager_prompt_name,
 #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable

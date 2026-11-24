@@ -70,7 +70,7 @@ export class PresetGroupedDrag {
             ? new Set(selection.selected) : new Set([row.dataset.pmIdentifier]);
         const source = folder ? folder.element : row;
         const block = [...this.list.children].filter(node => node === source || ids.has(node.dataset.pmIdentifier)
-            || (folder && this.groups.folderNodes.get(node.dataset.claPresetGroup)?.ids.every(id => ids.has(id))));
+            || (folder && this.groups.folderNodes.get(node.dataset.claPresetGroup || node.dataset.claPresetEnd)?.ids.every(id => ids.has(id))));
         this.state = { source, ids, block, context, folder: !!folder, active: false };
     }
     start(event, ui) {
