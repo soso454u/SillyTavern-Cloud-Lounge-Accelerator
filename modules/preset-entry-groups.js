@@ -1,4 +1,5 @@
 import { preservePresetAnchor } from './preset-scroll-anchor.js';
+import { PresetGroupedDrag } from './preset-grouped-drag.js';
 import { PRESET_GROUPS_KEY, PRESET_GROUPS_SCHEMA, folderLayout } from './preset-folder-model.js';
 
 // This is the existing preset organizer, using the same extension-settings key.
@@ -92,6 +93,7 @@ export class PresetEntryGroups {
         const at = rest.findIndex(item => item.identifier === anchor);
         if (at < 0) return false;
         const order = [...rest.slice(0, at + (before ? 0 : 1)), ...picked, ...rest.slice(at + (before ? 0 : 1))];
+        if (order.every((item, index) => item === context.order[index])) return false;
         if (!before && target.folder) {
             const meta = this.meta(gctx), group = meta.manual.find(g => g.start === JSON.parse(target.folder.id)[0]);
             if (group) { group.end = picked.at(-1).identifier; this.saveMeta(gctx, meta); }
@@ -102,83 +104,6 @@ export class PresetEntryGroups {
             this.host.manager.render(false);
             return true;
         } finally { this.host.busy = false; }
-    }
-    // Hold a folder header ~400ms, then drag: the whole block moves in the
-    // real preset order and is saved like a native drag.
-    dragFolder(header, getRecord) {
-        let timer = null, state = null;
-        const doc = this.host.document;
-        const cleanup = () => {
-            clearTimeout(timer); timer = null;
-            doc.removeEventListener('pointermove', move, true); doc.removeEventListener('pointerup', up, true); doc.removeEventListener('pointercancel', cancel, true);
-            doc.removeEventListener('touchmove', block, { capture: true });
-            if (state) { state.line.remove(); state.record.element.classList.remove('cla-preset-folder-dragging'); }
-            state = null;
-        };
-        const block = event => { if (state && event.cancelable) event.preventDefault(); };
-        const targetAt = (x, y) => {
-            const record = state.record;
-            const hit = doc.elementFromPoint(x, y)?.closest?.('[data-pm-identifier], .cla-preset-folder');
-            if (!hit || !this.list?.contains(hit) || record.element.contains(hit)) return null;
-            const id = hit.dataset.pmIdentifier;
-            if (id && record.ids.includes(id)) return null;
-            const rect = hit.getBoundingClientRect(), above = y < rect.top + rect.height / 2;
-            if (hit.classList.contains('cla-preset-folder')) {
-                const [first, last] = JSON.parse(hit.dataset.claPresetGroup);
-                const folded = hit.classList.contains('collapsed');
-                if (above || !folded) return { node: hit, above: true, target: { before: first } };
-                const other = this.folderNodes.get(hit.dataset.claPresetGroup);
-                return { node: hit, above: false, target: { after: other?.ids?.at(-1) || last } };
-            }
-            return { node: hit, above, target: above ? { before: id } : { after: id } };
-        };
-        const move = event => {
-            if (!state || event.pointerId !== state.pointer) return;
-            if (!state.active) {
-                if (Math.hypot(event.clientX - state.x, event.clientY - state.y) > 10) cleanup();
-                return;
-            }
-            event.preventDefault();
-            const hit = state.hit = targetAt(event.clientX, event.clientY);
-            if (!hit) { state.line.hidden = true; return; }
-            const rect = hit.node.getBoundingClientRect(), box = this.list.getBoundingClientRect();
-            Object.assign(state.line.style, { top: `${(hit.above ? rect.top : rect.bottom) - box.top + this.list.scrollTop - 2}px` });
-            state.line.hidden = false;
-            // Auto-scroll near the edges of the scrolling panel.
-            const scroller = this.list.closest('.scrollableInner, .drawer-content') || this.list.parentElement;
-            const sr = scroller?.getBoundingClientRect();
-            if (sr) { if (event.clientY < sr.top + 40) scroller.scrollTop -= 12; else if (event.clientY > sr.bottom - 40) scroller.scrollTop += 12; }
-        };
-        const up = event => {
-            if (!state || event.pointerId !== state.pointer) return;
-            const { active, hit, record } = state;
-            cleanup();
-            if (!active) return;
-            event.preventDefault(); event.stopPropagation();
-            this.suppressHeaderClick = Date.now() + 500;
-            if (hit) this.run(() => this.moveEntries(new Set(record.ids), hit.target));
-        };
-        const cancel = () => cleanup();
-        header.addEventListener('pointerdown', event => {
-            if (event.button > 0 || event.target.closest('.cla-preset-fold-icon') || this.host.busy || this.query || this.filter !== 'all') return;
-            const record = getRecord(); if (!record?.ids?.length) return;
-            cleanup();
-            const line = this.node('div', '', 'cla-preset-drop-line'); line.hidden = true;
-            state = { record, line, pointer: event.pointerId, x: event.clientX, y: event.clientY, active: false };
-            doc.addEventListener('pointermove', move, { capture: true, passive: false });
-            doc.addEventListener('pointerup', up, true); doc.addEventListener('pointercancel', cancel, true);
-            doc.addEventListener('touchmove', block, { capture: true, passive: false });
-            timer = setTimeout(() => {
-                if (!state) return;
-                state.active = true; record.element.classList.add('cla-preset-folder-dragging');
-                this.list.style.position ||= 'relative'; this.list.append(line);
-                globalThis.navigator?.vibrate?.(15);
-            }, 400);
-        });
-        header.addEventListener('click', event => {
-            if (Date.now() < (this.suppressHeaderClick || 0)) { event.preventDefault(); event.stopImmediatePropagation(); }
-        }, true);
-        header.addEventListener('contextmenu', event => { if (state) event.preventDefault(); });
     }
     // In multi-select, dragging the ☰ of a selected row brings the other
     // selected rows along after the native drag has saved.
@@ -262,6 +187,7 @@ export class PresetEntryGroups {
         row.style.setProperty(property, value, 'important');
     }
     clearDisplay() {
+        this.groupedDrag?.destroy(); this.groupedDrag = null;
         this.statusObserver?.disconnect(); this.statusObserver = null;
         for (const node of this.folderNodes.values()) node.element.remove();
         this.folderNodes.clear();
@@ -350,6 +276,9 @@ export class PresetEntryGroups {
     render() {
         const list = this.host.manager?.listElement, context = this.context();
         if (!list?.isConnected || !context) { this.clear(); return; }
+        const drag = this.groupedDrag?.state;
+        if (drag && (!drag.source.isConnected || list !== this.list || !this.valid(drag.context))) this.groupedDrag.finish();
+        else if (drag?.active) return;
         if (this.sortable(list)?.dragging) return;
         if (this.key !== context.key || this.list !== list) {
             this.clearDisplay(); this.rawOrder = false; this.query = ''; this.filter = 'all'; this.searchFolders.clear();
@@ -435,6 +364,7 @@ export class PresetEntryGroups {
             }
             this.updateFolds();
         }
+        if (!this.rawOrder && !this.groupedDrag) this.groupedDrag = new PresetGroupedDrag(this, list);
         this.protectSortable(list, filtering);
         this.watchMultiDrag(list);
         this.host.selection?.render(); this.watchStatus(list, context);
@@ -469,7 +399,6 @@ export class PresetEntryGroups {
             });
             const remove = icon('fa-xmark', '删除分组（条目保留在原位）', () => this.removeGroup(record.folder));
             header.append(button, rename, subFold, remove); element.append(header);
-            this.dragFolder(header, () => record);
             record = { element, header, button, arrow, name, count, subFold, remove }; this.folderNodes.set(folder.id, record);
         }
         record.name.textContent = folder.name; record.count.textContent = String(folder.total);
