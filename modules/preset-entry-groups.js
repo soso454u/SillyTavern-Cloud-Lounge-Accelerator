@@ -380,6 +380,8 @@ export class PresetEntryGroups {
         for (const record of this.folderNodes.values()) {
             record.element.hidden = record.filtered || ancestorFolded(record.ancestors);
             record.end.hidden = record.element.hidden || record.folded;
+            // Themes may force every native li to display even with [hidden].
+            record.end.style.setProperty('display', record.end.hidden ? 'none' : 'block', 'important');
             record.element.classList.toggle('collapsed', record.folded);
             record.button.setAttribute('aria-expanded', String(!record.folded));
             record.arrow.className = `cla-preset-folder-arrow fa-solid ${record.folded ? 'fa-folder' : 'fa-folder-open'}`;
@@ -411,7 +413,6 @@ export class PresetEntryGroups {
             record = { element, end, header, button, arrow, name, count, subFold, remove }; this.folderNodes.set(folder.id, record);
         }
         record.name.textContent = folder.name; record.count.textContent = String(folder.total);
-        record.end.textContent = `${folder.name} · 结束`;
         record.end.setAttribute('aria-label', `${folder.name}分组结束`);
         record.button.setAttribute('aria-label', `${folder.name}，${folder.total} 条`);
         return record;

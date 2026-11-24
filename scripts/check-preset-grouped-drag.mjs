@@ -69,6 +69,7 @@ try {
         const errors = []; page.on('pageerror', error => errors.push(error.message));
         await page.goto(`http://127.0.0.1:${server.address().port}`); await page.waitForFunction(() => window.ready);
         if(theme) await page.addStyleTag({content:theme});
+        await page.addStyleTag({content:'#completion_prompt_manager #completion_prompt_manager_list > .cla-preset-folder-end[hidden]{display:block!important}'});
         const cdp = await page.context().newCDPSession(page);
         const row = id => page.locator(`[data-pm-identifier="${id}"] > .drag-handle`);
         const folder = name => page.locator('.cla-preset-fold-header').filter({has:page.getByText(name,{exact:true})});
@@ -174,14 +175,14 @@ try {
             context.prompts.find(p=>p.identifier===context.order[5].identifier).name='语言、叙述规则';
             g.saveMeta(context,{names:{},manual:[{start:ids[0],end:ids[4],name:'新分组'}],hidden:[]});g.render();
             g.setFold(g.context(),[...g.folderNodes.keys()],true);
-            const collapsed=[...g.folderNodes.values()].every(r=>r.end.hidden);
+            const collapsed=[...g.folderNodes.values()].every(r=>r.end.hidden&&getComputedStyle(r.end).display==='none');
             const id=JSON.stringify([ids[0],ids[4]]);g.setFold(g.context(),[id],false);
             const record=g.folderNodes.get(id),last=[...list.querySelectorAll('[data-pm-identifier]')].find(row=>row.dataset.pmIdentifier===ids[4]);
             document.querySelector('#scroll').scrollTop=0;window.scrollTo(0,0);
             return {collapsed,text:record.end.textContent,hidden:record.end.hidden,afterLast:last.nextElementSibling===record.end,
                 gap:record.end.nextElementSibling.getBoundingClientRect().top-record.end.getBoundingClientRect().bottom};
         });
-        assert.deepEqual({...boundary,gap:undefined},{collapsed:true,text:'新分组 · 结束',hidden:false,afterLast:true,gap:undefined});
+        assert.deepEqual({...boundary,gap:undefined},{collapsed:true,text:'',hidden:false,afterLast:true,gap:undefined});
         assert.ok(boundary.gap>=12,JSON.stringify(boundary));
         await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
         await page.evaluate(()=>{document.querySelector('#scroll').scrollTop=0;window.scrollTo(0,0)});
