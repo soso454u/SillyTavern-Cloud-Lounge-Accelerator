@@ -1,5 +1,5 @@
-import { preservePresetAnchor } from './preset-scroll-anchor.js';
 import { PresetGroupedDrag } from './preset-grouped-drag.js';
+import { PresetFoldMotion } from './preset-fold-motion.js';
 import { PRESET_GROUPS_KEY, PRESET_GROUPS_SCHEMA, folderLayout } from './preset-folder-model.js';
 
 // This is the existing preset organizer, using the same extension-settings key.
@@ -188,6 +188,7 @@ export class PresetEntryGroups {
         row.style.setProperty(property, value, 'important');
     }
     clearDisplay() {
+        this.foldMotion?.finish(); this.foldMotion = null;
         this.groupedDrag?.destroy(); this.groupedDrag = null;
         this.statusObserver?.disconnect(); this.statusObserver = null;
         for (const node of this.folderNodes.values()) { node.element.remove(); node.end.remove(); }
@@ -223,7 +224,8 @@ export class PresetEntryGroups {
             this.writeSettings({ ...(previous?.schema === PRESET_GROUPS_SCHEMA ? previous : {}), schema: PRESET_GROUPS_SCHEMA, expandedByPreset: { ...expandedByPreset, [context.key]: [...expanded] } });
         }
         else for (const id of ids) this.searchFolders.set(id, folded);
-        preservePresetAnchor(anchor || this.root, () => {
+        this.foldMotion ??= new PresetFoldMotion(this.list);
+        this.foldMotion.update(anchor || this.root, () => {
             for (const id of ids) {
                 const record = this.folderNodes.get(id);
                 if (record) record.folded = folded;
@@ -278,6 +280,7 @@ export class PresetEntryGroups {
         this.groupViewButton.setAttribute('aria-pressed', String(!this.rawOrder)); this.rawViewButton.setAttribute('aria-pressed', String(this.rawOrder));
     }
     render() {
+        this.foldMotion?.finish();
         const list = this.host.manager?.listElement, context = this.context();
         if (!list?.isConnected || !context) { this.clear(); return; }
         const drag = this.groupedDrag?.state;

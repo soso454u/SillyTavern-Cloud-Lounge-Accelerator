@@ -66,6 +66,7 @@ export class PresetGroupedDrag {
     }
     down(event) {
         if (this.state?.active || event.button > 0 || event.isPrimary === false) return;
+        if (event.target?.closest?.('.drag-handle, .cla-preset-folder-drag-handle')) this.groups.foldMotion?.finish();
         this.suppressUntil = 0; this.reconcile();
         const header = event.target?.closest?.('.cla-preset-fold-header');
         const point = event.touches?.[0] || event;

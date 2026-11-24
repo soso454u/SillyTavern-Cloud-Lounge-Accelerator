@@ -21,7 +21,7 @@ const methodStart = nativeManager.indexOf('    makeDraggable() {');
 assert.ok(methodStart>=0);
 const method = nativeManager.slice(methodStart,nativeManager.indexOf('\n    }',methodStart)+6).trim();
 sources.set('/native-sortable.js', `const isMobile=()=>matchMedia('(pointer:coarse)').matches;export function ${method}`);
-for (const file of ['style.css', ...['preset-drag-guard', 'preset-entry-actions', 'preset-entry-groups', 'preset-grouped-drag', 'preset-entry-selection', 'preset-scroll-anchor', 'preset-folder-model', 'preset-section-boundaries'].map(name => `modules/${name}.js`)]) {
+for (const file of ['style.css', ...['preset-drag-guard', 'preset-entry-actions', 'preset-entry-groups', 'preset-grouped-drag', 'preset-fold-motion', 'preset-entry-selection', 'preset-scroll-anchor', 'preset-folder-model', 'preset-section-boundaries'].map(name => `modules/${name}.js`)]) {
     sources.set(`/${file}`, await readFile(new URL(`../${file === 'style.css' ? 'dist/style.css' : file}`, import.meta.url), 'utf8'));
 }
 const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -165,6 +165,7 @@ try {
         assert.equal(await toggle.getAttribute('aria-expanded'),'true');
         if (mobile) await toggle.tap(); else await toggle.click();
         assert.equal(await toggle.getAttribute('aria-expanded'),'false');
+        await page.waitForTimeout(240);
         // Single item crosses a folded 120-row section, keeping all hidden rows.
         await drag(row('n0'), folder('Outer'), 0, true);
         const firstMove = await page.evaluate(() => order());
@@ -240,6 +241,7 @@ try {
             context.prompts.find(p=>p.identifier===context.order[5].identifier).name='语言、叙述规则';
             g.saveMeta(context,{names:{},manual:[{start:ids[0],end:ids[4],name:'新分组'}],hidden:[]});g.render();
             g.setFold(g.context(),[...g.folderNodes.keys()],true);
+            g.foldMotion.finish();
             const collapsed=[...g.folderNodes.values()].every(r=>r.end.hidden&&getComputedStyle(r.end).display==='none');
             const id=JSON.stringify([ids[0],ids[4]]);g.setFold(g.context(),[id],false);
             const record=g.folderNodes.get(id),last=[...list.querySelectorAll('[data-pm-identifier]')].find(row=>row.dataset.pmIdentifier===ids[4]);
@@ -252,6 +254,57 @@ try {
         await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
         await page.evaluate(()=>{document.querySelector('#scroll').scrollTop=0;window.scrollTo(0,0)});
         await page.screenshot({path:`/tmp/cla-preset-${version}-boundary-${mobile?'touch':'desktop'}.png`,clip:{x:0,y:0,width:mobile?390:650,height:700}});
+        // Short folders grow through intermediate heights; throttled frame
+        // sampling also verifies native rows, anchor, and cleanup stay intact.
+        await page.emulateMedia({reducedMotion:'reduce'});
+        const motionSetup = await page.evaluate(() => {
+            const g=actions.groups,record=[...g.folderNodes.values()].find(r=>r.folder.name==='新分组');
+            window.motionFolder=record;
+            g.setFold(g.context(),[record.folder.id],true,record.header);
+            document.querySelector('#scroll').scrollTop=0;window.scrollTo(0,0);
+            window.motionOrder=order();window.motionPrompts=JSON.stringify(actions.context().prompts);
+            window.motionStyles=new Map([...list.children].map(node=>[node,node.style.cssText]));
+            return g.foldMotion.records.length;
+        });
+        assert.equal(motionSetup,0,'reduced motion skips animation');
+        await page.emulateMedia({reducedMotion:'no-preference'});
+        await cdp.send('Emulation.setCPUThrottlingRate',{rate:4});
+        const motion = await page.evaluate(async () => {
+            const g=actions.groups,record=window.motionFolder;
+            const row=[...list.querySelectorAll('[data-pm-identifier]')].find(node=>node.dataset.pmIdentifier===record.ids[0]);
+            const anchor=record.header.getBoundingClientRect().top;
+            const frames=[],heights=[];let last=performance.now();
+            g.setFold(g.context(),[record.folder.id],false,record.header);
+            const count=g.foldMotion.records.length,start=performance.now();
+            while(performance.now()-start<260) {
+                await new Promise(resolve=>requestAnimationFrame(resolve));
+                const now=performance.now();frames.push(now-last);last=now;heights.push(row.getBoundingClientRect().height);
+            }
+            return {count,frames,heights,drift:Math.abs(record.header.getBoundingClientRect().top-anchor),
+                remaining:g.foldMotion.records.length,final:row.getBoundingClientRect().height,
+                direct:[...list.querySelectorAll('[data-pm-identifier]')].every(node=>node.parentElement===list)};
+        });
+        await cdp.send('Emulation.setCPUThrottlingRate',{rate:1});
+        assert.ok(motion.count>0&&motion.count<=16,JSON.stringify(motion));
+        assert.ok(motion.heights.some(height=>height>1&&height<motion.final-1),'opening has intermediate heights');
+        assert.equal(motion.remaining,0);assert.equal(motion.direct,true);assert.ok(motion.drift<=2,JSON.stringify(motion));
+        await page.evaluate(async () => {
+            const g=actions.groups,record=window.motionFolder;
+            for(const folded of [true,false,true,false,true]) {
+                g.setFold(g.context(),[record.folder.id],folded,record.header);
+                await new Promise(resolve=>setTimeout(resolve,35));
+            }
+            await new Promise(resolve=>setTimeout(resolve,240));
+        });
+        const cleanup=await page.evaluate(()=>({
+            order:order(),prompts:JSON.stringify(actions.context().prompts),remaining:actions.groups.foldMotion.records.length,
+            clean:[...motionStyles].every(([node,style])=>node.style.cssText===style),saves,renders,
+            changed:[...motionStyles].filter(([node,style])=>node.style.cssText!==style).map(([node,style])=>({id:node.dataset.pmIdentifier||node.dataset.claPresetEnd,before:style,after:node.style.cssText})),
+        }));
+        assert.deepEqual(cleanup.order,await page.evaluate(()=>motionOrder));
+        assert.equal(cleanup.prompts,await page.evaluate(()=>motionPrompts));
+        assert.deepEqual([cleanup.remaining,cleanup.clean,cleanup.saves,cleanup.renders],[0,true,8,0],JSON.stringify(cleanup.changed));
+        console.log(`${mobile?'Touch':'Desktop'} fold motion: ${motion.count} animated nodes, intermediate heights, anchor drift ${motion.drift.toFixed(1)}px; 4x CPU frame median ${motion.frames.slice().sort((a,b)=>a-b)[Math.floor(motion.frames.length/2)].toFixed(1)}ms; reduced motion, rapid reversals and exact style cleanup passed.`);
         assert.deepEqual(errors,[]);
         console.log(`${mobile?'Touch':'Desktop'}: native helper follows pointer; visible placeholder; immediate/rapid drops with pending saves; single/multi/folder moves preserve 240 rows; cancel, rollback and raw view passed (${await page.evaluate(() => renders)} full rerenders).`);
         await page.close();
