@@ -1,4 +1,4 @@
-import { findPresetSections } from './preset-section-boundaries.js';
+import { recognizePresetSections, normalizeRecognition, validateSectionRule } from './preset-section-boundaries.js';
 
 export const PRESET_GROUPS_KEY = 'cloud_lounge_accelerator_preset_groups';
 export const UNGROUPED = '未分类';
@@ -22,7 +22,7 @@ export function normalizePresetGroup(value) {
     if (!name || name.length > 60 || /[\u0000-\u001f\u007f]/u.test(name)) throw new Error('文件夹名称请输入 1–60 个字符');
     return name;
 }
-export function emptyFolders() { return { schema: 4, folders: [], assignments: {}, collapsed: [UNGROUPED_ID], order: {}, fingerprints: {} }; }
+export function emptyFolders() { return { schema: 4, folders: [], assignments: {}, collapsed: [UNGROUPED_ID], order: {}, fingerprints: {}, recognition: normalizeRecognition() }; }
 export function normalizeFolderState(raw, prompts = [], scope = '') {
     const state = emptyFolders(), known = new Set(prompts.map(prompt => prompt.identifier));
     if (raw?.schema !== 4) {
@@ -71,6 +71,7 @@ export function normalizeFolderState(raw, prompts = [], scope = '') {
         if (Array.isArray(raw.hiddenSections)) state.hiddenSections = [...new Set(raw.hiddenSections.filter(key => typeof key === 'string'))];
         if (raw.legacyBackup) state.legacyBackup = structuredClone(raw.legacyBackup);
     }
+    state.recognition = normalizeRecognition(raw?.recognition);
     return state;
 }
 export function folderPath(state, id) {
@@ -85,7 +86,7 @@ export function createFolder(state, name, parentId = null, newId = newFolderId) 
     if (state.folders.some(folder => folder.parentId === parentId && folder.name === name)) throw new Error('同一级已有同名文件夹');
     const id = newId();
     state.folders.push({ id, name, parentId });
-    state.collapsed.push(id);
+    if (!state.recognition?.defaultExpanded) state.collapsed.push(id);
     return id;
 }
 export function renameFolder(state, id, name) {
@@ -133,7 +134,7 @@ export function assignEntries(state, prompts, ids, folderId, source = 'manual') 
         saveAssignment(state, byId.get(id), folderId, source);
     }
 }
-export function syncPresetSections(state, entries) {
+export function syncPresetSections(state, entries, recognition = recognizePresetSections(entries, state.recognition)) {
     const oldAssignments = state.assignments;
     const assignments = new Map(Object.entries(oldAssignments).filter(([, item]) => !['auto', 'section'].includes(item.source)));
     const folders = new Map(state.folders.map(folder => [folder.id, folder]));
@@ -145,17 +146,18 @@ export function syncPresetSections(state, entries) {
         for (let id = item.folderId; id && !obsolete.has(id); id = folders.get(id)?.parentId) obsolete.add(id);
     }
     const active = [];
-    const byStart = new Map(findPresetSections(entries).map(section => [section.start, section]));
+    const byStart = new Map(recognition.sections.map(section => [section.start, section]));
     let changed = false;
     entries.forEach((prompt, index) => {
         while (active.length && active.at(-1).end < index) active.pop();
         const section = byStart.get(index);
         if (section) {
-            const key = prompt.identifier;
+            const key = section.key;
             let folder = null;
-            if (!suppressed.has(key)) {
+            if (!suppressed.has(key) && !suppressed.has(prompt.identifier)) {
                 const parentId = active.at(-1)?.folderId || null;
-                folder = knownSections.get(key);
+                folder = knownSections.get(key) || knownSections.get(prompt.identifier);
+                if (folder && folder.sectionKey !== key) { folder.sectionKey = key; changed = true; }
                 if (!folder) {
                     folder = state.folders.find(item => !item.sectionKey && item.parentId === parentId && item.name === section.name);
                     if (!folder) {
@@ -164,7 +166,7 @@ export function syncPresetSections(state, entries) {
                         folder = { id, name: section.name, parentId };
                         folders.set(id, folder);
                         state.folders.push(folder);
-                        state.collapsed.push(id);
+                        if (!state.recognition?.defaultExpanded) state.collapsed.push(id);
                     }
                     folder.sectionKey = key;
                     changed = true;
@@ -209,43 +211,26 @@ export function syncPresetSections(state, entries) {
     return changed;
 }
 
-// A folder is emitted where its rows actually occur. A hand-filed folder may
-// span separate ranges; each range has a header sharing the same fold setting.
+// One stable node per folder, independent of the native execution sequence.
 export function folderLayout(state, orderedEntries) {
-    const folders = new Map(state.folders.map(folder => [folder.id, folder]));
-    const paths = new Map(), firstSegment = new Map(), roots = [];
-    const pathTo = id => {
-        if (!id || !folders.has(id)) return [];
-        if (!paths.has(id)) paths.set(id, [...pathTo(folders.get(id).parentId), id]);
-        return paths.get(id);
+    const nodes = new Map(state.folders.map(folder => [folder.id, { ...folder, children: [], total: 0 }]));
+    const ungrouped = { id: UNGROUPED_ID, name: UNGROUPED, children: [], total: 0 };
+    const roots = [];
+    for (const node of nodes.values()) (nodes.get(node.parentId)?.children || roots).push(node);
+    for (const entry of orderedEntries) (nodes.get(assignedFolder(state, entry.identifier)) || ungrouped).children.push({ entry });
+    const count = node => {
+        node.children = node.children.filter(child => child.entry || count(child));
+        node.total = node.children.reduce((sum, child) => sum + (child.entry ? 1 : child.total), 0);
+        return node.total > 0 || !node.sectionKey;
     };
-    let position = 0;
-    const add = (id, siblings) => {
-        const segment = { ...folders.get(id), children: [], total: 0, segment: position++ };
-        siblings.push(segment);
-        if (!firstSegment.has(id)) firstSegment.set(id, segment);
-        return segment;
-    };
-    const active = [];
-    for (const entry of orderedEntries) {
-        const path = pathTo(assignedFolder(state, entry.identifier));
-        let common = 0;
-        while (common < path.length && active[common]?.id === path[common]) common++;
-        active.length = common;
-        for (const id of path.slice(common)) active.push(add(id, active.at(-1)?.children || roots));
-        for (const segment of active) segment.total++;
-        (active.at(-1)?.children || roots).push({ entry });
-    }
-    for (const folder of state.folders) {
-        if (folder.sectionKey && !firstSegment.has(folder.id)) continue;
-        let siblings = roots;
-        for (const id of pathTo(folder.id)) siblings = (firstSegment.get(id) || add(id, siblings)).children;
-    }
-    return roots;
+    const result = roots.filter(count);
+    count(ungrouped); result.push(ungrouped);
+    return result;
 }
 export function importFolderMetadata(raw, prompts, scope = '') {
     if (raw?.schema !== 4 || !Array.isArray(raw.folders)) throw new Error('请选择本插件导出的分类文件');
     const state = normalizeFolderState(raw, prompts, scope), byId = new Map(prompts.map(prompt => [prompt.identifier, prompt]));
+    for (const rule of state.recognition.rules) validateSectionRule(rule);
     let skipped = 0;
     for (const id of Object.keys(state.assignments)) if (!byId.has(id) || raw.fingerprints?.[id] !== promptFingerprint(byId.get(id))) { delete state.assignments[id]; delete state.fingerprints[id]; skipped++; }
     return { state, skipped };

@@ -1,185 +1,191 @@
-// Run against a disposable SillyTavern instance with this build installed.
-// CLA_TAVERN_URL=http://127.0.0.1:8000 CLA_PRESET_FIXTURE=/path/to/preset.json node scripts/check-preset-entry-groups.mjs
+// Disposable real SillyTavern only. No simplified DOM or external requests.
+// CLA_TAVERN_URL=http://127.0.0.1:18781 CLA_PRESET_FIXTURE=/path/to/preset.json node scripts/check-preset-entry-groups.mjs
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-
 const { CLA_TAVERN_URL, CLA_PRESET_FIXTURE, CLA_BROWSER_EXECUTABLE } = process.env;
 assert.ok(CLA_TAVERN_URL && CLA_PRESET_FIXTURE, 'Set CLA_TAVERN_URL and CLA_PRESET_FIXTURE');
 const base = new URL(CLA_TAVERN_URL);
 assert.ok(['127.0.0.1', 'localhost', '[::1]'].includes(base.hostname), 'Use a local disposable SillyTavern');
-const fixture = await readFile(CLA_PRESET_FIXTURE);
-const fixtureOrder = JSON.parse(fixture).prompt_order;
-const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url)));
+const fixture = await readFile(CLA_PRESET_FIXTURE), manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url)));
 const { chromium } = createRequire(import.meta.url)('playwright');
 const browser = await chromium.launch({ headless: true, ...(CLA_BROWSER_EXECUTABLE ? { executablePath: CLA_BROWSER_EXECUTABLE } : {}) });
-
-const rows = '#completion_prompt_manager_list > [data-pm-identifier]';
-const headers = '#completion_prompt_manager_list > .cla-preset-fold-header';
-const rendered = page => page.evaluate(rows => [...document.querySelectorAll(rows)]
-    .filter(row => getComputedStyle(row).display !== 'none' && row.getClientRects().length)
-    .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
-    .map(row => row.dataset.pmIdentifier), rows);
-const assertHidden = async (page, ids) => {
-    const hidden = await page.evaluate(({ rows, ids }) => [...document.querySelectorAll(rows)]
-        .filter(row => ids.includes(row.dataset.pmIdentifier) && getComputedStyle(row).display === 'none'
-            && row.getClientRects().length === 0).length, { rows, ids });
-    assert.equal(hidden, ids.length, 'hidden native rows must have display:none and no layout box');
-};
-const snapshot = page => page.evaluate(async () => {
-    const { promptManager: manager } = await import('/scripts/openai.js');
-    return JSON.stringify([manager.serviceSettings.prompt_order, manager.serviceSettings.prompts]);
-});
+const list = '#completion_prompt_manager_list', rows = `${list} [data-pm-identifier]`;
 const metadata = page => page.evaluate(async () => {
-    const { promptManager: manager, oai_settings: settings } = await import('/scripts/openai.js');
-    return window.SillyTavern.getContext().extensionSettings.cloud_lounge_accelerator_preset_groups[
-        JSON.stringify(['openai', settings.preset_settings_openai, String(manager.activeCharacter.id)])];
+    const { promptManager: m, oai_settings: s } = await import('/scripts/openai.js');
+    return window.SillyTavern.getContext().extensionSettings.cloud_lounge_accelerator_preset_groups[JSON.stringify(['openai', s.preset_settings_openai, String(m.activeCharacter.id)])];
 });
-
+const nativeSnapshot = page => page.evaluate(async () => { const m = (await import('/scripts/openai.js')).promptManager; return JSON.stringify([m.serviceSettings.prompts, m.serviceSettings.prompt_order]); });
+const rerender = page => page.evaluate(async () => (await import('/scripts/openai.js')).promptManager.renderPromptManagerListItems());
 try {
     for (const mobile of process.env.CLA_MOBILE_ONLY ? [true] : [false, true]) {
-        const context = await browser.newContext(mobile
-            ? { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }
-            : { viewport: { width: 1280, height: 900 } });
+        const context = await browser.newContext(mobile ? { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true } : { viewport: { width: 1280, height: 900 } });
         await context.route('**/*', route => new URL(route.request().url()).origin === base.origin ? route.continue() : route.abort());
-        const page = await context.newPage(), resources = new Set();
-        page.setDefaultTimeout(10_000);
-        page.on('response', response => {
-            if (response.ok()) {
-                const url = new URL(response.url());
-                if (url.pathname.includes('/extensions/') && url.pathname.includes('/dist/')) resources.add(url.pathname.split('/dist/').pop() + url.search);
-            }
-        });
+        const page = await context.newPage(), resources = new Set(), errors = [];
+        page.setDefaultTimeout(10_000); page.on('pageerror', error => errors.push(error.message));
+        page.on('response', response => { if (response.ok() && response.url().includes('/cloud-lounge-accelerator/dist/')) resources.add(response.url().split('/dist/')[1]); });
         const act = locator => mobile ? locator.tap() : locator.click();
-        const folder = name => page.locator(headers).filter({ has: page.locator('.cla-preset-fold-name').getByText(name, { exact: true }) });
         const button = name => page.getByRole('button', { name, exact: true });
-        const search = page.getByRole('searchbox', { name: '搜索名称或内容' });
-        const filter = page.getByLabel('条目筛选');
-        const openDrawer = async () => {
-            if (await page.locator('#leftNavDrawerIcon').evaluate(icon => icon.classList.contains('closedIcon'))) await act(page.locator('#leftNavDrawerIcon'));
-        };
-
+        const folder = name => page.locator('.cla-preset-folder').filter({ has: page.locator(':scope > .cla-preset-fold-header .cla-preset-fold-name').getByText(name, { exact: true }) });
+        const header = name => folder(name).locator(':scope > .cla-preset-fold-header');
+        const toggle = name => header(name).locator('.cla-preset-fold-toggle');
+        const settings = page.locator('.cla-preset-settings');
+        const openDrawer = async () => { if (await page.locator('#leftNavDrawerIcon').evaluate(icon => icon.classList.contains('closedIcon'))) await act(page.locator('#leftNavDrawerIcon')); };
         await page.goto(base.href);
-        await page.locator('.cla-preset-groups').waitFor({ state: 'attached', timeout: 30_000 });
-        await page.locator('dialog[open]').waitFor({ state: 'hidden' });
-        if (await page.locator('#main_api').inputValue() !== 'openai') {
-            await act(page.locator('#API-status-top'));
-            await page.locator('#main_api').selectOption('openai');
-        }
+        await page.waitForFunction(() => !!window.SillyTavern?.getContext?.().extensionSettings);
+        if (await page.locator('#main_api').inputValue() !== 'openai') { await act(page.locator('#API-status-top')); await page.locator('#main_api').selectOption('openai'); }
         await page.locator('#themes').selectOption(mobile ? 'Cappuccino' : 'Dark Lite', { force: true });
         await openDrawer();
-        const presetName = `CLA folders ${mobile ? 'touch' : 'desktop'} ${Date.now()}`;
-        await page.locator('#openai_preset_import_file').setInputFiles({ name: `${presetName}.json`, mimeType: 'application/json', buffer: fixture });
-        // Some real presets trigger native proxy and embedded-regex prompts.
-        const proxy = page.locator('dialog[open]').getByRole('button', { name: 'Remove them', exact: true });
-        const nativeImportReady = page.waitForFunction(name => {
-            const { chatCompletionSettings, extensionSettings } = window.SillyTavern.getContext();
-            return chatCompletionSettings.preset_settings_openai === name
-                && Object.keys(extensionSettings.cloud_lounge_accelerator_preset_groups || {}).some(key => JSON.parse(key)[1] === name);
-        }, presetName);
-        if (await Promise.race([proxy.waitFor({ state: 'visible' }).then(() => true), nativeImportReady.then(() => false)])) await act(proxy);
-        await nativeImportReady;
-        const regexDialog = page.locator('dialog[open]').filter({ hasText: /内置正则|内建正则|embedded regex|preset contains.*regex/i });
-        if (await regexDialog.count()) await act(regexDialog.locator('.popup-button-cancel'));
         await page.locator('dialog[open]').waitFor({ state: 'hidden' });
-        assert.ok(resources.has(manifest.js.split('/').pop()));
-        assert.ok(resources.has(manifest.css.split('/').pop()));
-        const original = await snapshot(page);
-        const [loadedOrder] = JSON.parse(original);
-        for (const expected of fixtureOrder) {
-            assert.deepEqual(loadedOrder.find(group => String(group.character_id) === String(expected.character_id)), expected);
-        }
-        const ids = await page.locator(rows).evaluateAll(items => items.map(row => row.dataset.pmIdentifier));
-        const characterId = await page.evaluate(async () => String((await import('/scripts/openai.js')).promptManager.activeCharacter.id));
-        const expectedOrder = fixtureOrder.find(group => String(group.character_id) === characterId)
-            .order.map(item => item.identifier).filter(id => ids.includes(id));
-        assert.ok(ids.length >= 100);
-        assert.deepEqual(ids, expectedOrder);
-        const state = await metadata(page);
-        assert.ok(Object.values(state.assignments).some(item => item.source === 'section'));
-        assert.equal(Object.values(state.assignments).some(item => item.source === 'auto'), false);
-        const parent = state.folders.find(item => item.name === '规则' && !item.parentId);
-        const child = state.folders.find(item => item.name === '文风' && item.parentId === parent?.id);
-        assert.ok(child, 'Use the large fixture with the nested 规则 / 文风 region');
-        const parentRow = folder(parent.name), childRow = folder(child.name);
-        const assigned = ids.filter(id => state.assignments[id]?.folderId);
-        const outside = ids.filter(id => !state.assignments[id]?.folderId);
-        const byId = new Map(state.folders.map(item => [item.id, item]));
-        const inFolder = (id, target) => {
-            for (let current = state.assignments[id]?.folderId; current; current = byId.get(current)?.parentId) {
-                if (current === target) return true;
-            }
-            return false;
-        };
-        const parentMembers = ids.filter(id => inFolder(id, parent.id));
-        const childMembers = ids.filter(id => inFolder(id, child.id));
-        const parentDirect = ids.filter(id => state.assignments[id]?.folderId === parent.id);
-        const childDirect = ids.filter(id => state.assignments[id]?.folderId === child.id);
-        await parentRow.waitFor();
-        assert.equal(await childRow.count(), 0);
-        assert.equal(Number(await parentRow.locator('.cla-preset-fold-count').textContent()), parentMembers.length);
-        assert.deepEqual(await rendered(page), outside);
-        await assertHidden(page, assigned);
-
-        await act(parentRow.locator('.cla-preset-fold-toggle'));
-        await childRow.waitFor();
-        assert.deepEqual(await rendered(page), ids.filter(id => outside.includes(id) || parentDirect.includes(id)));
-        await assertHidden(page, childMembers);
-        await act(childRow.locator('.cla-preset-folder-arrow'));
-        assert.deepEqual(await rendered(page), ids.filter(id => [outside, parentDirect, childDirect].some(items => items.includes(id))));
-        if (mobile) {
-            const line = await childRow.evaluate(row => ({
-                flow: getComputedStyle(row).flexWrap, height: row.getBoundingClientRect().height,
-                overflows: row.scrollWidth > row.clientWidth + 1,
-            }));
-            assert.equal(line.flow, 'nowrap');
-            assert.ok(line.height >= 44 && line.height < 60);
-            assert.equal(line.overflows, false);
-        }
-        await act(parentRow.locator('.cla-preset-fold-toggle'));
-        await assertHidden(page, parentMembers);
-        await page.evaluate(async () => (await import('/scripts/openai.js')).promptManager.renderPromptManagerListItems());
-        await assertHidden(page, parentMembers);
-
-        await filter.selectOption('enabled');
-        await assertHidden(page, parentMembers);
-        await filter.selectOption('all');
-        await search.fill(child.name);
-        assert.equal(await childRow.locator('.cla-preset-fold-toggle').getAttribute('aria-expanded'), 'true');
-        await search.fill('');
-        await assertHidden(page, parentMembers);
-        await act(parentRow.locator('.cla-preset-fold-toggle'));
-        assert.equal(await childRow.locator('.cla-preset-fold-toggle').getAttribute('aria-expanded'), 'true');
-
-        await act(button('全部展开'));
-        assert.deepEqual(await rendered(page), expectedOrder, 'visual position in the grouped view must match prompt_order');
-        const positions = await page.evaluate(({ rows, headers }) => [...document.querySelectorAll(`${rows}, ${headers}`)]
-            .filter(row => row.getClientRects().length)
-            .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
-            .map(row => row.dataset.pmIdentifier || `folder:${row.dataset.claPresetGroup}`), { rows, headers });
-        for (const section of [parent, child]) {
-            assert.equal(positions[positions.indexOf(`folder:${section.id}`) + 1], section.sectionKey,
-                'folder header should immediately precede its opening divider in the original list');
-        }
+        const name = `CLA 2.1.80 ${mobile ? 'touch' : 'desktop'} ${Date.now()}`;
+        await page.locator('#openai_preset_import_file').setInputFiles({ name: `${name}.json`, mimeType: 'application/json', buffer: fixture });
+        const ready = page.waitForFunction(name => window.SillyTavern.getContext().chatCompletionSettings.preset_settings_openai === name && Object.keys(window.SillyTavern.getContext().extensionSettings.cloud_lounge_accelerator_preset_groups || {}).some(key => JSON.parse(key)[1] === name), name);
+        const proxy = page.locator('dialog[open]').getByRole('button', { name: 'Remove them', exact: true });
+        if (await Promise.race([proxy.waitFor({ state: 'visible' }).then(() => true), ready.then(() => false)])) await act(proxy);
+        await ready;
+        const embedded = page.locator('dialog[open]').filter({ hasText: /内置正则|内建正则|embedded regex|preset contains.*regex/i });
+        if (await embedded.count()) await act(embedded.locator('.popup-button-cancel'));
+        await page.locator('dialog[open]').waitFor({ state: 'hidden' });
+        const original = await nativeSnapshot(page), ids = await page.locator(rows).evaluateAll(items => items.map(item => item.dataset.pmIdentifier));
+        assert.ok(ids.length >= 100); assert.equal(new Set(ids).size, ids.length);
+        assert.ok(resources.has(manifest.js.split('/').pop())); assert.ok(resources.has(manifest.css.split('/').pop()));
+        assert.equal(await settings.evaluate(node => node.open), false);
+        assert.equal(await button('全部展开').isVisible(), false);
+        assert.ok((await metadata(page)).folders.some(item => item.name === 'NSFW'));
         await act(button('原始顺序'));
-        assert.equal(await page.locator(headers).count(), 0);
-        assert.deepEqual(await rendered(page), expectedOrder);
-        await act(button('分类浏览'));
-        assert.deepEqual(await rendered(page), expectedOrder);
-
+        const expected = await page.evaluate(async () => { const m = (await import('/scripts/openai.js')).promptManager; return m.getPromptOrderForCharacter(m.activeCharacter).map(item => item.identifier); });
+        assert.deepEqual(await page.locator(`${list} > [data-pm-identifier]`).evaluateAll(items => items.map(item => item.dataset.pmIdentifier)), expected);
+        await act(button('分类浏览')); await rerender(page);
+        assert.equal(await page.locator(rows).count(), expected.length, 'native rerender must not retain stale duplicate rows');
+        await act(settings.locator('summary')); await act(button('全部展开'));
+        const enabled = page.getByLabel('箭头方括号 · 内置'); await enabled.uncheck();
+        assert.equal(await folder('NSFW').count(), 0, 'disabling rule restores ordinary entries');
+        await act(button('+ 添加自定义规则'));
+        await page.getByRole('textbox', { name: '规则名称', exact: true }).fill('自定义箭头');
+        await page.getByLabel('高级正则表达式', { exact: true }).check();
+        await page.getByRole('textbox', { name: '开始标记模板', exact: true }).fill('[');
+        await page.getByRole('textbox', { name: '结束标记模板', exact: true }).fill('x');
+        await act(button('保存规则')); assert.match(await page.locator('.cla-preset-rule-editor [role=alert]').textContent(), /正则表达式无效/);
+        await page.getByLabel('高级正则表达式', { exact: true }).uncheck();
+        await page.getByRole('textbox', { name: '开始标记模板', exact: true }).fill('====↓[{name}]↓====');
+        await page.getByRole('textbox', { name: '结束标记模板', exact: true }).fill('====↑[{name}]↑====');
+        await act(button('保存规则')); assert.equal(await folder('NSFW').count(), 1);
+        await page.screenshot({ path: `/tmp/cla-2180-settings-${mobile ? 'touch' : 'desktop'}.png` });
+        await page.getByLabel('单标题等号 · 内置').check(); await page.getByLabel('头尾识别模式', { exact: true }).selectOption('mixed');
+        assert.ok((await metadata(page)).folders.some(item => item.name === '基调等'), 'explicit heading mode recognizes real single title');
+        await act(settings.locator('summary'));
+        // Seed only display metadata; the real prompts and order remain untouched.
+        const seeded = await page.evaluate(async () => {
+            const { promptManager: m, oai_settings: s } = await import('/scripts/openai.js');
+            const key = JSON.stringify(['openai', s.preset_settings_openai, String(m.activeCharacter.id)]), store = window.SillyTavern.getContext().extensionSettings.cloud_lounge_accelerator_preset_groups;
+            const entries = m.getPromptOrderForCharacter(m.activeCharacter).map(item => item.identifier);
+            const state = store[key]; state.recognition.mode = 'off'; state.folders = [{ id: 'parent', name: '测试父目录', parentId: null }, { id: 'child', name: '测试子目录', parentId: 'parent' }, { id: 'middle', name: '测试中段', parentId: null }, { id: 'bottom', name: '测试长尾', parentId: null }];
+            state.assignments = Object.fromEntries(entries.map((id, index) => [id, { folderId: index % 11 === 0 ? 'child' : index < 60 ? 'parent' : index < 130 ? 'middle' : 'bottom', source: 'manual' }]));
+            state.collapsed = []; await m.renderPromptManagerListItems();
+            return { entries, child: entries.filter(id => state.assignments[id].folderId === 'child') };
+        });
+        assert.equal(await page.locator(rows).count(), expected.length);
+        assert.equal(await folder('测试父目录').count(), 1); assert.equal(await folder('测试子目录').count(), 1);
+        await toggle('测试子目录').evaluate(node => { window.claStableHeader = node; });
+        await act(toggle('测试子目录'));
+        assert.equal(await folder('测试子目录').locator('[data-pm-identifier]').evaluateAll(items => items.every(item => item.getClientRects().length === 0)), true);
+        await act(toggle('测试父目录'));
+        assert.equal(await folder('测试父目录').locator('[data-pm-identifier]').evaluateAll(items => items.every(item => item.getClientRects().length === 0)), true);
+        await act(toggle('测试父目录'));
+        assert.equal(await toggle('测试子目录').getAttribute('aria-expanded'), 'false');
+        assert.equal(await toggle('测试子目录').evaluate(node => node === window.claStableHeader), true);
+        // Real nested drawer scroll frame, middle and long bottom collapse, 10 repeats.
+        for (const target of ['测试中段', '测试长尾']) {
+            const positions = [];
+            await header(target).evaluate(node => {
+                const frames = []; for (let p = node.parentElement; p; p = p.parentElement) if (/auto|scroll/.test(getComputedStyle(p).overflowY)) frames.push(p);
+                const frame = frames.find(p => p.scrollHeight > p.clientHeight) || document.scrollingElement;
+                frame.scrollTop += node.getBoundingClientRect().top - frame.getBoundingClientRect().top - Math.min(180, frame.clientHeight / 3);
+            });
+            for (let index = 0; index < 10; index++) {
+                const before = await header(target).evaluate(node => node.getBoundingClientRect().top);
+                await act(toggle(target)); await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+                const after = await header(target).evaluate(node => ({ top: node.getBoundingClientRect().top, bottom: node.getBoundingClientRect().bottom, clamped: (() => { for (let p=node.parentElement; p; p=p.parentElement) if (/auto|scroll/.test(getComputedStyle(p).overflowY) && p.scrollHeight > p.clientHeight && p.scrollTop >= p.scrollHeight-p.clientHeight-2) return true; return false; })() }));
+                assert.ok(after.bottom > 0 && after.top < (mobile ? 844 : 900), 'clicked heading stays visible after height clamp');
+                assert.ok(Math.abs(after.top - before) < 3 || (after.clamped && await toggle(target).getAttribute('aria-expanded') === 'false'), `anchor drift without height clamp ${target}: ${before} -> ${after.top}`); positions.push(after.top);
+            }
+            assert.ok(Math.max(...positions) - Math.min(...positions) < 3, 'ten toggles do not accumulate drift');
+        }
+        await page.getByRole('searchbox', { name: '搜索名称或内容' }).fill('测试子目录');
+        assert.equal(await toggle('测试子目录').getAttribute('aria-expanded'), 'true');
+        await page.getByRole('searchbox', { name: '搜索名称或内容' }).fill('');
+        assert.equal(await toggle('测试子目录').getAttribute('aria-expanded'), 'false');
+        await page.getByLabel('条目筛选').selectOption('enabled'); await page.getByLabel('条目筛选').selectOption('all');
+        assert.equal(await toggle('测试子目录').getAttribute('aria-expanded'), 'false');
+        await rerender(page); assert.equal(await page.locator(rows).count(), expected.length);
+        assert.equal(await toggle('测试子目录').getAttribute('aria-expanded'), 'false');
+        // Long hold uses actual touch/mouse events; edit/toggle remain native.
+        await act(toggle('测试子目录'));
+        const first = folder('测试子目录').locator('[data-pm-identifier]').first(), nameCell = first.locator('.completion_prompt_manager_prompt_name');
+        await nameCell.scrollIntoViewIfNeeded(); const box = await nameCell.boundingBox();
+        if (mobile) {
+            const cdp = await context.newCDPSession(page);
+            await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x + 15, y: box.y + box.height / 2 }] });
+            await new Promise(resolve => setTimeout(resolve, 560));
+            await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        } else { await page.mouse.move(box.x + 15, box.y + box.height / 2); await page.mouse.down(); await new Promise(resolve => setTimeout(resolve, 560)); await page.mouse.up(); }
+        assert.equal(await first.getAttribute('aria-selected'), 'true'); assert.notEqual(await first.evaluate(node => getComputedStyle(node).outlineStyle), 'none'); assert.equal(await first.locator('input[type=checkbox]').count(), 0);
+        // Editing controls must work during multi-select, without saving a draft.
+        const editable = page.locator(`${rows}:has(.prompt-manager-edit-action)`).filter({ visible: true }).first();
+        const editId = await editable.getAttribute('data-pm-identifier');
+        await act(editable.locator('.prompt-manager-edit-action'));
+        assert.equal(await page.locator('#completion_prompt_manager_popup_entry_form_save').getAttribute('data-pm-prompt'), editId);
+        await act(page.locator('#completion_prompt_manager_popup_entry_form_close'));
+        await act(button('取消'));
+        assert.equal(await nativeSnapshot(page), original, 'all classification/fold/rule operations must leave every native byte unchanged');
+        await act(button('原始顺序'));
+        assert.deepEqual(await page.locator(`${list} > [data-pm-identifier]`).evaluateAll(items => items.map(item => item.dataset.pmIdentifier)), expected);
+        await act(button('分类浏览')); await act(toggle('测试子目录'));
+        await header('测试父目录').scrollIntoViewIfNeeded();
+        await page.screenshot({ path: `/tmp/cla-2180-${mobile ? 'touch' : 'desktop'}.png` });
+        // The native toggle still works on the reparented native row.
+        const toggleRow = page.locator(`${rows}:has(.prompt-manager-toggle-action)`).filter({ visible: true }).first();
+        const toggleId = await toggleRow.getAttribute('data-pm-identifier');
+        await act(toggleRow.locator('.prompt-manager-toggle-action'));
+        await act(page.locator(`${rows}[data-pm-identifier="${toggleId}"] .prompt-manager-toggle-action`));
+        assert.equal(await nativeSnapshot(page), original, 'two native toggles restore the original enabled state');
+        // Save/reload and switch away/back, including custom templates.
+        const saved = await metadata(page), selectedPreset = await page.locator('#settings_preset_openai').inputValue();
         const persisted = page.waitForResponse(response => response.url().endsWith('/api/settings/save') && response.ok());
-        await act(button('全部折叠'));
-        await persisted;
-        await page.reload();
-        await page.locator('.cla-preset-groups').waitFor({ state: 'attached', timeout: 30_000 });
-        await openDrawer();
-        await parentRow.waitFor();
-        assert.deepEqual(await rendered(page), outside);
-        await assertHidden(page, assigned);
-        assert.equal(await snapshot(page), original);
-        console.log(`${mobile ? 'Touch / Cappuccino' : 'Desktop / Dark Lite'}: ${ids.length} rows in original visual order, nested dividers in place, native data unchanged`);
+        await page.evaluate(async () => (await import('/script.js')).saveSettingsDebounced()); await persisted;
+        const other = await page.locator('#settings_preset_openai option').evaluateAll((options, current) => options.find(option => option.value !== current)?.value, selectedPreset);
+        await page.locator('#settings_preset_openai').selectOption(other);
+        await page.waitForFunction(() => !document.querySelector('[data-cla-preset-group="parent"]'));
+        await page.locator('#settings_preset_openai').selectOption(selectedPreset);
+        await header('测试父目录').waitFor();
+        assert.deepEqual((await metadata(page)).collapsed, saved.collapsed);
+        assert.deepEqual((await metadata(page)).recognition, saved.recognition);
+        await page.reload(); await page.locator('.cla-preset-groups').waitFor({ state: 'attached' }); await openDrawer();
+        await header('测试父目录').waitFor();
+        assert.deepEqual((await metadata(page)).collapsed, saved.collapsed);
+        assert.deepEqual((await metadata(page)).recognition, saved.recognition);
+        // Exercise malformed markers through the real renderer, retaining the
+        // real preset's size/content and changing names only in this fixture.
+        const boundary = await page.evaluate(async () => {
+            const { promptManager: m, oai_settings: s } = await import('/scripts/openai.js');
+            const key = JSON.stringify(['openai', s.preset_settings_openai, String(m.activeCharacter.id)]), store = window.SillyTavern.getContext().extensionSettings.cloud_lounge_accelerator_preset_groups;
+            const entries = m.getPromptOrderForCharacter(m.activeCharacter), names = ['====↓[重复]↓====', '普通甲', '====↑[重复]↑====', '====↓[重复]↓====', '普通乙', '====↑[重复]↑====', '====↓[交叉甲]↓====', '====↓[交叉乙]↓====', '正文', '====↑[交叉甲]↑====', '====↑[交叉乙]↑====', '『 错误开始', '错误结束 』', '====↓[缺失]↓====', '普通丙', '普通丁'];
+            const changes = new Map(entries.slice(0, names.length).map((item, index) => [item.identifier, names[index]]));
+            m.serviceSettings.prompts = m.serviceSettings.prompts.map(prompt => changes.has(prompt.identifier) ? { ...prompt, name: changes.get(prompt.identifier) } : prompt);
+            store[key] = { ...store[key], folders: [], assignments: {}, collapsed: [], fingerprints: {}, hiddenSections: [], recognition: { ...store[key].recognition, mode: 'mixed' } };
+            const before = JSON.stringify([m.serviceSettings.prompts, m.serviceSettings.prompt_order]);
+            await m.renderPromptManagerListItems();
+            return { ids: entries.map(item => item.identifier), before, unchanged: before === JSON.stringify([m.serviceSettings.prompts, m.serviceSettings.prompt_order]) };
+        });
+        assert.equal(boundary.unchanged, true);
+        const boundaryState = await metadata(page), repeats = boundaryState.folders.filter(item => item.name === '重复');
+        assert.equal(repeats.length, 2); assert.notEqual(repeats[0].id, repeats[1].id);
+        for (const id of boundary.ids.slice(6, 16)) assert.equal(boundaryState.assignments[id], undefined, 'malformed or missing pairs must not swallow following entries');
+        assert.match(await page.locator('.cla-preset-diagnostics summary').textContent(), /[1-9]\d* 个异常/);
+        assert.equal(await page.locator(rows).count(), expected.length);
+        assert.equal(await nativeSnapshot(page), boundary.before);
+        assert.equal(errors.length, 0, errors.join('\n'));
+        console.log(`${mobile ? 'Touch / Cappuccino' : 'Desktop / Dark Lite'}: ${expected.length} real rows; unique tree, custom rules, headings, nested folding, 20 scroll toggles, search/filter, native rerender, long hold, native edit/toggle, preset switching/reload and malformed markers passed; native bytes unchanged; ${manifest.version} dist loaded`);
         await context.close();
     }
-} finally {
-    await browser.close();
-}
+} finally { await browser.close(); }

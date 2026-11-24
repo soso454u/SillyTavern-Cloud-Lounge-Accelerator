@@ -30,7 +30,7 @@ export class PresetEntrySelection {
     name(target) {
         if (target?.closest?.('button, input, select, .prompt_manager_prompt_controls, .drag-handle')) return null;
         const row = target?.closest?.(ROW), name = row?.querySelector(NAME);
-        return name && this.host.manager?.listElement?.contains(row) && !row.classList.contains('cla-preset-group-hidden') ? name : null;
+        return name && this.host.manager?.listElement?.contains(row) && row.getClientRects().length > 0 ? name : null;
     }
     scope() { return this.host.groups.context()?.key || this.host.context()?.prompts; }
     current(context = this.context) { return this.host.current(context) && this.scope() === this.scopeKey; }
@@ -86,7 +86,7 @@ export class PresetEntrySelection {
             this.suppressClick = false; event.preventDefault(); event.stopImmediatePropagation(); return;
         }
         const row = event.target?.closest?.(ROW);
-        const name = this.mode && row && this.host.manager?.listElement?.contains(row) ? row.querySelector(NAME) : this.name(event.target);
+        const name = this.name(event.target);
         if (!name) return;
         if (!this.mode) {
             if (!event.ctrlKey && !event.metaKey) return;
@@ -98,7 +98,7 @@ export class PresetEntrySelection {
         if (this.host.busy) return;
         const id = name.closest(ROW).dataset.pmIdentifier;
         if (event.shiftKey && this.anchor) {
-            const rows = [...this.host.manager.listElement.querySelectorAll(ROW)].filter(row => !row.classList.contains('cla-preset-group-hidden'))
+            const rows = [...this.host.manager.listElement.querySelectorAll(ROW)].filter(row => row.getClientRects().length > 0)
                 .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
             const first = rows.findIndex(row => row.dataset.pmIdentifier === this.anchor), last = rows.findIndex(row => row.dataset.pmIdentifier === id);
             if (first >= 0 && last >= 0) for (const row of rows.slice(Math.min(first, last), Math.max(first, last) + 1)) this.selected.add(row.dataset.pmIdentifier);
@@ -122,7 +122,7 @@ export class PresetEntrySelection {
         const ui = this.host.groups, toolbar = this.toolbar = ui.node('div', '', 'cla-preset-bulk-toolbar');
         toolbar.setAttribute('role', 'toolbar'); toolbar.setAttribute('aria-label', '预设条目批量编辑');
         toolbar.append(ui.node('small', `已选 ${this.selected.size} 项`));
-        for (const [label, action] of [['批量移动', button => this.openGroups(button)], ['启用', () => void this.update('enable')],
+        for (const [label, action] of [['批量移动', button => this.openGroups(button)], ['移出分类', () => { this.host.groups.assign(this.host.groups.context(), [...this.selected], null); this.exit(); }], ['启用', () => void this.update('enable')],
             ['禁用', () => void this.update('disable')], ['取消', () => this.exit()]]) {
             let button; button = ui.button(label, () => action(button));
             button.disabled = label !== '取消' && (this.host.busy || this.selected.size === 0); toolbar.append(button);

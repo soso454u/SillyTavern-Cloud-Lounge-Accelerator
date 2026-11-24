@@ -193,7 +193,7 @@ export class PresetTokenPreview {
     }
 
     rowPlaceholder(id) {
-        const row = Array.prototype.find.call(this.manager.listElement?.children || [], element => element.dataset.pmIdentifier === id);
+        const row = Array.prototype.find.call(this.manager.listElement?.querySelectorAll('[data-pm-identifier]') || [], element => element.dataset.pmIdentifier === id);
         if (!row?.querySelector('.prompt-manager-edit-action')
             || row.classList.contains(`${this.manager.configuration.prefix}prompt_manager_marker`)) return null;
         const cell = row.querySelector(':scope > .prompt_manager_prompt_tokens');

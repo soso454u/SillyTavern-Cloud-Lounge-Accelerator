@@ -893,28 +893,35 @@ body .cla-preset-entry-menu button.menu_button[data-cla-preset-action] {
     min-height: 0;
 }
 
-.cla-preset-grouped-list > :not([data-pm-identifier]):not(.cla-preset-fold-header) { order: -1; }
-#completion_prompt_manager #completion_prompt_manager_list > .cla-preset-group-hidden { display: none !important; }
-#completion_prompt_manager #completion_prompt_manager_list.cla-preset-grouped-list > [data-pm-identifier] { width: auto !important; }
-#completion_prompt_manager_list.cla-preset-grouped-list [data-pm-identifier] .drag-handle { display: none !important; }
-body.cla-preset-drag-guard #completion_prompt_manager_list.cla-preset-grouped-list > [data-pm-identifier] { padding-left: 6px !important; }
-
-#completion_prompt_manager #completion_prompt_manager_list > li.cla-preset-fold-header {
-    display: flex !important;
-    flex-flow: row nowrap !important;
-    align-items: stretch !important;
-    gap: 3px !important;
-    width: 100% !important;
-    min-width: 0;
-    min-height: 36px !important;
-    height: auto !important;
-    padding: 0 2px 0 calc(2px + var(--cla-preset-depth, 0) * 12px) !important;
+#completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder {
+    display: block !important;
+    padding: 0 !important;
     margin: 0 !important;
     border: 0 !important;
     background: none !important;
-    box-shadow: none !important;
+    min-width: 0;
+    width: 100%;
+}
+#completion_prompt_manager_list .cla-preset-folder > .cla-preset-folder-body {
+    display: block;
+    list-style: none;
+    padding: 0 0 0 10px;
+    margin: 0;
+    min-width: 0;
+}
+#completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder.collapsed > .cla-preset-folder-body,
+#completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder[hidden] { display: none !important; }
+#completion_prompt_manager_list.cla-preset-grouped-list .drag-handle { display: none !important; }
+#completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header {
+    display: flex !important;
+    flex-flow: row nowrap !important;
+    align-items: stretch !important;
+    gap: 3px;
+    min-width: 0;
+    min-height: 36px;
+    padding: 0 2px;
+    margin: 0;
     box-sizing: border-box;
-    cursor: pointer;
 }
 
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header > button {
@@ -955,7 +962,7 @@ body.cla-preset-drag-guard #completion_prompt_manager_list.cla-preset-grouped-li
 }
 
 @media (pointer: coarse) {
-    #completion_prompt_manager #completion_prompt_manager_list > li.cla-preset-fold-header { min-height: 44px !important; }
+    #completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header { min-height: 44px !important; }
     #completion_prompt_manager .completion_prompt_manager_prompt_name {
         user-select: none;
         -webkit-user-select: none;
@@ -978,9 +985,7 @@ body .cla-preset-group-menu { width: 168px; }
 .cla-preset-bulk-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 6px 0; font-size: 0.85em; }
 .cla-preset-bulk-toolbar button.menu_button { width: auto; margin: 0; padding: 4px 7px; font-size: inherit; }
 .cla-preset-bulk-toolbar small { white-space: nowrap; }
-#completion_prompt_manager_list > li.cla-preset-entry-selected { outline: 1px solid var(--SmartThemeQuoteColor, #789b88) !important; outline-offset: -2px; background-color: color-mix(in srgb, var(--SmartThemeQuoteColor, #789b88) 16%, transparent) !important; }
-.cla-preset-selecting [data-pm-identifier] .prompt_manager_prompt_controls,
-.cla-preset-selecting [data-pm-identifier] .prompt_manager_prompt_controls * { pointer-events: none !important; }
+#completion_prompt_manager_list li.cla-preset-entry-selected { outline: 1px solid var(--SmartThemeQuoteColor, #789b88) !important; outline-offset: -2px; background-color: color-mix(in srgb, var(--SmartThemeQuoteColor, #789b88) 16%, transparent) !important; }
 .cla-preset-selecting .completion_prompt_manager_prompt_name { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: pointer; }
 .cla-preset-entry-menu > small { padding: 3px 5px; font-size: 11px; opacity: 0.7; }
 
@@ -1151,3 +1156,24 @@ body.cla-preset-drag-guard [id$="prompt_manager_list"] [data-pm-identifier][clas
 .prompt_manager_prompt_tokens[data-pm-tokens="-"][data-cla-preset-raw-tokens]::after { content: attr(data-cla-preset-raw-tokens); position: absolute; inset: 0; visibility: visible; }
 .cla-preset-token-preview { display: block; min-height: 1.2em; white-space: nowrap; margin: 4px 0; text-align: right; color: inherit; }
 #regex_container .cla-regex-cancel-selection[hidden] { display: none !important; }
+
+.cla-preset-settings { flex: 1 1 auto; margin: 0; }
+.cla-preset-settings > summary, .cla-preset-diagnostics > summary { cursor: pointer; padding: 4px 0; }
+.cla-preset-settings[open] { flex-basis: 100%; padding-bottom: 4px; }
+.cla-preset-setting-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; margin: 4px 0; }
+.cla-preset-setting-row > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.cla-preset-setting-row .text_pole:not([type=checkbox]) { flex: 1; width: 50%; }
+.cla-preset-setting-row input[type=checkbox] { flex: 0 0 auto; width: auto; }
+.cla-preset-rule-row { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; }
+.cla-preset-rule-row > label { flex: 1; }
+.cla-preset-rule-row .menu_button { padding: 3px 5px; }
+.cla-preset-rule-editor { border-inline-start: 2px solid var(--SmartThemeBorderColor, #8884); padding-inline-start: 6px; margin: 6px 0; }
+.cla-preset-rule-editor[hidden], .cla-preset-setting-row[hidden] { display: none !important; }
+.cla-preset-groups [aria-pressed=true] { background: var(--SmartThemeBorderColor, #8884); }
+.cla-preset-diagnostics { font-size: .9em; opacity: .8; margin: 2px 0; }
+.cla-preset-diagnostics > div { max-height: 160px; overflow: auto; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+    .cla-preset-setting-row .text_pole:not([type=checkbox]) { flex: 1.5; }
+    .cla-preset-group-tools .menu_button { min-height: 32px; }
+    #completion_prompt_manager_list .cla-preset-folder > .cla-preset-folder-body { padding-inline-start: 6px; }
+}

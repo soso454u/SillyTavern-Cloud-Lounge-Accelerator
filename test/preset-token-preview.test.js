@@ -6,7 +6,7 @@ async function fixture(t) {
     const cell={isConnected:true,innerHTML:'<span> </span>-',textContent:' -',dataset:{},getAttribute:name=>attrs.get(name)??null,setAttribute:(name,value)=>attrs.set(name,value),removeAttribute:name=>attrs.delete(name)};
     const fields={prompt:{value:'original',after(element){element.isConnected=true}},role:{value:'system'},save:{dataset:{pmPrompt:'id'}}};
     const prompt={identifier:'id',role:'system',content:'original'};
-    const manager={configuration:{prefix:'completion_'},serviceSettings:{prompts:[prompt]},listElement:{children:[{dataset:{pmIdentifier:'id'},classList:{contains:()=>false},querySelector:selector=>selector==='.prompt-manager-edit-action'?{}:cell}]},
+    const manager={configuration:{prefix:'completion_'},serviceSettings:{prompts:[prompt]},listElement:{querySelectorAll(){return this.children},children:[{dataset:{pmIdentifier:'id'},classList:{contains:()=>false},querySelector:selector=>selector==='.prompt-manager-edit-action'?{}:cell}]},
         getPromptById(id){return this.serviceSettings.prompts.find(p=>p.identifier===id)},preparePrompt(){throw Error('Macros must not be executed')},
         loadPromptIntoEditForm(p){fields.prompt.value=p.content;fields.role.value=p.role;fields.save.dataset.pmPrompt=p.identifier},clearEditForm(){fields.save.dataset.pmPrompt=''},async renderPromptManagerListItems(){}};
     const documentRef={addEventListener(){},removeEventListener(){},getElementById(id){return fields[id.replace('completion_prompt_manager_popup_entry_form_','')]},createElement(){return {isConnected:false,setAttribute(){},remove(){this.isConnected=false}}}};
