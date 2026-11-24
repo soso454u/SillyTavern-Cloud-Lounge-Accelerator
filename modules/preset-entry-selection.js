@@ -103,6 +103,7 @@ export class PresetEntrySelection {
             const first = rows.findIndex(row => row.dataset.pmIdentifier === this.anchor), last = rows.findIndex(row => row.dataset.pmIdentifier === id);
             if (first >= 0 && last >= 0) for (const row of rows.slice(Math.min(first, last), Math.max(first, last) + 1)) this.selected.add(row.dataset.pmIdentifier);
         } else if (this.selected.has(id)) this.selected.delete(id); else this.selected.add(id);
+        if (!this.selected.size) { this.exit(); return; }
         this.anchor = id; this.render();
     }
     render() {
@@ -119,68 +120,11 @@ export class PresetEntrySelection {
         for (const row of list.querySelectorAll(ROW)) if (this.selected.has(row.dataset.pmIdentifier)) {
             row.classList.add('cla-preset-entry-selected'); row.setAttribute('aria-selected', 'true'); this.marked.add(row);
         }
-        const ui = this.host.groups, toolbar = this.toolbar = ui.node('div', '', 'cla-preset-bulk-toolbar');
-        toolbar.setAttribute('role', 'toolbar'); toolbar.setAttribute('aria-label', '预设条目批量编辑');
-        toolbar.append(ui.node('small', `已选 ${this.selected.size} 项`));
-        for (const [label, action] of [['启用', () => void this.update('enable')],
-            ['禁用', () => void this.update('disable')], ['建为分组', () => this.host.groups.createGroup(new Set(this.selected)).then(done => { if (done) this.exit(); })], ['取消', () => this.exit()]]) {
-            const button = ui.button(label, action);
-            button.disabled = label !== '取消' && (this.host.busy || this.selected.size === 0); toolbar.append(button);
-        }
-        const folders = ui.folders();
-        if (folders.length) {
-            const move = ui.select([['', '移入分组…'], ...folders.map((f, i) => [String(i), `📁 ${f.name}`])], '移入分组');
-            move.disabled = this.host.busy || this.selected.size === 0;
-            move.addEventListener('change', () => {
-                const folder = folders[Number(move.value)]; if (!folder) return;
-                ui.run(() => ui.moveEntries(new Set(this.selected), { folder }).then(done => { if (done) this.exit(); }));
-            });
-            toolbar.append(move);
-        }
-        list.before(toolbar);
-    }
-    async update(action) {
-        const context = this.context;
-        if (!this.current(context) || this.host.busy || !this.selected.size) return;
-        const manager = this.host.manager, selected = new Set(this.selected);
-        const allowed = new Set(context.prompts.filter(prompt => selected.has(prompt.identifier) && (action === 'remove'
-            ? !prompt.marker && prompt.system_prompt === false && manager.isPromptDeletionAllowed?.(prompt)
-            : manager.isPromptToggleAllowed?.(prompt))).map(prompt => prompt.identifier));
-        if (!allowed.size) { globalThis.toastr?.info?.('所选条目受酒馆保护，无法执行此操作', '预设批量编辑'); return; }
-        if (action === 'remove' && this.host.isGenerating()) { globalThis.toastr?.info?.('请等待生成结束再移出条目', '预设批量编辑'); return; }
-        this.host.busy = true; this.render();
-        try {
-            if (action === 'remove' && !await this.host.confirm(`将 ${allowed.size} 个条目移出当前列表？条目内容保留在可用条目中。`)) return;
-            if (!this.current(context) || (action === 'remove' && this.host.isGenerating())) return;
-            const order = action === 'remove' ? context.order.filter(item => !allowed.has(item.identifier))
-                : context.order.map(item => allowed.has(item.identifier) ? { ...item, enabled: action === 'enable' } : item);
-            if (order.length === context.order.length && order.every((item, index) => item === context.order[index] || item.enabled === context.order[index].enabled)) return;
-            await this.host.write([{ owner: context.holder, key: 'order', next: order }]);
-            this.exit();
-            if (this.host.started && this.host.context()?.holder === context.holder && this.host.context()?.order === order) {
-                const counts = manager.tokenHandler?.getCounts?.();
-                if (counts) for (const id of allowed) counts[id] = null;
-                if (action === 'remove') manager.render(false); else manager.render();
-            }
-            if (allowed.size < selected.size) globalThis.toastr?.info?.('已跳过受保护的条目', '预设批量编辑');
-        } catch (error) {
-            console.error('[Cloud Lounge Accelerator] 预设批量保存失败', error);
-            globalThis.toastr?.error?.('保存失败，选择已保留，请重试', '预设批量编辑');
-        } finally { this.host.busy = false; if (this.host.started) this.render(); }
     }
     enter(context = this.host.context()) {
         if (!context) return false;
         if (!this.mode || !this.current()) this.selected.clear();
         this.mode = true; this.context = context; this.scopeKey = this.scope(); return true;
-    }
-    moveHere(context, id) {
-        if (!this.mode || !this.selected.size) return;
-        this.host.groups.run(() => this.host.groups.moveEntries(new Set(this.selected), { after: id }).then(done => { if (done) this.exit(); }));
-    }
-    pick(context, id) {
-        if (!this.enter(context)) return;
-        this.selected.add(id); this.anchor = id; this.render();
-        globalThis.toastr?.info?.('可继续点选更多条目；用上方「移入分组…」，或在目标条目「⋯」选「移到这条下方」', '移动');
     }
     startGroup(context, id) {
         if (this.mode && this.selected.size) {
@@ -190,7 +134,7 @@ export class PresetEntrySelection {
         }
         if (!this.enter(context)) return;
         this.selected.add(id); this.anchor = id; this.render();
-        globalThis.toastr?.info?.('再点选分组的最后一个条目，然后点「建为分组」', '新建分组');
+        globalThis.toastr?.info?.('再点选分组的最后一个条目，然后在它的「⋯」最下面点「用已选新建分组」', '新建分组');
     }
     exit() {
         this.cancelHold(); this.mode = false; this.context = null; this.selected.clear(); this.anchor = null;

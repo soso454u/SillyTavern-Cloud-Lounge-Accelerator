@@ -180,6 +180,28 @@ export class PresetEntryGroups {
         }, true);
         header.addEventListener('contextmenu', event => { if (state) event.preventDefault(); });
     }
+    // In multi-select, dragging the ☰ of a selected row brings the other
+    // selected rows along after the native drag has saved.
+    watchMultiDrag(list) {
+        this.multiDragLists ||= new WeakSet();
+        const jquery = globalThis.jQuery || globalThis.$;
+        if (this.multiDragLists.has(list) || !jquery) return;
+        this.multiDragLists.add(list);
+        jquery(list).on('sortstop.claMultiDrag', (event, ui) => {
+            const id = ui?.item?.[0]?.dataset?.pmIdentifier, selection = this.host.selection;
+            if (!id || !selection?.mode || !selection.selected.has(id) || selection.selected.size < 2) return;
+            const ids = new Set(selection.selected);
+            setTimeout(() => this.run(async () => {
+                const order = this.host.context()?.order.map(item => item.identifier) || [];
+                const at = order.indexOf(id); if (at < 0) return;
+                const after = order.slice(0, at).reverse().find(x => !ids.has(x));
+                const before = order.slice(at + 1).find(x => !ids.has(x));
+                if (!after && !before) return;
+                // Keep the dragged row's slot: others gather around it in original order.
+                if (await this.moveEntries(ids, after ? { after } : { before })) selection.exit();
+            }), 0);
+        });
+    }
     expanded(context) {
         const saved = this.extensionSettings[PRESET_GROUPS_KEY];
         return new Set(saved?.schema === PRESET_GROUPS_SCHEMA ? saved.expandedByPreset?.[context.key] : []);
@@ -218,7 +240,7 @@ export class PresetEntryGroups {
     protectSortable(list, grouped) {
         let record = this.sortRecords.get(list);
         if (!record) {
-            record = { refresh: () => this.protectSortable(list, !!this.query || this.filter !== 'all' || !!this.host.selection?.mode || !!this.host.selection?.gesture) };
+            record = { refresh: () => this.protectSortable(list, !!this.query || this.filter !== 'all' || !!this.host.selection?.gesture?.active) };
             for (const type of ['pointerdown', 'mousedown', 'touchstart']) list.addEventListener(type, record.refresh, { capture: true, passive: true });
             this.sortRecords.set(list, record);
         }
@@ -313,12 +335,6 @@ export class PresetEntryGroups {
                 if (currentScope()) this.setFold(this.context(), [...this.folderNodes.keys()], folded);
             };
             tools.append(this.button('全部展开', () => toggleAll(false)), this.button('全部折叠', () => toggleAll(true)));
-            this.selectButton = this.button('多选 / 新建分组', () => {
-                if (!currentScope()) return;
-                const selection = this.host.selection;
-                if (selection.mode) selection.exit(); else { selection.enter(); selection.render(); globalThis.toastr?.info?.('点选条目，选好首尾后点「建为分组」', '多选'); }
-            });
-            views.append(this.selectButton);
             tools.append(this.button('恢复已删除的自动分组', () => {
                 const ctx = this.context(); if (!this.valid(ctx)) return;
                 const meta = this.meta(ctx); meta.hidden = []; this.saveMeta(ctx, meta); this.render();
@@ -419,7 +435,8 @@ export class PresetEntryGroups {
             }
             this.updateFolds();
         }
-        this.protectSortable(list, filtering || !!this.host.selection?.mode);
+        this.protectSortable(list, filtering);
+        this.watchMultiDrag(list);
         this.host.selection?.render(); this.watchStatus(list, context);
     }
     updateFolds() {

@@ -963,9 +963,6 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
 .cla-preset-folder-search { flex-wrap: nowrap; }
 .cla-preset-folder-search input { flex: 1 1 120px; width: 120px; }
 .cla-preset-folder-search select { flex: 0 1 86px; width: 86px; }
-.cla-preset-bulk-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 6px 0; font-size: 0.85em; }
-.cla-preset-bulk-toolbar button.menu_button { width: auto; margin: 0; padding: 4px 7px; font-size: inherit; }
-.cla-preset-bulk-toolbar small { white-space: nowrap; }
 #completion_prompt_manager_list li.cla-preset-entry-selected { outline: 1px solid var(--SmartThemeQuoteColor, #789b88) !important; outline-offset: -2px; background-color: color-mix(in srgb, var(--SmartThemeQuoteColor, #789b88) 16%, transparent) !important; }
 .cla-preset-selecting .completion_prompt_manager_prompt_name { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: pointer; }
 .cla-preset-entry-menu > small { padding: 3px 5px; font-size: 11px; opacity: 0.7; }
@@ -1273,7 +1270,6 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder:not(.collapsed) .cla-preset-folder-arrow { color: var(--SmartThemeQuoteColor, inherit); opacity: 1; }
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder.collapsed > .cla-preset-fold-header { opacity: 0.85; }
 
-.cla-preset-entry-menu .cla-preset-menu-move { width: 100%; margin: 2px 0; }
 
 .cla-preset-drop-line { position: absolute; left: 0; right: 0; height: 4px; border-radius: 2px; background: var(--SmartThemeQuoteColor, #6a8); pointer-events: none; z-index: 50; }
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder-dragging > .cla-preset-fold-header { outline: 2px dashed var(--SmartThemeQuoteColor, #6a8); opacity: 0.7; }
