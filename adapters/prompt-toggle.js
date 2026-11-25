@@ -204,7 +204,9 @@ export class PromptToggleAdapter {
         this.flushTimer = null;
         if (!this.started || !this.pendingManagers.size) return;
         if (this.isGenerating?.()) {
-            this.queueFlush(80);
+            // Native end/stop events wake this queue after 40ms. This is only
+            // a compatibility fallback, not a 12.5Hz poll for the whole reply.
+            this.queueFlush(1000);
             return;
         }
         this.flushFrame = requestAnimationFrame(() => {

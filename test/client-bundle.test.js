@@ -36,7 +36,8 @@ test('manifest loads the published bundle and keeps optional runtime off the ini
     assert.equal(manifest.css, `dist/style.css?v=${manifest.version}`, 'upgrades must request the matching layout stylesheet');
     const { own } = await graph(manifest.js, { staticOnly: true });
     assert.equal(own.size, 2, 'activation downloads only entry and shared helpers');
-    assert.ok([...own.values()].reduce((sum, source) => sum + Buffer.byteLength(source), 0) < 46000);
+    // The resumable code scanner adds ~0.8KB without another activation request.
+    assert.ok([...own.values()].reduce((sum, source) => sum + Buffer.byteLength(source), 0) < 47000);
     assert.ok(![...own.keys()].some(path => path.includes('deferred-runtime')));
     const entry = own.get(manifest.js);
     for (const hook of Object.values(manifest.hooks)) assert.match(entry, new RegExp(`\\b${hook}\\b`));

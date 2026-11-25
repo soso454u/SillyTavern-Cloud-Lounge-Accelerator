@@ -1,0 +1,19 @@
+--- a/public/script.js
++++ b/public/script.js
+@@ -1850,6 +1850,12 @@
+         const regexPlacement = getRegexPlacement();
+-        const usableMessages = chat.map((x, index) => ({ message: x, index: index })).filter(x => !x.message.is_system);
+-        const indexOf = usableMessages.findIndex(x => x.index === Number(messageId));
+-        const depth = messageId >= 0 && indexOf !== -1 ? (usableMessages.length - indexOf - 1) : undefined;
++        const targetMessageId = Number(messageId);
++        let depth;
++        if (messageId >= 0 && Number.isInteger(targetMessageId) && targetMessageId < chat.length
++            && targetMessageId in chat && !chat[targetMessageId].is_system) {
++            depth = 0;
++            for (let index = chat.length - 1; index > targetMessageId; index--) {
++                if (index in chat && !chat[index].is_system) depth++;
++            }
++        }
+-
++
+         mes = MessageFormatter.runStage(MessageFormatter.stage.BEFORE_REGEX, mes,

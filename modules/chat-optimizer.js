@@ -8,6 +8,7 @@ const CODE_SELECTOR = '.mes pre code';
 const LOG_PREFIX = '[Cloud Lounge Accelerator]';
 const ORIGINAL_TRUNCATION_KEY = 'cloud-lounge-accelerator:original-chat-truncation';
 const MAX_HIGHLIGHT_CHARS = 20000;
+const CODE_SCAN_BATCH_SIZE = 160;
 
 function isRecentCode(element) {
     const message = element.closest('.mes');
@@ -69,6 +70,7 @@ export class ChatOptimizer {
         this.highlightJobs = null;
         this.deferredHighlights = new Map();
         this.addedCodeRoots = new Set();
+        this.codeScanCursor = null;
         this.observedHighlights = new Set();
         this.collapseHandlers = new WeakMap();
         this.scanAllCode = false;
@@ -169,9 +171,15 @@ export class ChatOptimizer {
                     if (node.nodeType === 1) this.addedCodeRoots.add(node);
                 }
             }
-            removedElements ||= removedNodes.length > 0;
+            // Status counters and ordinary text updates do not detach code.
+            // Avoid walking every deferred block for these frequent mutations.
+            if (!removedElements) for (const node of removedNodes) {
+                if (node.nodeType === 1) { removedElements = true; break; }
+            }
         }
         if (removedElements) {
+            if (this.codeScanCursor && !this.chatElement?.contains(this.codeScanCursor.root)) this.codeScanCursor = null;
+            for (const root of this.addedCodeRoots) if (!this.chatElement?.contains(root)) this.addedCodeRoots.delete(root);
             for (const element of this.observedHighlights) {
                 if (this.chatElement?.contains(element)) continue;
                 this.highlightObserver?.unobserve(element);
@@ -194,6 +202,7 @@ export class ChatOptimizer {
         this.observedHighlights.clear();
         this.deferredHighlights.clear();
         this.addedCodeRoots.clear();
+        this.codeScanCursor = null;
         this.scanAllCode = false;
         this.codeScanJob?.abort();
         this.codeScanJob = null;
@@ -217,7 +226,7 @@ export class ChatOptimizer {
         if (!this.codeObservationStarted || this.isGenerating?.()) return;
         this.scanAllCode ||= scanAll;
         if (this.codeScanJob) return;
-        if (!this.scanAllCode && !this.deferredHighlights.size && !this.addedCodeRoots.size) return;
+        if (!this.scanAllCode && !this.deferredHighlights.size && !this.addedCodeRoots.size && !this.codeScanCursor) return;
         if (this.highlightBlocked()) return;
         const job = this.codeScanJob = new AbortController();
         void this.scheduler.schedule(deadline => {
@@ -582,6 +591,7 @@ export class ChatOptimizer {
     observeCodeBlocks(deadline) {
         if (this.scanAllCode) {
             this.scanAllCode = false;
+            this.codeScanCursor = null;
             this.addedCodeRoots.clear();
             for (let node = this.chatElement?.lastElementChild; node; node = node.previousElementSibling) {
                 this.addedCodeRoots.add(node);
@@ -592,14 +602,30 @@ export class ChatOptimizer {
             this.deferredHighlights.delete(element);
             if (this.chatElement?.contains(element)) this.queueHighlight(element, force);
         }
-        for (const node of this.addedCodeRoots) {
-            if (performance.now() >= deadline) break;
-            this.addedCodeRoots.delete(node);
-            if (!this.chatElement?.contains(node)) continue;
-            if (node.matches(CODE_SELECTOR) && !node.dataset.claHighlighted) this.deferHighlight(node);
-            for (const code of node.querySelectorAll(CODE_SELECTOR)) {
-                if (!code.dataset.claHighlighted) this.deferHighlight(code);
+        let visited = 0;
+        while (this.codeScanCursor || this.addedCodeRoots.size) {
+            if (performance.now() >= deadline || visited >= CODE_SCAN_BATCH_SIZE) return;
+            if (!this.codeScanCursor) {
+                const root = this.addedCodeRoots.values().next().value;
+                this.addedCodeRoots.delete(root);
+                if (!this.chatElement?.contains(root)) continue;
+                // A single mutation batch can report both a panel and all of
+                // its children. Let the queued ancestor cover the subtree once.
+                let covered = false;
+                for (let parent = root.parentElement; parent && parent !== this.chatElement; parent = parent.parentElement) {
+                    if (this.addedCodeRoots.has(parent)) { covered = true; break; }
+                }
+                if (covered) continue;
+                this.codeScanCursor = { root, next: root, walker: document.createTreeWalker(root, 1) };
             }
+            const cursor = this.codeScanCursor;
+            if (!this.chatElement?.contains(cursor.root)) { this.codeScanCursor = null; continue; }
+            const node = cursor.next;
+            visited++;
+            this.addedCodeRoots.delete(node);
+            if (node.localName === 'code' && node.matches(CODE_SELECTOR) && !node.dataset.claHighlighted) this.deferHighlight(node);
+            cursor.next = cursor.walker.nextNode();
+            if (!cursor.next) this.codeScanCursor = null;
         }
     }
 

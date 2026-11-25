@@ -349,3 +349,33 @@ test('disabling during the native import prevents late listener registration', a
     assert.equal(await starting, false);
     assert.equal(adapter.started, false);
 });
+
+test('long generation uses a slow fallback check and native end wakes the pending render promptly', async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    let generating = true, checks = 0, renders = 0;
+    const handlers = new Map(), frames = [];
+    const previousFrame = globalThis.requestAnimationFrame;
+    globalThis.requestAnimationFrame = callback => { frames.push(callback); return frames.length; };
+    t.after(() => { if (previousFrame === undefined) delete globalThis.requestAnimationFrame; else globalThis.requestAnimationFrame = previousFrame; });
+    const adapter = new PromptToggleAdapter({
+        isGenerating: () => { checks++; return generating; },
+        importOpenAI: async () => ({}),
+        documentRef: { addEventListener() {}, removeEventListener() {} },
+        eventTypes: { GENERATION_ENDED: 'end' },
+        eventSource: { on: (name, fn) => handlers.set(name, fn), removeListener: name => handlers.delete(name) },
+    });
+    await adapter.start();
+    t.after(() => adapter.stop());
+    adapter.pendingManagers.add({ renderDebounced: () => renders++ });
+    adapter.queueFlush();
+    for (let second = 0; second < 30; second++) t.mock.timers.tick(1000);
+    assert.ok(checks <= 31, 'pending token recalculation must not poll at 12.5Hz');
+    assert.equal(renders, 0);
+    generating = false;
+    handlers.get('end')();
+    t.mock.timers.tick(40);
+    assert.equal(frames.length, 1);
+    frames.shift()();
+    assert.equal(renders, 1);
+    assert.equal(adapter.pendingManagers.size, 0);
+});
