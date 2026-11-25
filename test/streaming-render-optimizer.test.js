@@ -2,13 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { StreamingRenderOptimizer } from '../modules/streaming-render-optimizer.js';
 
-function fixture(t, { touch = true, cost = 0 } = {}) {
+function fixture(t, { touch = true, cost = 0, renderNodes = null, trackFrames = false } = {}) {
     let time = 0;
     const callbacks = new Map();
     const inputs = new Map();
     const renders = [];
     const chatClasses = new Set();
     const themeWrites = [];
+    let samples = 0;
+    let frameId = 0;
+    let yields = 0;
+    let yieldMain = async () => {};
+    const frames = new Map();
     const documentRef = {
         querySelector:()=>({classList:{
             add(name) { themeWrites.push(['add', name]); chatClasses.add(name); },
@@ -19,6 +24,11 @@ function fixture(t, { touch = true, cost = 0 } = {}) {
             inputs.set(name, fn);
         },
         removeEventListener(name, fn) { if (inputs.get(name) === fn) inputs.delete(name); },
+    };
+    if (renderNodes) documentRef.createTreeWalker = () => {
+        samples++;
+        let index = 0;
+        return { nextNode: () => renderNodes[index++] || null };
     };
     const eventTypes = { STREAM_TOKEN_RECEIVED: 'token', GENERATION_ENDED: 'end', GENERATION_STOPPED: 'stop', CHAT_CHANGED: 'chat' };
     const eventSource = {
@@ -44,11 +54,23 @@ function fixture(t, { touch = true, cost = 0 } = {}) {
         navigatorRef: touch ? { userAgent: 'iPhone', maxTouchPoints: 5 } : {},
         matchMedia: () => ({ matches: false }),
         documentRef,
+        requestFrame: trackFrames ? callback => { frames.set(++frameId, callback); return frameId; } : null,
+        cancelFrame: id => frames.delete(id),
+        yieldToMain: () => { yields++; return yieldMain(); },
     });
     optimizer.start();
     t.after(() => optimizer.stop());
     return {
         optimizer, renders, inputs, callbacks, original, Processor, chatClasses, documentRef, themeWrites,
+        get samples() { return samples; },
+        get yields() { return yields; }, frames,
+        set yieldMain(value) { yieldMain = value; },
+        frame(at) {
+            time = at;
+            const pending = [...frames.values()];
+            frames.clear();
+            for (const callback of pending) callback(at);
+        },
         get processor() { return processor; }, set processor(value) { processor = value; },
         set time(value) { time = value; },
         input(name, data = {}) { inputs.get(name)?.(data); },
@@ -56,7 +78,7 @@ function fixture(t, { touch = true, cost = 0 } = {}) {
         async token(text, at) {
             time = at;
             processor.result = text; // Native generator updates this before token subscribers.
-            callbacks.get('token')?.();
+            await callbacks.get('token')?.();
             return processor.onProgressStreaming(7, text);
         },
     };
@@ -91,6 +113,113 @@ test('expensive native passes leave recovery time instead of running at the FPS 
     assert.equal(f.renders.length, 5);
     await f.processor.finalizeIntermediaryMessage(7, 'final');
     assert.equal(f.renders.at(-1)[1], 'final');
+});
+
+test('large regex output is sampled only on rendered previews and final text still renders immediately', async t => {
+    for (const touch of [true, false]) {
+        const f = fixture(t, { touch, renderNodes: [{ nodeType: 3, length: 86518 }] });
+        for (let i = 0; i < 100; i++) await f.token(`full snapshot ${i}`, i * 10);
+        assert.equal(f.renders.length, touch ? 2 : 4);
+        assert.equal(f.samples, f.renders.length, 'skipped tokens do no DOM sampling');
+        assert.equal(f.processor.result, 'full snapshot 99');
+        assert.equal(f.optimizer.getReport().renderComplexity.tier, 'heavy');
+        const samples = f.samples;
+        await f.processor.finalizeIntermediaryMessage(7, 'complete final snapshot');
+        assert.equal(f.renders.at(-1)[1], 'complete final snapshot');
+        assert.equal(f.samples, samples, 'finalization has no extra sampling');
+        await f.processor.onProgressStreaming(8, 'new tool message');
+        assert.equal(f.renders.at(-1)[1], 'new tool message');
+    }
+});
+
+test('complexity follows the rendered message and clears when a lighter message or another chat arrives', async t => {
+    const nodes = [{ nodeType: 1, nodeName: 'IFRAME' }];
+    const f = fixture(t, { renderNodes: nodes });
+    await f.token('frame preview', 0);
+    await f.token('skipped', 100);
+    assert.equal(f.renders.length, 1);
+    nodes.splice(0);
+    await f.token('plain preview', 250);
+    await f.token('normal interval', 350);
+    assert.equal(f.renders.length, 3);
+    nodes.push({ nodeType: 3, length: 70000 });
+    await f.token('heavy again', 450);
+    f.emit('chat');
+    nodes.splice(0);
+    await f.token('another chat', 451);
+    await f.token('normal interval again', 551);
+    assert.equal(f.renders.at(-1)[1], 'normal interval again');
+    assert.equal(f.optimizer.getReport().renderComplexity.tier, 'normal');
+});
+
+test('unavailable or failing DOM sampling cannot reject a successful native render', async t => {
+    const f = fixture(t);
+    f.documentRef.querySelector = () => { throw new Error('detached document'); };
+    assert.equal(await f.token('native result', 0), 'native result');
+    await f.token('normal interval', 100);
+    assert.equal(f.renders.length, 2);
+});
+
+test('queued token bursts await a browser task when a paint is overdue, without dropping tokens', async t => {
+    const f = fixture(t, { trackFrames: true });
+    await f.token('first', 0);
+    await f.token('second', 10);
+    assert.equal(f.yields, 0);
+    let release;
+    f.yieldMain = () => new Promise(resolve => { release = resolve; });
+    let completed = false;
+    const pending = f.token('third', 20).then(() => { completed = true; });
+    await Promise.resolve();
+    assert.equal(f.yields, 1);
+    assert.equal(completed, false, 'native caller awaits the cooperative yield');
+    assert.equal(f.processor.result, 'third');
+    release();
+    await pending;
+    f.frame(21);
+    assert.equal(f.frames.size, 0, 'does not run a permanent animation loop');
+    assert.equal(f.renders.length, 1);
+    await f.processor.finalizeIntermediaryMessage(7, 'complete third');
+    assert.equal(f.renders.at(-1)[1], 'complete third');
+});
+
+test('slow browser frames reserve recovery for plain cards even when the formatter is cheap', async t => {
+    const f = fixture(t, { touch: false, trackFrames: true });
+    await f.token('ordinary text', 0);
+    f.frame(100); // Browser layout/other extension work after the native method.
+    await f.token('wait for browser', 110);
+    assert.equal(f.renders.length, 1);
+    f.frame(126);
+    await f.token('ready', 300);
+    assert.equal(f.renders.length, 2);
+    f.frame(316);
+    await f.token('ordinary interval again', 340);
+    assert.equal(f.renders.length, 3);
+    assert.equal(f.optimizer.getReport().maxFrameWaitMs, 100);
+    assert.equal(f.optimizer.getReport().maxRecoveryMs, 200);
+});
+
+test('normal frames, background changes, finalization and stop leave no artificial paint wait', async t => {
+    const f = fixture(t, { trackFrames: true });
+    await f.token('normal', 0);
+    f.frame(10);
+    await f.token('normal again', 100);
+    assert.equal(f.yields, 0);
+    assert.equal(f.renders.length, 2);
+    f.documentRef.hidden = true;
+    f.input('visibilitychange');
+    assert.equal(f.frames.size, 0);
+    await f.token('background', 1000);
+    assert.equal(f.frames.size, 0);
+    assert.equal(f.yields, 0);
+    f.documentRef.hidden = false;
+    f.input('visibilitychange');
+    await f.token('visible', 1100);
+    assert.equal(f.frames.size, 1);
+    await f.processor.finalizeIntermediaryMessage(7, 'final without waiting for frame');
+    assert.equal(f.renders.at(-1)[1], 'final without waiting for frame');
+    f.emit('stop');
+    assert.equal(f.frames.size, 0);
+    assert.equal(f.optimizer.getReport().maxFrameWaitMs, 10);
 });
 
 test('taps and native autoscroll do not trigger the scrolling budget', async t => {

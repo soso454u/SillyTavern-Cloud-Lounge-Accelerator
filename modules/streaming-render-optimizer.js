@@ -1,4 +1,5 @@
 import { detectRenderProfile, matchesMedia } from '../utils/device-profile.js';
+import { getComplexityInterval, measureRenderComplexity } from './render-complexity.js';
 
 // Limit expensive native preview passes, never the incoming token stream.
 // Native finalization always calls onProgressStreaming(id, fullText, true).
@@ -6,14 +7,19 @@ const PREVIEW_INTERVAL_MS = { desktop: 1000 / 30, balanced: 80, webkit: 100 };
 const SCROLL_INTERVAL_MS = 250;
 const SCROLL_SETTLE_MS = 200;
 const MAX_INERTIA_MS = 800;
+const TOKEN_TASK_BUDGET_MS = 12;
+const SLOW_FRAME_MS = 50;
 
 export class StreamingRenderOptimizer {
     constructor({
         eventSource, eventTypes = {}, getStreamingProcessor = () => null,
         documentRef = globalThis.document, navigatorRef = globalThis.navigator,
         matchMedia = globalThis.matchMedia, now = () => performance.now(),
+        requestFrame = globalThis.requestAnimationFrame?.bind(globalThis),
+        cancelFrame = globalThis.cancelAnimationFrame?.bind(globalThis),
+        yieldToMain = () => new Promise(resolve => setTimeout(resolve, 0)),
     } = {}) {
-        Object.assign(this, { eventSource, eventTypes, getStreamingProcessor, now });
+        Object.assign(this, { eventSource, eventTypes, getStreamingProcessor, now, requestFrame, cancelFrame, yieldToMain });
         this.document = documentRef;
         this.navigator = navigatorRef;
         this.matchMedia = matchMedia;
@@ -25,7 +31,20 @@ export class StreamingRenderOptimizer {
         this.scrollDeadline = 0;
         this.interactingUntil = 0;
         this.report = { observedPreviews: 0, skippedPreviews: 0, maxPreviewMs: 0, lastPreviewMs: 0, maxRecoveryMs: 0 };
-        this.onToken = () => this.attach();
+        this.onToken = async () => {
+            this.attach();
+            const state = this.current;
+            if (!state || this.document?.hidden || typeof this.requestFrame !== 'function') return;
+            this.watchFrame(state);
+            // An SSE burst may keep resolving promises without returning to a
+            // browser task, even when previews are skipped. Yield cooperatively
+            // only when a requested frame is still waiting after the budget.
+            if (state.frameId !== null && this.now() - state.frameStartedAt >= TOKEN_TASK_BUDGET_MS) {
+                this.report.tokenYields = (this.report.tokenYields || 0) + 1;
+                await this.yieldToMain();
+            }
+        };
+        this.onVisibilityChange = () => this.cancelPendingFrame(this.current);
         this.onEnd = () => this.detach();
         this.onChatChange = () => this.detach();
         this.onPointerInput = () => {
@@ -96,6 +115,7 @@ export class StreamingRenderOptimizer {
             ['touchend', this.onTouchEnd], ['touchcancel', this.onTouchEnd],
             ['wheel', this.onWheel], ['scroll', this.onScroll],
             ['pointerdown', this.onPointerInput], ['pointerup', this.onPointerInput],
+            ['visibilitychange', this.onVisibilityChange],
         ];
     }
 
@@ -114,6 +134,7 @@ export class StreamingRenderOptimizer {
         const state = {
             processor, ownDescriptor, original: processor.onProgressStreaming,
             nextAt: -Infinity, messageId: null,
+            frameId: null, frameStartedAt: 0,
         };
         const optimizer = this;
         state.wrapper = async function (...args) {
@@ -131,10 +152,22 @@ export class StreamingRenderOptimizer {
             const result = await state.original.apply(this, args);
             if (preview && optimizer.current === state) {
                 state.messageId = messageId;
+                // Formatting time alone excludes subsequent browser layout and
+                // helper iframe work. Size the recovery from actual output too,
+                // including regex-inserted HTML that is absent from raw tokens.
+                let complexityInterval = 0;
+                try {
+                    const root = optimizer.document?.querySelector?.(`#chat .mes[mesid="${messageId}"] .mes_text`);
+                    const sample = measureRenderComplexity(root, optimizer.document);
+                    complexityInterval = getComplexityInterval(sample, optimizer.profile);
+                    optimizer.report.renderComplexity = sample;
+                } catch {
+                    // Optional sampling must never fail a native render.
+                }
                 const finishedAt = optimizer.now();
                 const cost = Math.max(0, finishedAt - now);
                 const interval = finishedAt < optimizer.scrollingUntil ? SCROLL_INTERVAL_MS : optimizer.interval;
-                const recovery = Math.max(interval, Math.min(1000, cost * 2));
+                const recovery = Math.max(interval, complexityInterval, Math.min(1000, cost * 2));
                 // Recovery starts AFTER native formatting finishes. A costly
                 // pass must never consume its own idle interval and immediately
                 // start another pass (the old start-time deadline did that).
@@ -162,6 +195,7 @@ export class StreamingRenderOptimizer {
 
     detach() {
         const state = this.current;
+        this.cancelPendingFrame(state);
         if (state && state.processor.onProgressStreaming === state.wrapper) {
             if (state.ownDescriptor) Object.defineProperty(state.processor, 'onProgressStreaming', state.ownDescriptor);
             else delete state.processor.onProgressStreaming;
@@ -177,7 +211,32 @@ export class StreamingRenderOptimizer {
 
     getReport() {
         return { ...this.report, attached: Boolean(this.current),
-            timing: 'native-preview-including-awaited-work', version: 2 };
+            timing: 'native-preview-including-awaited-work', version: 3 };
+    }
+
+    watchFrame(state) {
+        if (state.frameId !== null) return;
+        state.frameStartedAt = this.now();
+        state.frameId = this.requestFrame(() => {
+            state.frameId = null;
+            if (this.current !== state || this.document?.hidden) return;
+            const now = this.now();
+            const delay = Math.max(0, now - state.frameStartedAt);
+            this.report.maxFrameWaitMs = Math.max(this.report.maxFrameWaitMs || 0, Math.round(delay));
+            // Includes browser work that happens after the awaited formatter:
+            // layout, theme effects and extension work on ordinary cards too.
+            if (delay > SLOW_FRAME_MS && state.messageId !== null) {
+                const recovery = Math.min(1000, delay * 2);
+                state.nextAt = Math.max(state.nextAt, now + recovery);
+                this.report.maxRecoveryMs = Math.max(this.report.maxRecoveryMs, Math.round(recovery));
+            }
+        });
+    }
+
+    cancelPendingFrame(state) {
+        if (state?.frameId == null) return;
+        this.cancelFrame?.(state.frameId);
+        state.frameId = null;
     }
 
     stop() {
