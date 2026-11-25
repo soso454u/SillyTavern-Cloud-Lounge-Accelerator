@@ -67,6 +67,28 @@ test('upgrading clears the old rule and manual grouping store once', () => {
     assert.deepEqual(native, { unrelated: { setting: 1 }, [PRESET_GROUPS_KEY]: { schema: 5, expandedByPreset: {} } });
 });
 
+test('rebuilding native rows in the same list releases removed row style references', () => {
+    const list = { isConnected: true, classList: { add() {} }, querySelectorAll: () => [], contains: () => false };
+    const groups = new PresetEntryGroups({ host: { manager: { listElement: list } } });
+    const context = { key: 'same-preset', order: [], prompts: [] };
+    groups.key = context.key;
+    groups.list = list;
+    groups.context = () => context;
+    groups.entries = () => [];
+    groups.meta = () => ({});
+    groups.expanded = () => new Set();
+    groups.groupedDrag = { reconcile() {} };
+    groups.sortable = () => null;
+    for (const method of ['renderToolbar', 'protectSortable', 'watchMultiDrag', 'watchStatus']) groups[method] = () => {};
+    for (let rebuild = 0; rebuild < 50; rebuild++) {
+        // Native PromptManager replaces list children without replacing the list.
+        const removedRow = { isConnected: false };
+        groups.rowStyles.set(removedRow, [{ property: 'display', value: '', applied: 'none' }]);
+        groups.render();
+        assert.equal(groups.rowStyles.size, 0, `removed rows retained after native rebuild ${rebuild}`);
+    }
+});
+
 test('real v1.35 recognizes paired dividers and keeps identity rows above writing', { skip: !process.env.CLA_PRESET_FIXTURE }, async () => {
     const preset = JSON.parse(await readFile(process.env.CLA_PRESET_FIXTURE, 'utf8'));
     const byId = new Map(preset.prompts.map(prompt => [prompt.identifier, prompt]));

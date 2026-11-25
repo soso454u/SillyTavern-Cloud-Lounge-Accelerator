@@ -13,6 +13,7 @@ import { SecretKeyBatchActions } from './secret-key-batch.js';
 import { TransferMenu } from './transfer-menu.js';
 import { AutoConnectController } from './auto-connect.js';
 import { copyDiagnosticText } from './interaction-diagnostics.js';
+import { collectMemoryDiagnostics } from './memory-diagnostics.js';
 export { repairAccelerator } from './repair.js';
 export { SettingsPanel } from '../ui/panel.js';
 
@@ -80,6 +81,7 @@ export function createDeferredRuntime({
                 startup: this.startupOptimizer.getDiagnosticReport(),
                 interaction: this.interactionOptimizer.getDiagnosticReport(),
                 streaming: this.streamingRender.getReport(),
+                memory: collectMemoryDiagnostics({ chat, characters: scriptApi?.characters }),
             };
             await copyDiagnosticText(JSON.stringify(report, null, 2));
         },

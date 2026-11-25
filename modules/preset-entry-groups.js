@@ -297,6 +297,9 @@ export class PresetEntryGroups {
             this.sortRecords.delete(element);
         }
         this.statusObserver?.disconnect();
+        // PromptManager may replace every row while reusing the same list and
+        // preset. Saved inline styles must not keep those detached trees alive.
+        for (const row of this.rowStyles.keys()) if (!list.contains(row)) this.rowStyles.delete(row);
         if (this.folderNodes.size && ![...this.folderNodes.values()].some(record => record.element.isConnected)) {
             this.folderNodes.clear();
             this.rowMembership.clear();
