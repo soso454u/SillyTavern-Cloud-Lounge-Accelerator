@@ -91,7 +91,7 @@ async function loadDeferredRuntime(current) {
     current.deferredPromise ??= import('./modules/deferred-runtime.js').then(module => {
         if (!activated || current !== runtime) return;
         Object.assign(current, module.createDeferredRuntime({
-            chat, eventSource, eventTypes: event_types, getCurrentChatId,
+            chat, chatOptimizer: current.chatOptimizer, eventSource, eventTypes: event_types, getCurrentChatId,
             getRequestHeaders, isGenerating, scheduler: current.scheduler,
             getStreamingProcessor: () => chatApi.streamingProcessor,
             extensionSettings: extension_settings,

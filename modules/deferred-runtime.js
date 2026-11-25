@@ -14,16 +14,22 @@ import { TransferMenu } from './transfer-menu.js';
 import { AutoConnectController } from './auto-connect.js';
 import { copyDiagnosticText } from './interaction-diagnostics.js';
 import { collectMemoryDiagnostics } from './memory-diagnostics.js';
+import { ChatScrollActivity } from './chat-scroll-activity.js';
 export { repairAccelerator } from './repair.js';
 export { SettingsPanel } from '../ui/panel.js';
 
 export function createDeferredRuntime({
-    chat, eventSource, eventTypes, getCurrentChatId, getRequestHeaders,
+    chat, chatOptimizer, eventSource, eventTypes, getCurrentChatId, getRequestHeaders,
     isGenerating, scheduler, onStatus,
     getStreamingProcessor,
     extensionSettings,
     scriptApi,
 }) {
+    const chatScrollActivity = new ChatScrollActivity({
+        getChatElement: () => chatOptimizer?.chatElement,
+        onIdle: () => chatOptimizer?.queueCodeScan(),
+    });
+    if (chatOptimizer) chatOptimizer.scrollActivity = chatScrollActivity;
     const regexRefresh = new RegexRefreshController({
         chat, eventSource, eventTypes, getCurrentChatId, isGenerating, scheduler, onStatus,
     });
@@ -44,6 +50,7 @@ export function createDeferredRuntime({
         regexRefresh,
         streamingRender: new StreamingRenderOptimizer({ eventSource, eventTypes, getStreamingProcessor }),
         regexUiAdapter,
+        chatScrollActivity,
         async getPanelStatus(settings, runtimeStatus) {
             const { cacheController, interactionOptimizer, performanceConfig, startupOptimizer } = this;
             const backendMissing = cacheController.backendMissing === true;
@@ -81,6 +88,7 @@ export function createDeferredRuntime({
                 startup: this.startupOptimizer.getDiagnosticReport(),
                 interaction: this.interactionOptimizer.getDiagnosticReport(),
                 streaming: this.streamingRender.getReport(),
+                scrolling: this.chatScrollActivity.getReport(),
                 memory: collectMemoryDiagnostics({ chat, characters: scriptApi?.characters }),
             };
             await copyDiagnosticText(JSON.stringify(report, null, 2));

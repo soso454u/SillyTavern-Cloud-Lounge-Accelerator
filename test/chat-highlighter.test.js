@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ChatOptimizer } from '../modules/chat-optimizer.js';
+import { ChatScrollActivity } from '../modules/chat-scroll-activity.js';
 
 function fixture(t, { text = 'const a = 1;', copy = true } = {}) {
     const previous = { document: globalThis.document, Element: globalThis.Element };
@@ -15,6 +16,7 @@ function fixture(t, { text = 'const a = 1;', copy = true } = {}) {
     let generating = false;
     let highlights = 0;
     const copyScopes = [];
+    const listeners = new Map();
     code.dataset = {};
     code.textContent = text;
     code.isConnected = true;
@@ -45,13 +47,17 @@ function fixture(t, { text = 'const a = 1;', copy = true } = {}) {
         buttons = []; // Real highlight.js replaces innerHTML, including icons.
         code.dataset.highlighted = 'yes';
     };
-    globalThis.document = {querySelector: () => optimizer.chatElement, getSelection: () => selection};
+    globalThis.document = {
+        querySelector: () => optimizer.chatElement, getSelection: () => selection,
+        addEventListener: (name, fn) => listeners.set(name, fn),
+        removeEventListener: name => listeners.delete(name),
+    };
     t.after(() => {
         for (const [key,value] of Object.entries(previous)) {
             if (value === undefined) delete globalThis[key]; else globalThis[key] = value;
         }
     });
-    return {optimizer,code,pre,button,jobs,copyScopes,get highlights(){return highlights;},get buttons(){return buttons;},set selection(value){selection=value;},set generating(value){generating=value;}};
+    return {optimizer,code,pre,button,jobs,copyScopes,listeners,get highlights(){return highlights;},get buttons(){return buttons;},set selection(value){selection=value;},set generating(value){generating=value;}};
 }
 
 test('deduplicates pending code highlights and preserves the same native copy button and handler', async t => {
@@ -139,4 +145,49 @@ test('old offscreen code is observed without reading its contents', t => {
     f.optimizer.queueHighlight(f.code);
     assert.equal(observed, f.code);
     assert.equal(f.jobs.length, 0);
+});
+
+test('queued highlights and newly visible code wait through momentum scrolling after pointer release', async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const f = fixture(t);
+    f.optimizer.codeObservationStarted = true;
+    f.optimizer.scrollActivity = new ChatScrollActivity({
+        getChatElement: () => f.optimizer.chatElement,
+        onIdle: () => f.optimizer.queueCodeScan(),
+    });
+    f.optimizer.scrollActivity.start();
+    t.after(() => f.optimizer.scrollActivity.stop());
+    f.optimizer.queueHighlight(f.code);
+    assert.equal(f.jobs.length, 1);
+    f.listeners.get('scroll')({ target: f.optimizer.chatElement });
+    f.optimizer.highlightPointerId = null; // Finger lifted, but native momentum continues.
+    await f.jobs[0]();
+    assert.equal(f.highlights, 0);
+    // Let the scheduled promise's finally release its pending-code marker,
+    // as it would before a later real scroll-settle timer runs.
+    await Promise.resolve();
+    await Promise.resolve();
+    f.optimizer.queueHighlight(f.code, true);
+    assert.equal(f.jobs.length, 1, 'intersection callbacks must not restart highlighting mid-scroll');
+    t.mock.timers.tick(100);
+    f.listeners.get('scroll')({ target: f.optimizer.chatElement });
+    t.mock.timers.tick(179);
+    assert.equal(f.jobs.length, 1);
+    t.mock.timers.tick(1);
+    await f.jobs[1](); // Resumed discovery queues the deferred code.
+    await f.jobs[2]();
+    assert.equal(f.highlights, 1);
+    assert.equal(f.buttons[0], f.button);
+    assert.equal(f.buttons[0].nativeHandler(), 'copy');
+});
+
+test('background pages defer code DOM work and visibility return can resume it', async t => {
+    const f = fixture(t);
+    globalThis.document.hidden = true;
+    f.optimizer.queueHighlight(f.code);
+    assert.equal(f.jobs.length, 0);
+    globalThis.document.hidden = false;
+    f.optimizer.queueHighlight(f.code);
+    await f.jobs[0]();
+    assert.equal(f.highlights, 1);
 });

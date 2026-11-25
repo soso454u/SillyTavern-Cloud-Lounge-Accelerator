@@ -128,6 +128,7 @@ export class ChatOptimizer {
     startCodeObservation() {
         if (!this.started || this.codeObservationStarted) return;
         this.codeObservationStarted = true;
+        this.scrollActivity?.start();
         this.bind(this.eventTypes.GENERATION_STARTED, () => this.pauseCodeScanning());
         this.bind(this.eventTypes.GENERATION_STOPPED, () => this.refreshAfterGeneration());
         this.bind(this.eventTypes.GENERATION_ENDED, () => this.refreshAfterGeneration());
@@ -219,7 +220,7 @@ export class ChatOptimizer {
     }
 
     highlightBlocked() {
-        return this.highlightPointerId !== null || this.hasActiveChatSelection();
+        return document.hidden || this.scrollActivity?.active || this.highlightPointerId !== null || this.hasActiveChatSelection();
     }
 
     queueCodeScan(scanAll = false) {
@@ -263,6 +264,7 @@ export class ChatOptimizer {
         const nextChatKey = chatId == null ? null : String(chatId);
         if (nextChatKey === null) {
             this.activeChatKey = null;
+            this.scrollActivity?.reset();
             this.cancelInitialBottom();
             this.cancelHistoryAnchor();
             return;
@@ -270,6 +272,7 @@ export class ChatOptimizer {
         if (nextChatKey === this.activeChatKey) return;
 
         this.cancelHistoryAnchor();
+        this.scrollActivity?.reset();
         this.activeChatKey = nextChatKey;
         this.settleInitialBottom();
     }
@@ -665,6 +668,7 @@ export class ChatOptimizer {
     async stop() {
         if (!this.started) return;
         this.started = false;
+        this.scrollActivity?.stop();
         this.codeObservationStarted = false;
         this.generation += 1;
         this.cancelInitialBottom();
