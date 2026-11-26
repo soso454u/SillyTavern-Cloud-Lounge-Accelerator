@@ -92,6 +92,11 @@ dialog.cla-transfer-dialog .popup-body, dialog.cla-transfer-dialog .popup-conten
     scrollbar-gutter: stable;
 }
 .cla-transfer-tool [hidden] { display: none !important; }
+.cla-transfer-pagination { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 6px; padding-top: 4px; font-size: .8em; }
+.cla-transfer-pagination[hidden] { display: none !important; }
+.cla-transfer-pagination small { flex: 1; min-width: 0; text-align: center; overflow-wrap: anywhere; opacity: .8; font-variant-numeric: tabular-nums; }
+.cla-transfer-pagination .menu_button { min-width: 32px; min-height: 32px; margin: 0; padding: 3px 7px; font: inherit; }
+.cla-transfer-pagination .menu_button:disabled { opacity: .4; }
 .cla-transfer-actions, .cla-transfer-actions > div { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
 .cla-transfer-actions { justify-content: space-between; padding-top: 6px; border-top: 1px solid var(--SmartThemeBorderColor, #8885); }
 .cla-transfer-tool .cla-transfer-primary-actions select { width: auto; min-width: 60px; }

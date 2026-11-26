@@ -3,6 +3,7 @@ import { WORLD_FILTERS, PRESET_FILTERS, entryStatus, countReaderTokens } from '.
 import { ensureTransferEditorStyles } from '../utils/transfer-editor-style.js';
 import { PressSweepSelection } from '../utils/press-sweep-selection.js';
 import { TransferDrag } from '../utils/transfer-drag.js';
+import { TransferListFilter, transferPage } from '../utils/transfer-list-model.js';
 import { ContentTransferService, NativeTransferRepository, fingerprint, editTransferEntry, deleteTransferEntries, transferItems, transferCollection, transferScopeKey, reorderPresetPrompts } from './content-transfer.js';
 
 const node = (tag, text, className) => {
@@ -25,6 +26,7 @@ const toolbarIcons = {
     reload: 'M20 8a8 8 0 1 0 0 8m0-13v5h-5',
     execute: 'M4 12h15m-6-6 6 6-6 6',
     delete: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7m4-7v7',
+    'delete-world': 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7m4-7v7',
     refresh: 'M4 4h16v13H4zm4 17h8m-4-4v4',
 };
 
@@ -47,6 +49,24 @@ function iconButton(action, title) {
     svg.append(path);
     control.append(svg);
     return control;
+}
+
+function pagination(onPage) {
+    const element = node('nav', undefined, 'cla-transfer-pagination');
+    element.setAttribute('aria-label', '条目分页');
+    const previous = node('button', '‹', 'menu_button'), next = node('button', '›', 'menu_button');
+    previous.type = next.type = 'button';
+    describeControl(previous, '上一页'); describeControl(next, '下一页');
+    const range = node('small');
+    previous.addEventListener('click', () => onPage(-1));
+    next.addEventListener('click', () => onPage(1));
+    element.append(previous, range, next);
+    return { element, update(page, locked = false) {
+        element.hidden = page.pages <= 1;
+        previous.disabled = locked || page.index === 0;
+        next.disabled = locked || page.index === page.pages - 1;
+        range.textContent = `${page.total ? page.start + 1 : 0}–${page.end} / ${page.total}`;
+    } };
 }
 
 const itemName = ({ value, id }) => value.comment || value.scriptName || value.name || `条目 ${id}`;
@@ -133,6 +153,8 @@ export class TransferTools {
 
     createView() {
         this.selected = new Set(); this.targetSelected = new Set(); this.activeSide = 'source'; this.items = []; this.targetItems = []; this.loadSequence = 0; this.targetLoadSequence = 0; this.needsReview = false; this.groupOpen = new Map();
+        this.filters = { source: new TransferListFilter(), target: new TransferListFilter() };
+        this.pagers = new Map(); this.pagedLists = new Map();
         const view = node('div', undefined, 'cla-transfer-tool');
         this.view = view;
         const heading = node('header', undefined, 'cla-transfer-heading');
@@ -205,7 +227,10 @@ export class TransferTools {
                 else { this.renderTarget(); this.updateSelectionChecks(); }
             });
             filters.append(kind, endpoint, search, status);
-            section.append(bar, filters, list);
+            const pager = pagination(delta => this.changePage(side, delta));
+            pager.element.hidden = true;
+            this.pagers.set(side, pager);
+            section.append(bar, filters, list, pager.element);
             return section;
         };
         this.leftPane = pane('source', '左侧', this.kind, this.source, this.search, this.sourceCount, this.list);
@@ -218,10 +243,12 @@ export class TransferTools {
         this.refreshButton = iconButton('refresh', '刷新酒馆');
         this.refreshButton.hidden = true;
         this.deleteButton = iconButton('delete', '删除所选');
+        this.deleteWorldButton = iconButton('delete-world', '删除整本世界书');
+        this.deleteWorldButton.append(document.createTextNode('删整本'));
         this.actionCount = node('small', '0', 'cla-transfer-action-count');
         this.executeButton.append(this.actionCount);
         const selectionActions = node('div', undefined, 'cla-transfer-selection-actions');
-        selectionActions.append(iconButton('all', '全选当前结果'), iconButton('clear', '清空选择'), this.reloadButton, this.refreshButton);
+        selectionActions.append(iconButton('all', '全选当前结果'), iconButton('clear', '清空选择'), this.reloadButton, this.deleteWorldButton, this.refreshButton);
         const transferActions = node('div', undefined, 'cla-transfer-primary-actions');
         transferActions.append(this.operation, this.insertionMode, this.insertionAnchor, this.executeButton, this.deleteButton);
         const actions = node('div', undefined, 'cla-transfer-actions');
@@ -276,14 +303,17 @@ export class TransferTools {
         this.source.addEventListener('change', () => { this.cancelGestures(); this.excludeSource(); void this.reloadPanels(); });
         this.target.addEventListener('change', () => { this.cancelGestures(); void this.loadTarget(); });
         this.operation.addEventListener('change', () => { this.cancelGestures(); this.updateControls(); });
-        this.search.addEventListener('input', () => { this.cancelGestures(); this.selected.clear(); this.renderItems(); });
-        this.targetSearch.addEventListener('input', () => { this.cancelGestures(); this.targetSelected.clear(); this.renderTarget(); this.updateSelectionChecks(); });
+        for (const [side, input] of [['source', this.search], ['target', this.targetSearch]]) {
+            input.addEventListener('input', event => { if (!event.isComposing) this.searchChanged(side); });
+            input.addEventListener('compositionend', () => this.searchChanged(side));
+        }
         view.addEventListener('click', event => {
             const eye = event.target.closest('[data-cla-transfer-view]');
             if (eye) { event.preventDefault(); event.stopPropagation(); void this.openEntry(eye.dataset.claTransferSide, eye.dataset.claTransferView); return; }
             const action = event.target.closest('[data-cla-transfer-action]')?.dataset.claTransferAction;
             if (!action || this.busy) return;
             if (action === 'delete') { void this.deleteSelected(); return; }
+            if (action === 'delete-world') { void this.deleteWorldBook(); return; }
             if (action === 'activate' || action === 'reader') return;
             if (action === 'execute') { void this.execute(); return; }
             if (action === 'reload') { void this.reloadPanels(); return; }
@@ -295,6 +325,11 @@ export class TransferTools {
     }
 
     cancelGestures() { this.nameSelection?.cancel(); this.dragger?.cancel(); }
+    searchChanged(side) {
+        this.cancelGestures(); this.selectionFor(side).clear();
+        if (side === 'source') this.renderItems();
+        else { this.renderTarget(); this.updateSelectionChecks(); }
+    }
     selectionFor(side) { return side === 'source' ? this.selected : this.targetSelected; }
     dataFor(side) { return side === 'source' ? this.sourceData : this.targetData; }
     itemsFor(side) { return side === 'source' ? this.items : this.targetItems; }
@@ -391,7 +426,7 @@ export class TransferTools {
         this.targetKind.value = compatible.some(([type]) => type === previous) ? previous : this.kind.value;
         this.syncStatusFilters();
         this.populateTargets(); this.refreshButton.hidden = true;
-        void this.reloadPanels();
+        return this.reloadPanels();
     }
     syncStatusFilters() {
         const sets = { world: WORLD_FILTERS, prompt: PRESET_FILTERS };
@@ -450,6 +485,8 @@ export class TransferTools {
         const row = node('div', undefined, 'cla-transfer-item'); row.dataset.claTransferId = id;
         if (side === 'target') row.dataset.claTransferTargetId = id;
         row.dataset.claTransferSide = side; row.tabIndex = 0; row.setAttribute('role', 'checkbox');
+        const selected = this.selectionFor(side).has(id);
+        row.classList.toggle('cla-transfer-selected', selected); row.setAttribute('aria-checked', String(selected));
         const name = node('span', itemName(item), 'cla-transfer-item-name');
         name.title = name.textContent;
         if ((side === 'source' ? this.kind : this.targetKind).value === 'world') {
@@ -483,6 +520,13 @@ export class TransferTools {
         return row;
     }
     renderList(list, items, side) {
+        if (this.refFor(side)?.kind === 'world') {
+            const previous = this.pagedLists.get(side);
+            this.renderWorldPage(side, items, previous?.items === items ? previous.index : 0);
+            return;
+        }
+        this.pagedLists.delete(side);
+        this.pagers.get(side).element.hidden = true;
         list.replaceChildren();
         if (!isRegex(this.refFor(side)?.kind)) { for (const item of items) list.append(this.renderItem(item, side)); return; }
         const groups = new Map();
@@ -510,18 +554,43 @@ export class TransferTools {
             details.append(summary); for (const item of members) details.append(this.renderItem(item, side)); list.append(details);
         }
     }
+    renderWorldPage(side, items, index) {
+        const page = transferPage(items, index);
+        this.pagedLists.set(side, { ...page, items });
+        const fragment = document.createDocumentFragment();
+        for (const item of page.items) fragment.append(this.renderItem(item, side));
+        this.listFor(side).replaceChildren(fragment);
+        this.pagers.get(side).update(page, this.busy || this.editing || this.previewLoading);
+    }
+    changePage(side, delta) {
+        const current = this.pagedLists.get(side);
+        if (!current || this.busy || this.editing || this.previewLoading || this.loading || this.targetLoading) return;
+        this.cancelGestures();
+        this.activeSide = side;
+        this.renderWorldPage(side, current.items, current.index + delta);
+        this.listFor(side).scrollTop = 0;
+        this.updateSelectionChecks();
+    }
     updateSelectionChecks() {
+        if (!this.view) return;
         for (const [side, list] of [['source', this.list], ['target', this.targetList]]) {
             const selection = this.selectionFor(side);
             for (const row of list.querySelectorAll('.cla-transfer-item')) {
                 const selected = selection.has(row.dataset.claTransferId);
-                row.classList.toggle('cla-transfer-selected', selected); row.setAttribute('aria-checked', String(selected));
+                if (row.getAttribute('aria-checked') !== String(selected)) {
+                    row.classList.toggle('cla-transfer-selected', selected); row.setAttribute('aria-checked', String(selected));
+                }
             }
-            for (const group of list.querySelectorAll('.cla-transfer-group')) {
-                const members = this.filtered(side).filter(item => this.groupName(item, side) === group.dataset.claTransferCollection);
-                const count = members.filter(item => selection.has(item.id)).length;
+            const groupRows = list.querySelectorAll('.cla-transfer-group'), groups = new Map();
+            for (const item of groupRows.length ? this.filtered(side) : []) {
+                const name = this.groupName(item, side), total = groups.get(name) || { total: 0, selected: 0 };
+                total.total++; if (selection.has(item.id)) total.selected++;
+                groups.set(name, total);
+            }
+            for (const group of groupRows) {
+                const { total, selected: count } = groups.get(group.dataset.claTransferCollection) || { total: 0, selected: 0 };
                 group.querySelector('summary').classList.toggle('cla-transfer-selected', count > 0);
-                group.querySelector('.cla-transfer-group-count').textContent = count ? `${count} / ${members.length} 条` : `${members.length} 条`;
+                group.querySelector('.cla-transfer-group-count').textContent = count ? `${count} / ${total} 条` : `${total} 条`;
             }
         }
         this.updateControls();
@@ -571,21 +640,23 @@ export class TransferTools {
         const query = (side === 'source' ? this.search : this.targetSearch).value.toLocaleLowerCase().trim();
         const kind = (side === 'source' ? this.kind : this.targetKind).value;
         const status = this.statusFilters.get(side)?.value;
-        return (side === 'source' ? this.items : this.targetItems).filter(item => {
-            return (!status || status === 'all' || entryStatus(kind, item) === status)
-                && (!query || JSON.stringify(item.value).toLocaleLowerCase().includes(query));
-        });
+        return this.filters[side].filter(this.itemsFor(side), kind, query, status);
     }
 
     renderItems() {
         const visible = this.filtered();
-        this.renderList(this.list, visible, 'source');
-        if (!visible.length && this.items.length) this.list.append(node('p', '没有符合筛选的条目。'));
-        if (!this.items.length && !this.loading) this.list.append(node('p', '此来源没有可转移的内容。'));
+        const previous = this.sourceRendered;
+        if (previous?.items !== visible || previous.loading !== this.loading || previous.list !== this.list) {
+            this.sourceRendered = { items: visible, loading: this.loading, list: this.list };
+            this.renderList(this.list, visible, 'source');
+            if (!visible.length && this.items.length) this.list.append(node('p', '没有符合筛选的条目。'));
+            if (!this.items.length && !this.loading) this.list.append(node('p', '此来源没有可转移的内容。'));
+        }
         this.updateSelectionChecks();
     }
 
     updateControls() {
+        if (!this.view) return;
         const ready = this.canTransfer();
         const locked = this.busy || this.editing || this.previewLoading;
         for (const input of this.view.querySelectorAll('button, select, input')) if (!input.closest('.cla-transfer-heading')) input.disabled = locked;
@@ -608,6 +679,12 @@ export class TransferTools {
         }
         this.targetKind.disabled = locked || this.targetKind.options.length < 2;
         this.deleteButton.disabled = locked || this.loading || this.targetLoading || this.needsReview || !selected.size;
+        const activeRef = this.refFor(this.activeSide);
+        this.deleteWorldButton.hidden = activeRef?.kind !== 'world';
+        this.deleteWorldButton.disabled = locked || this.loading || this.targetLoading || this.needsReview || !this.dataFor(this.activeSide)
+            || typeof this.repository.worldApi.deleteWorldInfo !== 'function' || this.isGenerating();
+        describeControl(this.deleteWorldButton, `删除${right ? '左侧' : '右侧'}整本世界书：${activeRef?.label || ''}`);
+        for (const [side, page] of this.pagedLists) this.pagers.get(side).update(page, locked || this.loading || this.targetLoading);
         this.reloadButton.disabled = locked || !this.source.value;
         this.sourceCount.textContent = `共 ${this.items.length} 项 · 已选 ${this.selected.size}`;
         this.renderTarget();
@@ -616,7 +693,6 @@ export class TransferTools {
             const canSort = Boolean(this.dataFor(side) && handle.closest('[data-cla-transfer-order-anchor]'));
             handle.disabled = locked || this.loading || this.targetLoading || this.needsReview || (!ready && !canSort);
         }
-        for (const row of this.view.querySelectorAll('.cla-transfer-item')) { const checked = this.selectionFor(row.dataset.claTransferSide).has(row.dataset.claTransferId); row.classList.toggle('cla-transfer-selected', checked); row.setAttribute('aria-checked', String(checked)); }
     }
 
     saveTransferGroups(job, result) {
@@ -659,7 +735,7 @@ export class TransferTools {
             const meta = node('div', undefined, 'cla-transfer-reader-meta');
             const total = node('small');
             const definitions = ref.kind === 'world' ? WORLD_FILTERS : PRESET_FILTERS;
-            let filter = ref.kind === 'prompt' ? 'enabled' : 'all';
+            let filter = ref.kind === 'prompt' ? 'enabled' : 'all', pageIndex = 0;
             const filters = node('div', undefined, 'cla-transfer-reader-filters');
             filters.setAttribute('role', 'group');
             filters.setAttribute('aria-label', '按条目状态筛选');
@@ -677,6 +753,7 @@ export class TransferTools {
                 control.addEventListener('click', () => {
                     if (filter === key) return;
                     filter = key;
+                    pageIndex = 0;
                     render();
                 });
                 filters.append(control);
@@ -686,13 +763,16 @@ export class TransferTools {
             const list = node('div', undefined, 'cla-transfer-reader-list');
             list.tabIndex = 0;
             list.setAttribute('aria-label', '条目正文');
+            const pager = pagination(delta => { pageIndex += delta; render(); list.scrollTop = 0; });
             const render = () => {
                 const visible = filter === 'all' ? items : items.filter(item => entryStatus(ref.kind, item) === filter);
+                const page = transferPage(visible, pageIndex, ref.kind === 'world' ? 20 : Math.max(1, visible.length));
+                pageIndex = page.index;
                 total.textContent = filter === 'all' ? `共 ${items.length} 项`
                     : `${definitions.find(([key]) => key === filter)[1]} ${visible.length} / ${items.length} 项`;
                 for (const [key, { control }] of controls) control.setAttribute('aria-pressed', String(filter === key));
-                list.replaceChildren();
-                for (const item of visible) {
+                const fragment = document.createDocumentFragment();
+                for (const item of page.items) {
                     const section = node('article');
                     const status = entryStatus(ref.kind, item);
                     const header = node('header');
@@ -701,13 +781,15 @@ export class TransferTools {
                     if (status === 'disabled') header.append(node('small', '未启用'));
                     const content = item.value.marker ? '运行时由酒馆填充' : item.value.content || '（无正文）';
                     section.append(header, node('div', content, 'cla-transfer-reader-content'));
-                    list.append(section);
+                    fragment.append(section);
                 }
+                list.replaceChildren(fragment);
+                pager.update(page);
                 if (!visible.length) list.append(node('p', '没有符合筛选的条目。'));
                 list.scrollTop = 0;
             };
             render();
-            reader.append(heading, meta, list);
+            reader.append(heading, meta, list, pager.element);
             const popup = new this.popupApi.Popup(reader, this.popupApi.POPUP_TYPE.TEXT, '', {
                 wide: true, large: true, leftAlign: true, okButton: '关闭',
                 onClose: () => { if (this.readerPopup === popup) this.readerPopup = null; },
@@ -875,6 +957,33 @@ export class TransferTools {
         dialog.showModal(); expandedInput.focus(); expandedInput.scrollTop = input.scrollTop;
     }
 
+    async deleteWorldBook() {
+        if (!this.view || this.deleteWorldButton.disabled || this.deleteWorldButton.hidden) return;
+        if (this.isGenerating()) { this.status.textContent = '请等待生成结束后再删除世界书'; return; }
+        this.cancelGestures();
+        const view = this.view, generation = this.generation, side = this.activeSide, ref = this.refFor(side), expected = this.dataFor(side);
+        if (ref?.kind !== 'world' || !expected) return;
+        const valid = () => this.started && this.view === view && view.isConnected && this.generation === generation
+            && this.refFor(side)?.kind === 'world' && this.refFor(side)?.id === ref.id && !this.isGenerating();
+        this.busy = true; this.updateControls();
+        try {
+            const content = node('p', `确定删除整本世界书“${ref.name}”吗？\n包含全部 ${this.itemsFor(side).length} 条条目，不只是当前页或勾选项。\n删除后无法在此撤销；启用与关联由酒馆原生删除流程处理。`);
+            content.style.whiteSpace = 'pre-wrap';
+            const confirmed = await this.popupApi.Popup.show.confirm(null, content, { okButton: '删除整本世界书', cancelButton: '取消' });
+            if (confirmed !== (this.popupApi.POPUP_RESULT?.AFFIRMATIVE ?? 1) || !valid()) return;
+            this.status.textContent = '正在检查并删除世界书…';
+            await this.repository.deleteWorld(ref, expected, { valid });
+            const message = `已删除整本世界书“${ref.name}”。`;
+            if (this.view === view) {
+                this.busy = false;
+                await this.chooseKind();
+                if (this.view === view) this.status.textContent = message;
+            } else globalThis.toastr?.success?.(message, '云酒馆加速器');
+        } catch (error) {
+            if (this.view === view) { this.status.textContent = `世界书删除未完成或未确认：${error.message}`; this.needsReview = true; }
+        } finally { this.busy = false; if (this.view === view) this.updateControls(); }
+    }
+
     async deleteSelected() {
         if (!this.view || this.deleteButton.disabled) return;
         if (this.isGenerating()) { this.status.textContent = '请等待生成结束后再删除'; return; }
@@ -1025,6 +1134,10 @@ export class TransferTools {
             [this.popup, this.windowClosed],
         ];
         this.view?.remove(); this.view = null;
+        for (const filter of Object.values(this.filters || {})) filter.clear();
+        this.pagedLists?.clear(); this.pagers?.clear();
+        this.sourceRendered = this.targetRendered = null;
+        this.sourceData = this.targetData = null; this.items = []; this.targetItems = [];
         this.popup = null;
         this.closing = Promise.allSettled(popups.map(([popup, closed]) =>
             popup?.dlg?.hasAttribute('closing') ? closed : popup?.complete?.(0)));

@@ -271,6 +271,23 @@ export class NativeTransferRepository {
 
     exists(ref) { return this.list(ref.kind).some(item => item.id === ref.id); }
 
+    async deleteWorld(ref, expected, { valid = () => true } = {}) {
+        if (ref?.kind !== 'world' || typeof this.worldApi.deleteWorldInfo !== 'function') throw new Error('当前酒馆不支持删除整本世界书');
+        if (ref.id !== ref.name) throw new Error('世界书标识不一致，已停止删除');
+        const check = () => { if (!valid() || !this.exists(ref)) throw new Error('窗口或世界书已变化，已停止删除'); };
+        check();
+        // Preserve the native editor's unsaved work before deleting any book.
+        await this.beforeWrite({ kind: 'world' });
+        check();
+        if (fingerprint(await this.read(ref)) !== fingerprint(expected)) throw new Error('世界书内容已更改，请重新加载后确认');
+        const actual = await (await this.post('/api/worldinfo/get', { name: ref.name })).json();
+        if (fingerprint(actual) !== fingerprint(expected)) throw new Error('服务器上的世界书已更改，请重新加载后确认');
+        check();
+        // Native deletion owns cache, global selection and current character /
+        // persona link cleanup. Never bypass it with a direct delete request.
+        if (await this.worldApi.deleteWorldInfo(ref.name) !== true || this.exists(ref)) throw new Error('世界书删除未确认，请重新加载列表检查');
+    }
+
     async read(ref) {
         if (!this.exists(ref)) throw new Error('来源或目标已不存在，请重新打开工具');
         if (ref.kind === 'global') return clone(this.extensionSettings.regex ?? []);

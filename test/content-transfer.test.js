@@ -2,6 +2,42 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ContentTransferService, NativeTransferRepository, planTransfer, editTransferEntry, transferCollection, transferItems, deleteTransferEntries, reorderPresetPrompts } from '../modules/content-transfer.js';
 const clone = value => structuredClone(value);
+
+for (const scenario of ['success', 'local-change', 'server-change', 'closed', 'closed-after-read', 'native-failure', 'native-missing']) {
+    test(`whole-world deletion uses native cleanup and refuses unsafe ${scenario} state`, async () => {
+        const expected = { entries: { 0: { uid: 0, content: 'original' } } };
+        const names = ['A', 'B'], deleted = [], events = [];
+        let current = true;
+        const worldApi = { world_names: names, loadWorldInfo: async () => scenario === 'local-change' ? { entries: {} } : clone(expected) };
+        if (scenario !== 'native-missing') worldApi.deleteWorldInfo = async name => {
+            events.push('native-delete');
+            if (scenario === 'native-failure') return false;
+            deleted.push(name); names.splice(names.indexOf(name), 1); return true;
+        };
+        const repo = new NativeTransferRepository({ scriptApi: { getRequestHeaders: () => ({ 'X-CSRF-Token': 'fixture' }) }, worldApi,
+            fetchImpl: async (url, options) => {
+                assert.equal(url, '/api/worldinfo/get', 'no direct delete request');
+                assert.equal(options.headers['X-CSRF-Token'], 'fixture');
+                events.push('fresh-read');
+                if (scenario === 'closed-after-read') current = false;
+                return { ok: true, json: async () => scenario === 'server-change' ? { entries: {} } : clone(expected) };
+            },
+        });
+        repo.beforeWrite = async () => { events.push('flush'); if (scenario === 'closed') current = false; };
+        const operation = repo.deleteWorld({ kind: 'world', id: 'A', name: 'A' }, expected, { valid: () => current });
+        if (scenario === 'success') {
+            await operation;
+            assert.deepEqual(deleted, ['A']);
+            assert.deepEqual(events, ['flush', 'fresh-read', 'native-delete']);
+            assert.deepEqual(names, ['B']);
+        } else {
+            await assert.rejects(operation);
+            assert.deepEqual(deleted, []);
+            assert.deepEqual(names, ['A', 'B']);
+        }
+        assert.equal(expected.entries[0].content, 'original');
+    });
+}
 const rule = (id, extra = {}) => ({ id, scriptName: '同名规则', findRegex: '/abc/g', replaceString: '<div>$1</div>', disabled: true, placement: [1,2], trimStrings:['x'], minDepth:2, maxDepth:8, runOnEdit:true, markdownOnly:true, unknown:{future:true}, ...extra });
 
 test('world copies preserve all content/settings and metadata, allocate independent UIDs and append order', () => {

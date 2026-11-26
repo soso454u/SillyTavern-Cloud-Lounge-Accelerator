@@ -1,11 +1,13 @@
 // Isolated browser fixtures: real transfer/controller modules, simulated native
-// repositories, popups and storage. Never accesses a user's world books/cards.
+// repositories, popups and storage. Never contacts a user's server or writes
+// the optional local world-book fixture (CLA_WORLD_FIXTURE).
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 const {chromium}=createRequire(import.meta.url)('playwright');
-const assets=new Map(await Promise.all(['modules/transfer-menu.js','modules/transfer-tools.js','modules/content-transfer.js','modules/auto-connect.js','utils/transfer-drag.js','utils/press-sweep-selection.js','utils/regex-collections.js','utils/transfer-editor-style.js','utils/transfer-reader-stats.js','style.css'].map(async path=>['/'+path,await readFile(new URL('../'+path,import.meta.url),'utf8')])));
+const worldFixture = process.env.CLA_WORLD_FIXTURE ? JSON.parse(await readFile(process.env.CLA_WORLD_FIXTURE, 'utf8')) : null;
+const assets=new Map(await Promise.all(['modules/transfer-menu.js','modules/transfer-tools.js','modules/content-transfer.js','modules/auto-connect.js','utils/transfer-drag.js','utils/press-sweep-selection.js','utils/regex-collections.js','utils/transfer-editor-style.js','utils/transfer-reader-stats.js','utils/transfer-list-model.js','style.css'].map(async path=>['/'+path,await readFile(new URL('../'+path,import.meta.url),'utf8')])));
 const manifest=JSON.parse(await readFile(new URL('../manifest.json',import.meta.url),'utf8'));
 // Emulate a browser with the old unversioned CSS cached. The native manifest
 // loader must request the new versioned URL to get the matching four controls.
@@ -16,6 +18,7 @@ assets.set('/world-info.js',`
 export const world_names=['世界书 A','世界书 B'];export const worldInfoCache=new Map();
 export async function loadWorldInfo(name){if(worldInfoCache.has(name))return structuredClone(worldInfoCache.get(name));const data=await (await fetch('/api/worldinfo/get',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})})).json();worldInfoCache.set(name,data);return structuredClone(data)}
 export async function saveWorldInfo(name,data){worldInfoCache.set(name,data);await fetch('/api/worldinfo/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,data})})}export function reloadEditor(){}
+export async function deleteWorldInfo(name){const response=await fetch('/api/worldinfo/delete',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':'fixture'},body:JSON.stringify({name})});if(!response.ok)return false;worldInfoCache.delete(name);world_names.splice(world_names.indexOf(name),1);return true;}
 `);
 // Simulates the native exported parser, including comma-bearing regex tokens.
 function splitKeywordsAndRegexes(input) {
@@ -45,7 +48,7 @@ static show={confirm:async(header,content)=>{window.confirmations++;const dialog
 assets.set('/secrets.js',`export const SECRET_KEYS={CUSTOM:'custom'};export let secret_state={custom:[{id:'a',active:true}]};export const resolveSecretKey=()=> 'custom';export function rotate(id){secret_state={custom:[{id,active:true}]};}`);
 const rule=id=>({id,scriptName:id==='r1'?'01 | 社交动态 | 正文':id==='r2'?'02 | 社交动态 | 标题':'同名角色规则',findRegex:'/abc/g',replaceString:'<div>$1</div>',disabled:true,placement:[1,2],unknown:{keep:true}});
 let worlds,cards,savedPresets,writes,fail;
-const reset=()=>{worlds={'世界书 A':{entries:{0:{uid:0,comment:'<img src=x onerror=window.injected=true>',content:'世界条目正文',key:['关键词'],disable:true,position:4,depth:8,unknown:42},1:{uid:1,comment:'第二条',content:'搜索内容',key:['甲'],constant:true}},extensions:{keep:true}},'世界书 B':{entries:{0:{uid:0,comment:'已有条目',content:'不能覆盖',displayIndex:5}},extensions:{target:true}}};for(let i=2;i<16;i++)worlds['世界书 A'].entries[i]={uid:i,comment:'其他条目 '+i,content:'用于检查正常上下滑动',vectorized:i===2};cards={'A.png':{avatar:'A.png',data:{extensions:{regex_scripts:[rule('r1'),rule('r2')],other:42}}},'B.png':{avatar:'B.png',data:{extensions:{regex_scripts:[rule('existing')],other:77}}}};savedPresets={};writes=[];fail=null};reset();
+const reset=()=>{worlds={'世界书 A':{entries:{0:{uid:0,comment:'<img src=x onerror=window.injected=true>',content:'世界条目正文',key:['关键词'],disable:true,position:4,depth:8,unknown:42},1:{uid:1,comment:'第二条',content:'搜索内容',key:['甲'],constant:true}},extensions:{keep:true}},'世界书 B':{entries:{0:{uid:0,comment:'已有条目',content:'不能覆盖',displayIndex:5}},extensions:{target:true}}};for(let i=2;i<16;i++)worlds['世界书 A'].entries[i]={uid:i,comment:'其他条目 '+i,content:'用于检查正常上下滑动',vectorized:i===2};if(worldFixture)worlds['世界书 A']=structuredClone(worldFixture);cards={'A.png':{avatar:'A.png',data:{extensions:{regex_scripts:[rule('r1'),rule('r2')],other:42}}},'B.png':{avatar:'B.png',data:{extensions:{regex_scripts:[rule('existing')],other:77}}}};savedPresets={};writes=[];fail=null};reset();
 const html=`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/${manifest.css}"><style>
 *{box-sizing:border-box}body{font:15px sans-serif;background:#c8dbea;color:#202c36;--SmartThemeBorderColor:#7895;--SmartThemeBodyColor:#202c36}.menu_button,.text_pole{font:inherit;color:inherit;border:1px solid #9aabb8;border-radius:8px;background:#eff6facc;padding:6px}.fixture-popup{width:680px;max-width:calc(100vw - 20px);max-height:calc(100vh - 24px);overflow:auto;border:1px solid #bccddd;border-radius:18px;background:#e8f1f9;padding:16px}#confirm-transfer{max-width:calc(100vw - 20px);border-radius:12px}dialog::backdrop{background:#1235}.cla-transfer-list{max-height:35vh}.cla-transfer-editor .menu_button{width:1.5em}.cla-transfer-editor{--SmartThemeBlurTintColor:rgba(151,171,191,.2)}.cla-transfer-keywords{display:block}.cla-transfer-keywords textarea{height:180px}dialog:not(.fixture-popup):not(#confirm-transfer){width:fit-content;height:fit-content;max-width:400px;margin:auto;background:white}.fa-eye::before{content:"◉"}#extensionsMenu{padding:12px}.list-group-item{cursor:pointer;padding:8px}
 </style><div id="extensionsMenu"></div><input id="custom_api_url_text" value="https://example.invalid/v1"><select id="chat_completion_source"><option value="custom">custom</option></select><button id="api_button_openai" class="api_button">连接</button><button class="api_loading">取消连接</button>
@@ -65,12 +68,13 @@ const server=createServer(async(req,res)=>{
  if(req.url.startsWith('/fixture/fail/')){fail=decodeURIComponent(req.url.slice('/fixture/fail/'.length));res.end('{}');return}
  if(req.url.startsWith('/api/')){
   let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw||'{}');res.setHeader('Content-Type','application/json');
-  if(req.url.endsWith('/edit')||req.url.endsWith('merge-attributes')||req.url.endsWith('/save')){
+  if(req.url.endsWith('/edit')||req.url.endsWith('merge-attributes')||req.url.endsWith('/save')||req.url.endsWith('/delete')){
    writes.push({url:req.url,body,csrf:req.headers['x-csrf-token']});
    if(fail===(body.name||body.avatar)){res.writeHead(503);res.end('{}');return}
   }
   if(req.url==='/api/worldinfo/get')res.end(JSON.stringify(worlds[body.name]));
   else if(req.url==='/api/worldinfo/edit'){worlds[body.name]=body.data;res.end('{"ok":true}')}
+  else if(req.url==='/api/worldinfo/delete'){delete worlds[body.name];res.end('{"ok":true}')}
   else if(req.url==='/api/characters/get')res.end(JSON.stringify(cards[body.avatar_url]));
   else if(req.url==='/api/characters/merge-attributes'){cards[body.avatar].data.extensions.regex_scripts=body.data.extensions.regex_scripts;res.end('{}')}
   else if(req.url==='/api/presets/save'){savedPresets[body.name]=body.preset;res.end(JSON.stringify({name:body.name}))}
@@ -82,7 +86,7 @@ const server=createServer(async(req,res)=>{
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));let browser;
 try{
  browser=await chromium.launch({headless:true,...(process.env.CLA_BROWSER_EXECUTABLE?{executablePath:process.env.CLA_BROWSER_EXECUTABLE}:{})});
- for(const mobile of [false,true]){
+ for(const mobile of process.env.CLA_MOBILE_ONLY?[true]:[false,true]){
   reset();const page=await browser.newPage({viewport:mobile?{width:390,height:844}:{width:1100,height:900},hasTouch:mobile,isMobile:mobile});const errors=[];page.on('pageerror',e=>errors.push(e.message));
   const transferRequests=[];page.on('request',request=>{if(new URL(request.url()).pathname==='/modules/transfer-tools.js')transferRequests.push(request.url());});
   await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForFunction(()=>window.ready&&connects===1);
@@ -137,14 +141,109 @@ try{
   };
   const sweep=async(fromId,toId)=>{
     const name=id=>page.locator('.cla-transfer-source-list [data-cla-transfer-id="'+id+'"] .cla-transfer-item-name');
+    await name(fromId).scrollIntoViewIfNeeded();await name(toId).scrollIntoViewIfNeeded();
     const a=await name(fromId).boundingBox(),b=await name(toId).boundingBox();const start={x:a.x+a.width/2,y:a.y+a.height/2},end={x:b.x+b.width/2,y:b.y+b.height/2};
-    if(mobile){await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{...start,id:9}]});await page.waitForTimeout(480);for(let i=1;i<=6;i++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:start.x+(end.x-start.x)*i/6,y:start.y+(end.y-start.y)*i/6,id:9}]});await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});}
+    if(mobile){await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{...start,id:9}]});await page.waitForTimeout(480);for(let i=1;i<=6;i++){await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:start.x+(end.x-start.x)*i/6,y:start.y+(end.y-start.y)*i/6,id:9}]});await page.waitForTimeout(16);}await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});}
     else{await page.mouse.move(start.x,start.y);await page.mouse.down();await page.mouse.move(end.x,end.y,{steps:6});await page.mouse.up();}
   };
   assert.equal(await page.locator('#cla-transfer-styles').count(),0);
   assert.equal(transferRequests.length,0,'the wand entry does not download the transfer implementation');
   await press(page.locator('#cla-transfer-menu'));await selected('0').waitFor();
   assert.equal(transferRequests.length,1,'the first click loads the transfer implementation once');assert.equal(await page.locator('.cla-transfer-item img').count(),0);
+  if(worldFixture){
+    await page.waitForFunction(()=>!tools.loading&&!tools.targetLoading);
+    const allIds=Object.keys(worldFixture.entries), first=allIds[0], last=allIds.at(-1);
+    const pane=page.locator('[data-cla-transfer-pane="source"]');
+    const pager=pane.locator('.cla-transfer-pagination');
+    assert.equal(await pane.locator('.cla-transfer-item').count(),40);
+    const fits=await pane.evaluate(pane=>{
+      const bounds=pane.getBoundingClientRect();
+      return [...pane.querySelector('.cla-transfer-pagination').children].every(node=>{
+        const rect=node.getBoundingClientRect();return rect.left>=bounds.left&&rect.right<=bounds.right;
+      });
+    });
+    assert.equal(fits,true,'pagination controls fit the mobile pane');
+    if(mobile&&process.env.CLA_WORLD_SCREENSHOT)await page.screenshot({path:process.env.CLA_WORLD_SCREENSHOT});
+    await press(selected(first));
+    await press(pager.getByRole('button',{name:'下一页',exact:true}));
+    assert.equal(await pane.locator('.cla-transfer-item').count(),40);
+    assert.equal(await page.evaluate(()=>tools.selected.size),1);
+    await press(pager.getByRole('button',{name:'上一页',exact:true}));
+    assert.equal(await selected(first).getAttribute('aria-checked'),'true');
+    await press(action('all'));
+    assert.equal(await page.evaluate(()=>tools.selected.size),allIds.length,'all results includes off-page entries');
+    await press(action('clear'));
+    await page.locator('[data-cla-transfer-source-search]').fill('"uid":'+worldFixture.entries[last].uid+',');
+    await page.waitForFunction(id=>document.querySelectorAll('.cla-transfer-source-list .cla-transfer-item').length===1&&document.querySelector('.cla-transfer-source-list .cla-transfer-item')?.dataset.claTransferId===id,last);
+    await page.locator('[data-cla-transfer-source-search]').fill('');
+    await page.waitForFunction(()=>document.querySelectorAll('.cla-transfer-source-list .cla-transfer-item').length===40);
+    const fullReader=page.locator('.cla-transfer-reader');
+    await press(pane.locator('[data-cla-transfer-action="reader"]'));
+    assert.equal(await fullReader.locator('article').count(),20);
+    await press(fullReader.locator('.cla-transfer-pagination').getByRole('button',{name:'下一页',exact:true}));
+    assert.equal(await fullReader.locator('article').count(),20);
+    await press(fullReader.getByRole('button',{name:'关闭',exact:true}));
+    if(mobile){
+      await page.evaluate(()=>{window.rowReads=0;const original=tools.nameSelection.getRows;tools.nameSelection.getRows=(...args)=>{rowReads++;return original(...args)};});
+      const list=pane.locator('.cla-transfer-list'),box=await list.boundingBox(),x=box.x+70;
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y:box.y+box.height-25,id:2}]});
+      for(let i=1;i<=10;i++){await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:box.y+box.height-25-(box.height-60)*i/10,id:2}]});await page.waitForTimeout(16);}
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await page.waitForTimeout(150);
+      assert.ok(await list.evaluate(el=>el.scrollTop)>0,'normal touch scroll is native');
+      assert.equal(await page.evaluate(()=>rowReads),0,'ordinary scroll does not enumerate rows');
+      await list.evaluate(el=>new Promise(resolve=>{
+        let timer;const done=()=>{el.removeEventListener('scroll',changed);resolve()};
+        const changed=()=>{clearTimeout(timer);timer=setTimeout(done,180)};
+        el.addEventListener('scroll',changed,{passive:true});changed();
+      }));
+      await list.evaluate(el=>el.scrollTop=0);await page.waitForTimeout(100);
+      await sweep(first,allIds[1]);
+      const held=await page.evaluate(()=>({selected:[...tools.selected],reads:rowReads,scrollTop:tools.list.scrollTop}));
+      assert.ok(held.selected.length>=2,'deliberate hold still sweeps multiple entries '+JSON.stringify(held));
+      assert.equal(await page.evaluate(()=>rowReads),1);
+      assert.ok(await list.evaluate(el=>el.scrollTop)<5,'armed sweep does not turn into page scrolling');
+      await press(action('clear'));await page.waitForTimeout(400);
+      const name=selected(first).locator('.cla-transfer-item-name');await name.scrollIntoViewIfNeeded();
+      const heldBox=await name.boundingBox();
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:heldBox.x+heldBox.width/2,y:heldBox.y+heldBox.height/2,id:6}]});
+      await page.waitForTimeout(480);
+      assert.equal(await page.evaluate(()=>tools.nameSelection.gesture?.active),true);
+      await page.evaluate(()=>{window.closedTransfer=tools;return tools.popup.complete(0)});
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchCancel',touchPoints:[]});
+      await page.waitForFunction(()=>tools===null);
+      assert.equal(await page.evaluate(()=>closedTransfer.items.length+closedTransfer.targetItems.length),0,'closing during a hold releases entry snapshots');
+      await press(page.locator('#cla-transfer-menu'));await selected(first).waitFor();
+      await page.waitForFunction(()=>!tools.loading&&!tools.targetLoading);
+    }
+    await press(selected(first));await press(action('execute'));await page.locator('#confirm-transfer').waitFor();await press(page.locator('#approve'));
+    await page.waitForFunction(()=>document.querySelector('.cla-transfer-status').textContent.includes('已复制'));
+    assert.equal(Object.keys((await state()).worlds['世界书 A'].entries).length,allIds.length);
+    assert.equal(Object.keys((await state()).worlds['世界书 B'].entries).length,2,'copy keeps destination content');
+    const writesBefore=(await state()).writes.length;
+    await press(action('delete-world'));await page.locator('#confirm-transfer').waitFor();
+    assert.match(await page.locator('#confirm-transfer').innerText(),/整本世界书/);
+    assert.match(await page.locator('#confirm-transfer').innerText(),new RegExp(String(allIds.length)));
+    await press(page.locator('#cancel'));
+    assert.equal((await state()).writes.length,writesBefore,'canceling whole-book deletion performs no write');
+    await page.evaluate(()=>fetch('/fixture/fail/'+encodeURIComponent('世界书 A')));
+    await press(action('delete-world'));await press(page.locator('#approve'));
+    await page.waitForFunction(()=>document.querySelector('.cla-transfer-status').textContent.includes('删除未完成或未确认'));
+    assert.ok((await state()).worlds['世界书 A']);
+    await page.evaluate(()=>fetch('/fixture/fail/'));
+    await press(action('reload'));await page.waitForFunction(()=>!tools.loading&&!tools.targetLoading&&!tools.needsReview);
+    await press(action('delete-world'));await press(page.locator('#approve'));
+    await page.waitForFunction(()=>document.querySelector('.cla-transfer-status').textContent.includes('已删除整本世界书'));
+    assert.equal((await state()).worlds['世界书 A'],undefined);
+    assert.ok((await state()).worlds['世界书 B']);
+    assert.equal(await field('source').inputValue(),'世界书 B');
+    await press(action('delete-world'));await press(page.locator('#approve'));
+    await page.waitForFunction(()=>document.querySelector('[data-cla-transfer-field="source"]').options.length===0);
+    assert.deepEqual((await state()).worlds,{});
+    await page.evaluate(()=>{transferMenu.stop();auto.stop()});
+    assert.deepEqual(errors,[]);
+    console.log(`${mobile?'Touch':'Desktop'}: ${allIds.length}-entry fixture, bounded list/reader pages, cross-page selection, full-book search, native scroll/hold sweep, copy, canceled/failed/successful/last-book deletion passed`);
+    await page.close();continue;
+  }
   const layout = await page.locator('.cla-transfer-tool').evaluate(view => {
     const left = view.querySelector('.cla-transfer-source-list');
     const right = view.querySelector('.cla-transfer-target-list');
@@ -192,7 +291,7 @@ try{
   assert.equal(await field('source').inputValue(),'世界书 A');assert.equal(await field('target').inputValue(),'世界书 B');
   if(mobile){const box=await page.locator('.cla-transfer-source-list').boundingBox();const x=box.x+70;const start=box.y+box.height-15,finish=box.y+15;
    await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y:start,id:2}]});
-   for(let i=1;i<=12;i++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:start+(finish-start)*i/12,id:2}]});
+   for(let i=1;i<=12;i++){await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:start+(finish-start)*i/12,id:2}]});await page.waitForTimeout(16);}
    await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await page.waitForTimeout(120);
    assert.ok(await page.locator('.cla-transfer-source-list').evaluate(el=>el.scrollTop)>0,'normal touch gesture scrolls list');
    assert.equal(await page.locator('.cla-transfer-drag-ghost').count(),0);await page.locator('.cla-transfer-source-list').evaluate(el=>el.scrollTop=0);

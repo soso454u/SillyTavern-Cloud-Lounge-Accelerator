@@ -27,24 +27,30 @@ export class PressSweepSelection {
         if (event.button > 0 || event.isPrimary === false || this.gesture) return;
         const name = event.target.closest?.(this.nameSelector), row = name?.closest(this.rowSelector);
         if (!row || row.hidden || !this.valid(row)) return;
-        const gesture = this.gesture = { pointer: event.pointerId, name, row, rows: this.getRows(row), context: this.context(row),
+        const gesture = this.gesture = { pointer: event.pointerId, name, row, rows: null, context: this.context(row),
             startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, active: false,
             selected: !this.isSelected(row), visited: new Map(), index: -1, mouse: event.pointerType === 'mouse' };
-        document.addEventListener('pointermove', this.move, { capture: true, passive: false });
+        document.addEventListener('pointermove', this.move, { capture: true, passive: !gesture.mouse });
         document.addEventListener('pointerup', this.end, true); document.addEventListener('pointercancel', this.end, true);
         document.addEventListener('lostpointercapture', this.lost, true);
         if (gesture.mouse) event.preventDefault();
         else {
-            // Keep blocking touch listeners out of normal chat/page scrolling.
-            // Install only for a gesture that actually started on a name.
-            document.addEventListener('touchmove', this.touchMove, { capture: true, passive: false });
+            // Keep the cancellable move listener on this name, not document.
+            // Register before the first touch move so a later hold can still
+            // cancel native pan on browsers that latch gesture cancelability.
+            gesture.name.addEventListener('touchmove', this.touchMove, { capture: true, passive: false });
             this.timer = setTimeout(() => this.arm(gesture), this.holdMs);
         }
     }
     arm(gesture) {
         clearTimeout(this.timer); this.timer = null;
         if (this.gesture !== gesture || !this.current(gesture)) { this.cancel(false); return; }
+        gesture.rows = this.getRows(gesture.row);
         gesture.active = true; gesture.index = gesture.rows.indexOf(gesture.row);
+        if (!gesture.mouse) {
+            document.removeEventListener('pointermove', this.move, true);
+            document.addEventListener('pointermove', this.move, { capture: true, passive: false });
+        }
         this.onStart(gesture.row); this.paint(gesture.row);
         gesture.name.setPointerCapture?.(gesture.pointer);
         for (let parent = gesture.row.parentElement; parent; parent = parent.parentElement) {
@@ -113,11 +119,11 @@ export class PressSweepSelection {
     cancel(restore = true) {
         document.removeEventListener('pointermove', this.move, true); document.removeEventListener('pointerup', this.end, true);
         document.removeEventListener('pointercancel', this.end, true); document.removeEventListener('lostpointercapture', this.lost, true);
-        document.removeEventListener('touchmove', this.touchMove, true);
         if (this.frame != null) cancelAnimationFrame(this.frame);
         this.frame = null;
         clearTimeout(this.timer); this.timer = null;
         const gesture = this.gesture; this.gesture = null;
+        gesture?.name.removeEventListener('touchmove', this.touchMove, true);
         if (gesture?.active) {
             if (restore) for (const [row, selected] of gesture.visited) if (row.isConnected) this.setSelected(row, selected, false);
             this.onChange(); this.suppressUntil = performance.now() + 350;
