@@ -1224,14 +1224,18 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
     > li[data-pm-identifier] > .completion_prompt_manager_prompt_name {
     justify-content: flex-start !important;
     white-space: normal !important;
-    overflow-wrap: anywhere;
+    word-break: normal;
+    overflow-wrap: break-word;
+    text-wrap: pretty;
     min-inline-size: 0;
 }
 html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
     > li[data-pm-identifier] > .completion_prompt_manager_prompt_name > :is(a, span[title]:not(.fa-solid)) {
     min-inline-size: 0;
     white-space: normal !important;
-    overflow-wrap: anywhere;
+    word-break: normal;
+    overflow-wrap: break-word;
+    text-wrap: pretty;
     text-overflow: clip !important;
     overflow: visible !important;
 }
@@ -1282,7 +1286,7 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
     touch-action: manipulation;
 }
 
-@container (max-width: 17rem) {
+@container (max-width: 26rem) {
     html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
         > li[data-pm-identifier] > .completion_prompt_manager_prompt_name {
         grid-area: 1 / 2 / 2 / 5 !important;
