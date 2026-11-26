@@ -147,20 +147,14 @@ export class PresetEntryActions {
         position.textContent = `原始位置：第 ${context.order.findIndex(item => item.identifier === id) + 1} 项`;
         menu.append(position);
         const picking = this.selection.mode && this.selection.selected.size > 0;
-        const controls = button.parentElement;
-        const compact = button.closest('.cla-preset-grouped-list');
-        const edit = compact && controls.querySelector('.prompt-manager-edit-action');
-        const detach = compact && prompt.marker === true && controls.querySelector('.prompt-manager-detach-action');
         const actions = [['before', '在上方新建'], ['after', '在下方新建'], ['copy', '复制到下方'],
-            [detach ? 'native-detach' : 'remove', '移出当前列表', detach], ['delete', '永久删除条目'],
+            ['remove', '移出当前列表'], ['delete', '永久删除条目'],
             ['group', picking ? `用已选 ${this.selection.selected.size} 项新建分组` : '从这里开始新建分组']];
-        if (edit) actions.unshift(['native-edit', '编辑条目', edit]);
-        for (const [action, label, nativeControl] of actions) {
+        for (const [action, label] of actions) {
             const item = this.button(label, action);
             item.setAttribute('role', 'menuitem');
             item.claContext = context;
             item.dataset.claPromptId = id;
-            item.claNativeControl = nativeControl;
             if (action === 'copy') item.disabled = !!prompt.marker;
             if (action === 'remove' || action === 'delete') {
                 item.disabled = prompt.marker === true || prompt.system_prompt !== false || !this.manager.isPromptDeletionAllowed?.(prompt);
@@ -250,10 +244,6 @@ export class PresetEntryActions {
         }
         if (!this.current(context)) return;
         if (action === 'menu') { if (!wasOpen) this.openMenu(button, id); return; }
-        if (action === 'native-edit' || action === 'native-detach') {
-            if (this.manager.listElement?.contains(button.claNativeControl)) button.claNativeControl.click();
-            return;
-        }
         if (action === 'group') { this.selection.startGroup(context, id); return; }
         if (action === 'remove' || action === 'delete') void this.deleteEntry(context, id, action === 'delete');
         else this.openDraft(context, id, action);

@@ -91,20 +91,26 @@ try {
                 const right = head.querySelector('.prompt_manager_prompt_tokens').getBoundingClientRect().right;
                 const name = node.querySelector('[data-pm-name]');
                 const text = name.querySelector('a, span[title]:not(.fa-solid)');
-                const target = node.querySelector('.prompt-manager-toggle-action');
+                const controls = [...node.querySelectorAll('.cla-preset-entry-more, .prompt-manager-detach-action, .prompt-manager-edit-action, .prompt-manager-toggle-action')];
+                const target = controls.at(-1);
                 const nameRect = name.getBoundingClientRect();
                 const textRect = text.getBoundingClientRect();
                 const toggleRect = target.getBoundingClientRect();
                 const tokenRect = node.querySelector('.prompt_manager_prompt_tokens').getBoundingClientRect();
                 return { nameOffset: nameRect.left - left, textInset: textRect.left - nameRect.left,
                     width: toggleRect.width, height: toggleRect.height, tokenOffset: tokenRect.right - right,
-                    overlap: toggleRect.right - tokenRect.left, transition: getComputedStyle(target).transitionDuration };
+                    overlap: toggleRect.right - tokenRect.left, transition: getComputedStyle(target).transitionDuration,
+                    controls: controls.map(control => ({
+                        slot: Number(getComputedStyle(control).gridColumnStart),
+                        visible: control.getBoundingClientRect().width > 0,
+                    })) };
             });
             assert.ok(Math.abs(geometry.nameOffset) < 4 && geometry.textInset <= 32, JSON.stringify(geometry));
             assert.ok(Math.abs(geometry.tokenOffset) < 4 && geometry.overlap <= 0, JSON.stringify(geometry));
             assert.equal(geometry.width, mobile ? 44 : 32);
             assert.equal(geometry.height, mobile ? 44 : 32);
             assert.equal(geometry.transition, '0s');
+            assert.deepEqual(geometry.controls, [1, 2, 3, 4].map(slot => ({ slot, visible: true })));
         };
         await checkLayout();
         await checkDisabled();

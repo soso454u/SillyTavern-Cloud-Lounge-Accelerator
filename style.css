@@ -846,18 +846,17 @@ body .cla-preset-folder-menu button.menu_button[data-cla-preset-action] {
     min-height: 0;
     --cla-preset-group-color: var(--SmartThemeQuoteColor, var(--SmartThemeBodyColor, currentColor));
     --cla-preset-group-base: var(--SmartThemeBlurTintColor, transparent);
+    --cla-preset-row-color: color-mix(in srgb, var(--cla-preset-group-color) 65%, var(--cla-preset-group-base));
 }
 
 #completion_prompt_manager_list.cla-preset-grouped-list > [data-cla-preset-tone="soft"] {
     --cla-preset-folder-tint: 23%;
-    --cla-preset-row-tint: 10%;
-    --cla-preset-enabled-tint: 14%;
+    --cla-preset-row-tint: 20%;
 }
 
 #completion_prompt_manager_list.cla-preset-grouped-list > [data-cla-preset-tone="strong"] {
     --cla-preset-folder-tint: 34%;
-    --cla-preset-row-tint: 21%;
-    --cla-preset-enabled-tint: 25%;
+    --cla-preset-row-tint: 30%;
 }
 
 html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-grouped-list
@@ -867,12 +866,9 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
 
 html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-grouped-list
     > li[data-pm-identifier][data-cla-preset-tone]:not(.cla-preset-entry-selected) {
-    background-color: color-mix(in srgb, var(--cla-preset-group-color) var(--cla-preset-enabled-tint), var(--cla-preset-group-base)) !important;
-}
-
-html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-grouped-list
-    > li.completion_prompt_manager_prompt_disabled[data-pm-identifier][data-cla-preset-tone]:not(.cla-preset-entry-selected) {
-    background-color: color-mix(in srgb, var(--cla-preset-group-color) var(--cla-preset-row-tint), var(--cla-preset-group-base)) !important;
+    background-color: color-mix(in srgb, var(--cla-preset-row-color) var(--cla-preset-row-tint), transparent) !important;
+    /* The tint also shows through a theme's opaque background gradient. */
+    background-blend-mode: multiply;
 }
 
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder {
@@ -1271,39 +1267,19 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
     touch-action: manipulation;
 }
 
-html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-grouped-list
-    > li[data-pm-identifier]:has(.cla-preset-entry-more) {
-    --cla-pm-controls: calc(var(--cla-pm-action) + var(--cla-pm-control-gap) + var(--cla-pm-toggle));
-}
-
-html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-grouped-list
-    .prompt_manager_prompt_controls:has(> .cla-preset-entry-more) {
-    grid-template-columns: var(--cla-pm-action) var(--cla-pm-toggle) !important;
-}
-
-html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-grouped-list
-    .prompt_manager_prompt_controls:has(> .cla-preset-entry-more) > :is(.prompt-manager-edit-action, .prompt-manager-detach-action) {
-    display: none !important;
-}
-
-#completion_prompt_manager_list.cla-preset-grouped-list
-    .prompt_manager_prompt_controls:has(> .cla-preset-entry-more) > .prompt-manager-toggle-action {
-    grid-column: 2;
-}
-
-@container (max-width: 23rem) {
-    html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable:not(.cla-preset-grouped-list)
+@container (max-width: 17rem) {
+    html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
         > li[data-pm-identifier] > .completion_prompt_manager_prompt_name {
         grid-area: 1 / 2 / 2 / 5 !important;
         padding-block: 3px;
     }
 
-    html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable:not(.cla-preset-grouped-list)
+    html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
         > li[data-pm-identifier] > span:has(> .prompt_manager_prompt_controls) {
         grid-area: 2 / 3 / 3 / 4 !important;
     }
 
-    #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable:not(.cla-preset-grouped-list)
+    #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
         > li[data-pm-identifier] > .prompt_manager_prompt_tokens {
         grid-area: 2 / 4 / 3 / 5 !important;
     }

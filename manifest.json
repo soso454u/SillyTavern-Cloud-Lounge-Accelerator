@@ -4,9 +4,9 @@
   "requires": [],
   "optional": [],
   "js": "dist/index.js",
-  "css": "dist/style.css?v=2.2.4",
+  "css": "dist/style.css?v=2.2.5",
   "author": "soso454u",
-  "version": "2.2.4",
+  "version": "2.2.5",
   "auto_update": true,
   "hooks": {
     "activate": "onActivate",
