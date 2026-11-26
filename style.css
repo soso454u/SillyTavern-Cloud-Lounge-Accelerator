@@ -1286,24 +1286,6 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
     touch-action: manipulation;
 }
 
-@container (max-width: 26rem) {
-    html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
-        > li[data-pm-identifier] > .completion_prompt_manager_prompt_name {
-        grid-area: 1 / 2 / 2 / 5 !important;
-        padding-block: 3px;
-    }
-
-    html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
-        > li[data-pm-identifier] > span:has(> .prompt_manager_prompt_controls) {
-        grid-area: 2 / 3 / 3 / 4 !important;
-    }
-
-    #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
-        > li[data-pm-identifier] > .prompt_manager_prompt_tokens {
-        grid-area: 2 / 4 / 3 / 5 !important;
-    }
-}
-
 /* Keep all secondary folder actions behind one menu. */
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header > button.cla-preset-fold-icon {
     display: inline-flex !important;
