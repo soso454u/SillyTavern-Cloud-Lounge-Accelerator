@@ -198,6 +198,51 @@ test('slow browser frames reserve recovery for plain cards even when the formatt
     assert.equal(f.optimizer.getReport().maxRecoveryMs, 200);
 });
 
+test('a token burst cannot format the same message again before the previous preview gets a frame', async t => {
+    const f = fixture(t, { trackFrames: true });
+    await f.token('first preview', 0);
+    // Task yields are opportunities, not a guarantee that a browser frame ran.
+    await f.token('burst snapshot', 150);
+    await f.token('newest burst snapshot', 300);
+    assert.equal(f.yields, 2);
+    assert.deepEqual(f.renders.map(args => args[1]), ['first preview']);
+    assert.equal(f.processor.result, 'newest burst snapshot', 'native token state remains current');
+    f.frame(310);
+    await f.token('after browser recovery', 930);
+    assert.equal(f.renders.at(-1)[1], 'after browser recovery');
+    await f.processor.finalizeIntermediaryMessage(7, 'complete snapshot');
+    assert.equal(f.renders.at(-1)[1], 'complete snapshot', 'finalization never waits for a frame');
+});
+
+test('new message IDs and background rendering bypass pending preview frames', async t => {
+    const f = fixture(t, { trackFrames: true });
+    await f.token('first preview', 0);
+    await f.processor.onProgressStreaming(8, 'tool response');
+    assert.equal(f.renders.at(-1)[1], 'tool response');
+    f.documentRef.hidden = true;
+    f.input('visibilitychange');
+    await f.token('background snapshot', 1000);
+    assert.equal(f.renders.at(-1)[1], 'background snapshot');
+    assert.equal(f.frames.size, 0);
+    f.documentRef.hidden = false;
+    f.input('visibilitychange');
+    await f.token('visible snapshot', 1200);
+    assert.equal(f.renders.at(-1)[1], 'visible snapshot');
+    f.optimizer.stop();
+    assert.equal(f.frames.size, 0);
+});
+
+test('slow frames without a rendered preview do not keep postponing the next update', async t => {
+    const f = fixture(t, { trackFrames: true });
+    await f.token('first', 0);
+    f.frame(100); // Recovery until 300 after this actual preview.
+    await f.token('skipped', 110);
+    f.frame(250); // No body was formatted in this slow frame.
+    await f.token('ready after recovery', 300);
+    assert.deepEqual(f.renders.map(args => args[1]), ['first', 'ready after recovery']);
+    assert.equal(f.optimizer.getReport().maxRecoveryMs, 200);
+});
+
 test('normal frames, background changes, finalization and stop leave no artificial paint wait', async t => {
     const f = fixture(t, { trackFrames: true });
     await f.token('normal', 0);

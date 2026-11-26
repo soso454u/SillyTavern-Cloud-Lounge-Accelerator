@@ -20,9 +20,10 @@ function extractClass(source, name) {
     return source.slice(start, end + 2);
 }
 
-for (const type of ['normal', 'continue', 'swipe']) {
+for (const frameAware of [false, true]) for (const type of ['normal', 'continue', 'swipe']) {
     for (const stop of [false, true]) {
         let time = 0, formats = 0, tokenEvents = 0, saved = null, ended = 0;
+        const frames = new Map(); let frameId = 0;
         const handlers = new Map();
         const eventTypes = { STREAM_TOKEN_RECEIVED:'token', GENERATION_ENDED:'end', GENERATION_STOPPED:'stop',
             MESSAGE_RECEIVED:'received', CHARACTER_MESSAGE_RENDERED:'rendered' };
@@ -74,12 +75,20 @@ for (const type of ['normal', 'continue', 'swipe']) {
         processor.messageId=0;
         const original = processor.onProgressStreaming;
         const optimizer = new StreamingRenderOptimizer({ eventSource, eventTypes, getStreamingProcessor:() => processor,
-            documentRef, navigatorRef:{ userAgent:'iPhone', maxTouchPoints:5 }, matchMedia:() => ({ matches:false }), now:() => time });
+            documentRef, navigatorRef:{ userAgent:'iPhone', maxTouchPoints:5 }, matchMedia:() => ({ matches:false }), now:() => time,
+            requestFrame:frameAware ? callback => { frames.set(++frameId, callback); return frameId; } : null,
+            cancelFrame:id => frames.delete(id), yieldToMain:async () => {},
+        });
         optimizer.start();
         let yielded = 0;
         processor.generator = async function* () {
             for (let i=1;i<=100;i++) {
                 time=i*10;
+                // A busy page can run several token tasks between frames.
+                if (frameAware && i % 16 === 0) {
+                    const pending = [...frames.values()]; frames.clear();
+                    for (const callback of pending) callback(time);
+                }
                 if (stop && i===61) { processor.onStopStreaming(); await eventSource.emit('stop'); }
                 yielded++;
                 yield { text:'reply '+i, state:{ reasoning:'reason '+i }, swipes:[] };
@@ -88,6 +97,7 @@ for (const type of ['normal', 'continue', 'swipe']) {
         const result = await processor.generate();
         assert.equal(tokenEvents, stop ? yielded-1 : yielded, 'native stop excludes the post-abort snapshot');
         assert.ok(formats>1 && formats<yielded/2, 'full-message formatting is coalesced');
+        if (frameAware) assert.ok(optimizer.getReport().frameCoalescedPreviews > 0, 'previews do not stack up before a browser frame');
         const expected=type==='continue' ? 'prefix '+result : result;
         if (type==='continue') assert.ok(result.startsWith('reply '));
         // Native caller supplies the full continuation on completion.
@@ -102,6 +112,7 @@ for (const type of ['normal', 'continue', 'swipe']) {
         assert.equal(ended,1);
         assert.deepEqual(powerUser,preferences);
         optimizer.stop();
-        console.log(`PASS upstream ${type}, ${stop?'stopped':'complete'}: ${tokenEvents} token events, ${formats} formatting passes, final DOM/chat/reasoning/tokens/save/restore`);
+        assert.equal(frames.size, 0, 'no frame callbacks survive final cleanup');
+        console.log(`PASS upstream ${type}, ${stop?'stopped':'complete'}, ${frameAware?'busy frames':'native timing'}: ${tokenEvents} token events, ${formats} formatting passes, final DOM/chat/reasoning/tokens/save/restore`);
     }
 }

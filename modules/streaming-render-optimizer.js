@@ -134,7 +134,7 @@ export class StreamingRenderOptimizer {
         const state = {
             processor, ownDescriptor, original: processor.onProgressStreaming,
             nextAt: -Infinity, messageId: null,
-            frameId: null, frameStartedAt: 0,
+            frameId: null, frameStartedAt: 0, awaitingFrame: false,
         };
         const optimizer = this;
         state.wrapper = async function (...args) {
@@ -143,8 +143,10 @@ export class StreamingRenderOptimizer {
             const preview = optimizer.started && optimizer.current === state
                 && this === processor && !isFinal && Number.isInteger(messageId)
                 && messageId >= 0 && typeof text === 'string';
-            if (preview && ((messageId === state.messageId && now < state.nextAt) || now < optimizer.interactingUntil)) {
+            const pendingFrame = state.awaitingFrame && !optimizer.document?.hidden;
+            if (preview && ((messageId === state.messageId && (now < state.nextAt || pendingFrame)) || now < optimizer.interactingUntil)) {
                 optimizer.report.skippedPreviews += 1;
+                if (messageId === state.messageId && pendingFrame) optimizer.report.frameCoalescedPreviews = (optimizer.report.frameCoalescedPreviews || 0) + 1;
                 return;
             }
             // Do not retain skipped text/DOM or schedule a delayed replay that
@@ -172,6 +174,14 @@ export class StreamingRenderOptimizer {
                 // pass must never consume its own idle interval and immediately
                 // start another pass (the old start-time deadline did that).
                 state.nextAt = finishedAt + recovery;
+                // A task yield does not guarantee that the browser ran a frame.
+                // Do not pile another full-message replacement onto the same
+                // pending frame when buffered tokens arrive in a burst. Never
+                // await rAF here: finalization and background tabs stay native.
+                if (!optimizer.document?.hidden && typeof optimizer.requestFrame === 'function') {
+                    state.awaitingFrame = true;
+                    optimizer.watchFrame(state);
+                }
                 optimizer.report.observedPreviews += 1;
                 optimizer.report.lastPreviewMs = Math.round(cost);
                 optimizer.report.maxPreviewMs = Math.max(optimizer.report.maxPreviewMs, Math.round(cost));
@@ -179,6 +189,7 @@ export class StreamingRenderOptimizer {
             } else if (isFinal) {
                 state.nextAt = -Infinity;
                 state.messageId = null;
+                state.awaitingFrame = false;
             }
             return result;
         };
@@ -211,21 +222,23 @@ export class StreamingRenderOptimizer {
 
     getReport() {
         return { ...this.report, attached: Boolean(this.current),
-            timing: 'native-preview-including-awaited-work', version: 3 };
+            timing: 'native-preview-including-awaited-work', version: 4 };
     }
 
     watchFrame(state) {
         if (state.frameId !== null) return;
         state.frameStartedAt = this.now();
         state.frameId = this.requestFrame(() => {
+            const renderedPreview = state.awaitingFrame;
             state.frameId = null;
+            state.awaitingFrame = false;
             if (this.current !== state || this.document?.hidden) return;
             const now = this.now();
             const delay = Math.max(0, now - state.frameStartedAt);
             this.report.maxFrameWaitMs = Math.max(this.report.maxFrameWaitMs || 0, Math.round(delay));
             // Includes browser work that happens after the awaited formatter:
             // layout, theme effects and extension work on ordinary cards too.
-            if (delay > SLOW_FRAME_MS && state.messageId !== null) {
+            if (renderedPreview && delay > SLOW_FRAME_MS && state.messageId !== null) {
                 const recovery = Math.min(1000, delay * 2);
                 state.nextAt = Math.max(state.nextAt, now + recovery);
                 this.report.maxRecoveryMs = Math.max(this.report.maxRecoveryMs, Math.round(recovery));
@@ -234,6 +247,7 @@ export class StreamingRenderOptimizer {
     }
 
     cancelPendingFrame(state) {
+        if (state) state.awaitingFrame = false;
         if (state?.frameId == null) return;
         this.cancelFrame?.(state.frameId);
         state.frameId = null;
