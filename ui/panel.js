@@ -2,6 +2,8 @@ import { createAdvancedPanel } from './advanced-panel.js';
 import { createPerformancePanel } from './performance-panel.js';
 import { CHAT_PAGE_SIZE_MAX, CHAT_PAGE_SIZE_MIN, normalizeChatPageSize } from '../client-core.js';
 
+import { WorldInfoPageSize, WORLD_INFO_PAGE_SIZES, WORLD_INFO_DEFAULT_PAGE_SIZE, WORLD_INFO_PAGER_SELECTOR } from '../modules/worldinfo-page-size.js';
+
 const ROOT_ID = 'cloud-lounge-accelerator-settings';
 
 function createSwitch(key, title, description, checked, onChange) {
@@ -81,7 +83,75 @@ function createTabs(pages) {
     return tabs;
 }
 
-function createChatDisplayPage(settings, onSettingChange) {
+function createWorldInfoPageSizeSetting(controller) {
+    const row = document.createElement('label');
+    row.className = 'cla-number-setting';
+    const text = document.createElement('span');
+    const name = document.createElement('strong');
+    name.textContent = '每页渲染世界书条目';
+    const note = document.createElement('small');
+    const recommendation = '默认 25 条；大世界书建议 10–25 条';
+    note.textContent = recommendation;
+    text.append(name, note);
+    const select = document.createElement('select');
+    select.className = 'text_pole cla-page-size-input';
+    select.dataset.claSetting = 'worldInfoPageSize';
+    for (const size of WORLD_INFO_PAGE_SIZES) {
+        const option = document.createElement('option');
+        option.value = String(size);
+        option.textContent = String(size);
+        select.append(option);
+    }
+    select.value = String(WORLD_INFO_DEFAULT_PAGE_SIZE);
+    select.disabled = true;
+    row.append(text, select);
+
+    let disposed = false, busy = false, revision = 0;
+    const refresh = async () => {
+        const request = ++revision;
+        try {
+            const value = await controller.read();
+            if (disposed || busy || revision !== request) return;
+            select.value = String(value);
+            select.disabled = false;
+            note.textContent = recommendation;
+        } catch {
+            if (disposed || busy || revision !== request) return;
+            select.disabled = true;
+            note.textContent = '当前酒馆不支持原生世界书分页设置';
+        }
+    };
+    select.addEventListener('change', async () => {
+        if (disposed || busy) return;
+        busy = true;
+        revision++;
+        select.disabled = true;
+        try {
+            const value = Number(select.value);
+            await controller.write(value);
+            if (!disposed) globalThis.toastr?.success?.(`已改为每页渲染 ${value} 条世界书条目`, '云酒馆加速器');
+        } catch (error) {
+            if (!disposed) globalThis.toastr?.error?.(error instanceof Error ? error.message : String(error), '云酒馆加速器');
+        } finally {
+            busy = false;
+            if (!disposed) await refresh();
+        }
+    });
+    // Native page size changes are persisted in its delegated change handler.
+    // Capture before that handler (which stops bubbling) and read afterwards.
+    const nativeRoot = document.getElementById('world_info_pagination');
+    const onNativeChange = event => {
+        if (event.target?.matches?.(WORLD_INFO_PAGER_SELECTOR)) queueMicrotask(() => { if (!disposed && !busy) void refresh(); });
+    };
+    nativeRoot?.addEventListener('change', onNativeChange, true);
+
+    return { element: row, refresh, dispose() {
+        disposed = true;
+        nativeRoot?.removeEventListener('change', onNativeChange, true);
+    } };
+}
+
+function createChatDisplayPage(settings, onSettingChange, worldInfoControl) {
     const page = document.createElement('section');
     page.className = 'cla-page cla-chat-display-page';
     page.dataset.claPage = 'chat-display';
@@ -91,7 +161,7 @@ function createChatDisplayPage(settings, onSettingChange) {
     const title = document.createElement('strong');
     title.textContent = '聊天显示';
     const description = document.createElement('small');
-    description.textContent = '单独调整每次显示的消息数量';
+    description.textContent = '单独调整聊天与世界书每页显示的数量';
     heading.append(title, description);
 
     const setting = document.createElement('label');
@@ -131,12 +201,15 @@ function createChatDisplayPage(settings, onSettingChange) {
     const boundary = document.createElement('p');
     boundary.className = 'cla-setting-note';
     boundary.textContent = '这只改变页面首次显示和“显示更多”的数量；下次打开聊天时应用，不重新读取当前聊天。不删除聊天，也不会减少发给模型的历史上下文。数量越大，复杂美化和正则越可能让手机卡顿。';
-    page.append(heading, setting, boundary);
+    const worldInfoNote = document.createElement('p');
+    worldInfoNote.className = 'cla-setting-note';
+    worldInfoNote.textContent = '与酒馆原生世界书编辑器的分页同步，仅改变每页显示数量，不影响条目内容、触发或发送给模型的上下文。';
+    page.append(heading, setting, boundary, worldInfoControl.element, worldInfoNote);
     return page;
 }
 
 export class SettingsPanel {
-    constructor({ settings, onSettingChange, onPerformanceChange, onRerender, onRepair, onCopyDiagnostics, getStatus }) {
+    constructor({ settings, onSettingChange, onPerformanceChange, onRerender, onRepair, onCopyDiagnostics, getStatus, worldInfoPageSize = new WorldInfoPageSize() }) {
         this.settings = settings;
         this.onSettingChange = onSettingChange;
         this.onPerformanceChange = onPerformanceChange;
@@ -144,6 +217,8 @@ export class SettingsPanel {
         this.onRepair = onRepair;
         this.onCopyDiagnostics = onCopyDiagnostics;
         this.getStatus = getStatus;
+        this.worldInfoPageSize = worldInfoPageSize;
+        this.worldInfoControl = null;
         this.root = null;
         this.advanced = null;
         this.performance = null;
@@ -216,7 +291,9 @@ export class SettingsPanel {
         this.performance = createPerformancePanel(this.onPerformanceChange);
         this.advanced = createAdvancedPanel({ onCopyDiagnostics: this.onCopyDiagnostics });
         mainPage.append(this.performance.element, actions, repairBox, this.advanced.element);
-        const chatDisplayPage = createChatDisplayPage(this.settings, this.onSettingChange);
+        this.worldInfoControl?.dispose();
+        this.worldInfoControl = createWorldInfoPageSizeSetting(this.worldInfoPageSize);
+        const chatDisplayPage = createChatDisplayPage(this.settings, this.onSettingChange, this.worldInfoControl);
         const miniPage = document.createElement('section');
         miniPage.className = 'cla-page'; miniPage.dataset.claPage = 'mini-features';
         for (const [key, title, description] of [
@@ -239,11 +316,13 @@ export class SettingsPanel {
         root.append(header);
         host.append(root);
         this.root = root;
+        void this.worldInfoControl.refresh();
         return true;
     }
 
     refresh({ opening = false } = {}) {
         if (!this.root || (!opening && this.drawerIcon?.classList.contains('down'))) return;
+        if (opening) void this.worldInfoControl?.refresh();
         if (this.refreshPromise) return this.refreshPromise;
         const root = this.root;
         const promise = this.refreshStatus(root).finally(() => {
@@ -265,6 +344,8 @@ export class SettingsPanel {
     }
 
     remove() {
+        this.worldInfoControl?.dispose();
+        this.worldInfoControl = null;
         this.root?.remove();
         this.root = this.drawerIcon = this.advanced = this.performance = null;
     }
