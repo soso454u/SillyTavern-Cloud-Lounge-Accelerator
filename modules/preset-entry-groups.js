@@ -108,25 +108,38 @@ export class PresetEntryGroups {
     // In multi-select, dragging the ☰ of a selected row brings the other
     // selected rows along after the native drag has saved.
     watchMultiDrag(list) {
-        this.multiDragLists ||= new WeakSet();
         const jquery = globalThis.jQuery || globalThis.$;
-        if (this.multiDragLists.has(list) || !jquery) return;
-        this.multiDragLists.add(list);
-        jquery(list).on('sortstop.claMultiDrag', (event, ui) => {
+        if (this.multiDragList?.[0] === list || !jquery) return;
+        this.clearMultiDrag();
+        this.multiDragList = jquery(list);
+        this.multiDragList.on('sortstop.claMultiDrag', (event, ui) => {
             if (!this.rawOrder) return;
             const id = ui?.item?.[0]?.dataset?.pmIdentifier, selection = this.host.selection;
             if (!id || !selection?.mode || !selection.selected.has(id) || selection.selected.size < 2) return;
+            const context = this.context();
+            if (!context) return;
             const ids = new Set(selection.selected);
-            setTimeout(() => this.run(async () => {
-                const order = this.host.context()?.order.map(item => item.identifier) || [];
-                const at = order.indexOf(id); if (at < 0) return;
-                const after = order.slice(0, at).reverse().find(x => !ids.has(x));
-                const before = order.slice(at + 1).find(x => !ids.has(x));
-                if (!after && !before) return;
-                // Keep the dragged row's slot: others gather around it in original order.
-                if (await this.moveEntries(ids, after ? { after } : { before })) selection.exit();
-            }), 0);
+            clearTimeout(this.multiDragTimer);
+            this.multiDragTimer = setTimeout(() => {
+                this.multiDragTimer = null;
+                if (!this.rawOrder || this.list !== list || !this.valid(context)) return;
+                this.run(async () => {
+                    const order = this.host.context()?.order.map(item => item.identifier) || [];
+                    const at = order.indexOf(id); if (at < 0) return;
+                    const after = order.slice(0, at).reverse().find(x => !ids.has(x));
+                    const before = order.slice(at + 1).find(x => !ids.has(x));
+                    if (!after && !before) return;
+                    // Keep the dragged row's slot: others gather around it in original order.
+                    if (await this.moveEntries(ids, after ? { after } : { before })) selection.exit();
+                });
+            }, 0);
         });
+    }
+    clearMultiDrag() {
+        this.multiDragList?.off('sortstop.claMultiDrag');
+        this.multiDragList = null;
+        clearTimeout(this.multiDragTimer);
+        this.multiDragTimer = null;
     }
     expanded(context) {
         const saved = this.extensionSettings[PRESET_GROUPS_KEY];
@@ -288,6 +301,7 @@ export class PresetEntryGroups {
         else if (drag?.active) return;
         if (this.sortable(list)?.dragging) return;
         if (this.key !== context.key || this.list !== list) {
+            this.clearMultiDrag();
             this.clearDisplay(); this.rawOrder = false; this.query = ''; this.filter = 'all'; this.searchFolders.clear();
         }
         if (this.list && this.list !== list) this.protectSortable(this.list, false);
@@ -412,7 +426,9 @@ export class PresetEntryGroups {
             dragHandle.title = '按住文件夹图标拖动分组';
             const arrow = this.node('i', '', 'cla-preset-folder-arrow'); dragHandle.append(arrow);
             const name = this.node('span', '', 'cla-preset-fold-name'), count = this.node('small', '', 'cla-preset-fold-count');
-            button.append(name, count);
+            const chevron = this.node('i', '', 'cla-preset-fold-chevron fa-solid fa-chevron-right');
+            chevron.setAttribute('aria-hidden', 'true');
+            button.append(name, count, chevron);
             const icon = (cls, title, action) => { const b = this.button('', action, 'cla-preset-fold-icon'); b.append(b.glyph = this.node('i', '', `fa-solid ${cls}`)); b.glyph.setAttribute('aria-hidden', 'true'); b.title = title; b.setAttribute('aria-label', title); return b; };
             const rename = icon('fa-pen', '改名', () => this.renameFolder(record.folder));
             const subFold = icon('fa-angles-up', '折叠/展开全部子分组', () => {
@@ -429,6 +445,7 @@ export class PresetEntryGroups {
         return record;
     }
     clear() {
+        this.clearMultiDrag();
         this.clearDisplay(); this.root?.remove(); this.root = null; this.toolbarKey = null; this.feedback = null;
         for (const [list, record] of this.sortRecords) { this.protectSortable(list, false); for (const type of ['pointerdown', 'mousedown', 'touchstart']) list.removeEventListener(type, record.refresh, true); }
         this.sortRecords.clear(); this.list = null; this.key = null;

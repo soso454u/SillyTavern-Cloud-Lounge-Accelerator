@@ -72,7 +72,6 @@ export class ChatOptimizer {
         this.addedCodeRoots = new Set();
         this.codeScanCursor = null;
         this.observedHighlights = new Set();
-        this.collapseHandlers = new WeakMap();
         this.scanAllCode = false;
         this.codeObservationStarted = false;
         this.highlightPointerId = null;
@@ -128,7 +127,7 @@ export class ChatOptimizer {
     startCodeObservation() {
         if (!this.started || this.codeObservationStarted) return;
         this.codeObservationStarted = true;
-        this.scrollActivity?.start();
+        this.scrollActivity?.start(this.chatElement);
         this.bind(this.eventTypes.GENERATION_STARTED, () => this.pauseCodeScanning());
         this.bind(this.eventTypes.GENERATION_STOPPED, () => this.refreshAfterGeneration());
         this.bind(this.eventTypes.GENERATION_ENDED, () => this.refreshAfterGeneration());
@@ -153,6 +152,7 @@ export class ChatOptimizer {
         if (this.chatElement !== chatElement) {
             this.pauseCodeScanning();
             this.chatElement = chatElement;
+            this.scrollActivity?.bind(chatElement);
             rescan = true;
         }
         if (!rescan || !this.chatElement || !this.codeObservationStarted || !this.originalHighlight) return;
@@ -510,7 +510,6 @@ export class ChatOptimizer {
         this.deferredHighlights.delete(element);
         if (this.observedHighlights.has(element) && !force) return;
         const recent = isRecentCode(element);
-        if (!recent) this.collapseOldCode(element);
         if (!force && !recent && typeof IntersectionObserver === 'function') {
             this.highlightObserver ??= new IntersectionObserver((entries, observer) => {
                 if (this.highlightObserver !== observer) return;
@@ -574,21 +573,6 @@ export class ChatOptimizer {
     hasActiveChatSelection() {
         const selection = document.getSelection?.();
         return Boolean(selection && !selection.isCollapsed && this.chatElement?.contains?.(selection.anchorNode));
-    }
-
-    collapseOldCode(element) {
-        const pre = element.closest('pre');
-        if (!pre || pre.dataset.claCollapsible === '1') return;
-        pre.dataset.claCollapsible = '1';
-        pre.classList.add('cla-code-collapsed');
-        const expand = () => {
-            this.collapseHandlers.delete(pre);
-            if (!this.started || !this.chatElement?.contains(element)) return;
-            pre.classList.remove('cla-code-collapsed');
-            this.queueHighlight(element, true);
-        };
-        this.collapseHandlers.set(pre, expand);
-        pre.addEventListener('click', expand, { once: true });
     }
 
     observeCodeBlocks(deadline) {
@@ -674,6 +658,7 @@ export class ChatOptimizer {
         this.cancelInitialBottom();
         this.cancelHistoryAnchor();
         this.activeChatKey = null;
+        const chatElement = this.chatElement;
         for (const [name, handler] of this.eventHandlers) this.eventSource.removeListener(name, handler);
         this.eventHandlers = [];
         this.chatElement = null;
@@ -692,14 +677,7 @@ export class ChatOptimizer {
         this.originalHighlights.clear();
         this.highlightWrappers.clear();
         this.highlightPointerId = null;
-        document.querySelectorAll('[data-cla-collapsible]').forEach(element => {
-            const handler = this.collapseHandlers.get(element);
-            if (handler) element.removeEventListener('click', handler);
-            element.classList.remove('cla-code-collapsed');
-            delete element.dataset.claCollapsible;
-        });
-        this.collapseHandlers = new WeakMap();
-        document.querySelectorAll('[data-cla-heavy-html]').forEach(element => {
+        chatElement?.querySelectorAll('[data-cla-heavy-html]').forEach(element => {
             delete element.dataset.claHighlighted;
             delete element.dataset.claHeavyHtml;
             delete element.dataset.highlighted;

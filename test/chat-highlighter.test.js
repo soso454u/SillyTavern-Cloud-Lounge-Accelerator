@@ -40,7 +40,10 @@ function fixture(t, { text = 'const a = 1;', copy = true } = {}) {
     });
     optimizer.started = true;
     optimizer.highlightLibrary = {};
-    optimizer.chatElement = {contains:()=>true};
+    optimizer.chatElement = { contains: () => true,
+        addEventListener: (name, fn) => listeners.set(name, fn),
+        removeEventListener: name => listeners.delete(name),
+    };
     optimizer.originalHighlight = element => {
         highlights++;
         assert.equal(element, code);
@@ -148,14 +151,14 @@ test('old offscreen code is observed without reading its contents', t => {
 });
 
 test('queued highlights and newly visible code wait through momentum scrolling after pointer release', async t => {
-    t.mock.timers.enable({ apis: ['setTimeout'] });
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
     const f = fixture(t);
     f.optimizer.codeObservationStarted = true;
     f.optimizer.scrollActivity = new ChatScrollActivity({
-        getChatElement: () => f.optimizer.chatElement,
+        now: () => Date.now(),
         onIdle: () => f.optimizer.queueCodeScan(),
     });
-    f.optimizer.scrollActivity.start();
+    f.optimizer.scrollActivity.start(f.optimizer.chatElement);
     t.after(() => f.optimizer.scrollActivity.stop());
     f.optimizer.queueHighlight(f.code);
     assert.equal(f.jobs.length, 1);

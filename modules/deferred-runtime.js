@@ -14,6 +14,7 @@ import { TransferMenu } from './transfer-menu.js';
 import { AutoConnectController } from './auto-connect.js';
 import { copyDiagnosticText } from './interaction-diagnostics.js';
 import { collectMemoryDiagnostics } from './memory-diagnostics.js';
+import { PerformanceDiagnostics } from './performance-diagnostics.js';
 import { ChatScrollActivity } from './chat-scroll-activity.js';
 export { repairAccelerator } from './repair.js';
 export { SettingsPanel } from '../ui/panel.js';
@@ -26,7 +27,6 @@ export function createDeferredRuntime({
     scriptApi,
 }) {
     const chatScrollActivity = new ChatScrollActivity({
-        getChatElement: () => chatOptimizer?.chatElement,
         onIdle: () => chatOptimizer?.queueCodeScan(),
     });
     if (chatOptimizer) chatOptimizer.scrollActivity = chatScrollActivity;
@@ -51,6 +51,7 @@ export function createDeferredRuntime({
         streamingRender: new StreamingRenderOptimizer({ eventSource, eventTypes, getStreamingProcessor }),
         regexUiAdapter,
         chatScrollActivity,
+        performanceDiagnostics: new PerformanceDiagnostics(),
         async getPanelStatus(settings, runtimeStatus) {
             const { cacheController, interactionOptimizer, performanceConfig, startupOptimizer } = this;
             const backendMissing = cacheController.backendMissing === true;
@@ -73,7 +74,7 @@ export function createDeferredRuntime({
         },
         async copyDiagnostics(settings) {
             const report = {
-                schema: 1,
+                schema: 2,
                 pluginVersion: settings.settingsVersion,
                 exportedAt: new Date().toISOString(),
                 sillyTavernVersion: document.querySelector('#version_display')?.textContent?.match(
@@ -89,6 +90,7 @@ export function createDeferredRuntime({
                 interaction: this.interactionOptimizer.getDiagnosticReport(),
                 streaming: this.streamingRender.getReport(),
                 scrolling: this.chatScrollActivity.getReport(),
+                performanceCapture: this.performanceDiagnostics.stop(),
                 memory: collectMemoryDiagnostics({ chat, characters: scriptApi?.characters }),
             };
             await copyDiagnosticText(JSON.stringify(report, null, 2));

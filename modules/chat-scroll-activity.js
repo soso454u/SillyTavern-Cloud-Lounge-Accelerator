@@ -5,21 +5,20 @@ const SETTLE_MS = 180;
 // other extensions. No per-scroll geometry reads, DOM writes or animation loop.
 export class ChatScrollActivity {
     constructor({
-        getChatElement, onIdle, documentRef = globalThis.document,
+        onIdle, documentRef = globalThis.document,
+        now = () => globalThis.performance.now(),
         setTimer = (...args) => setTimeout(...args),
         clearTimer = handle => clearTimeout(handle),
     }) {
-        Object.assign(this, { getChatElement, onIdle, document: documentRef, setTimer, clearTimer });
+        Object.assign(this, { onIdle, document: documentRef, now, setTimer, clearTimer });
+        this.chat = null;
         this.timer = null;
         this.started = false;
         this.scrollEvents = 0;
         this.onScroll = event => {
-            if (event.target === this.getChatElement()) this.defer();
+            if (event.target === this.chat) this.defer();
         };
-        this.onWheel = event => {
-            const chat = this.getChatElement();
-            if (chat && (event.target === chat || chat.contains?.(event.target))) this.defer();
-        };
+        this.onWheel = () => this.defer();
         this.onVisibilityChange = () => {
             this.reset();
             if (!this.document.hidden && this.started) this.onIdle();
@@ -28,26 +27,38 @@ export class ChatScrollActivity {
 
     get active() { return this.timer !== null; }
 
-    start() {
+    start(chat) {
         if (this.started) return;
         this.started = true;
-        for (const [name, handler] of this.handlers()) {
-            this.document.addEventListener(name, handler, { capture: true, passive: true });
-        }
+        this.document.addEventListener('visibilitychange', this.onVisibilityChange);
+        this.bind(chat);
     }
 
-    handlers() {
-        return [['scroll', this.onScroll], ['wheel', this.onWheel], ['visibilitychange', this.onVisibilityChange]];
+    bind(chat) {
+        if (!this.started || chat === this.chat) return;
+        this.chat?.removeEventListener('scroll', this.onScroll);
+        this.chat?.removeEventListener('wheel', this.onWheel);
+        this.reset();
+        this.chat = chat;
+        this.chat?.addEventListener('scroll', this.onScroll, { passive: true });
+        this.chat?.addEventListener('wheel', this.onWheel, { passive: true });
     }
 
     defer() {
         if (!this.started || this.document.hidden) return;
         this.scrollEvents++;
-        this.reset();
-        this.timer = this.setTimer(() => {
+        this.idleAt = this.now() + SETTLE_MS;
+        if (this.timer !== null) return;
+        const settle = () => {
+            const remaining = this.idleAt - this.now();
+            if (remaining > 0) {
+                this.timer = this.setTimer(settle, remaining);
+                return;
+            }
             this.timer = null;
             if (this.started) this.onIdle();
-        }, SETTLE_MS);
+        };
+        this.timer = this.setTimer(settle, SETTLE_MS);
     }
 
     reset() {
@@ -56,9 +67,10 @@ export class ChatScrollActivity {
     }
 
     stop() {
+        if (!this.started) return;
+        this.bind(null);
         this.started = false;
-        this.reset();
-        for (const [name, handler] of this.handlers()) this.document.removeEventListener(name, handler, true);
+        this.document.removeEventListener('visibilitychange', this.onVisibilityChange);
     }
 
     getReport() { return { active: this.active, scrollEvents: this.scrollEvents, settleMs: SETTLE_MS }; }

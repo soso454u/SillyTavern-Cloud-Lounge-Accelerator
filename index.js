@@ -197,6 +197,7 @@ async function stopOptimizationModules({ stopCache = false } = {}) {
     runtime.startupOptimizer.stop();
     runtime.regexRefresh?.stop();
     runtime.streamingRender?.stop();
+    runtime.performanceDiagnostics?.stop();
     await runtime.chatOptimizer.stop();
     runtime.interactionOptimizer?.stop();
     if (stopCache) await runtime.cacheController?.stop({ clear: true });
@@ -282,6 +283,7 @@ function mountPanel() {
             ? repairAccelerator({ cacheController: getRuntime().cacheController, restartModules })
             : restartModules().then(() => ({ warmed: 0 })),
         onCopyDiagnostics: () => getRuntime().copyDiagnostics(settings),
+        performanceDiagnostics: getRuntime().performanceDiagnostics,
         getStatus: () => getRuntime().getPanelStatus(settings, runtimeStatus),
     });
     return panel.mount();

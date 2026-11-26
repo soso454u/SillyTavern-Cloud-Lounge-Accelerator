@@ -83,18 +83,24 @@ function createTabs(pages) {
     return tabs;
 }
 
-function createWorldInfoPageSizeSetting(controller) {
+function createPageSizeRow(title, description, control) {
     const row = document.createElement('label');
     row.className = 'cla-number-setting';
     const text = document.createElement('span');
     const name = document.createElement('strong');
-    name.textContent = '每页渲染世界书条目';
+    name.textContent = title;
     const note = document.createElement('small');
-    const recommendation = '默认 25 条；大世界书建议 10–25 条';
-    note.textContent = recommendation;
+    note.textContent = description;
     text.append(name, note);
+    control.className = 'text_pole cla-page-size-input';
+    row.append(text, control);
+    return { row, note };
+}
+
+function createWorldInfoPageSizeSetting(controller) {
     const select = document.createElement('select');
-    select.className = 'text_pole cla-page-size-input';
+    const recommendation = '默认 25 条；大型世界书推荐 10–25 条。';
+    const { row, note } = createPageSizeRow('每页渲染世界书条目', recommendation, select);
     select.dataset.claSetting = 'worldInfoPageSize';
     for (const size of WORLD_INFO_PAGE_SIZES) {
         const option = document.createElement('option');
@@ -104,7 +110,6 @@ function createWorldInfoPageSizeSetting(controller) {
     }
     select.value = String(WORLD_INFO_DEFAULT_PAGE_SIZE);
     select.disabled = true;
-    row.append(text, select);
 
     let disposed = false, busy = false, revision = 0;
     const refresh = async () => {
@@ -164,17 +169,10 @@ function createChatDisplayPage(settings, onSettingChange, worldInfoControl) {
     description.textContent = '单独调整聊天与世界书每页显示的数量';
     heading.append(title, description);
 
-    const setting = document.createElement('label');
-    setting.className = 'cla-number-setting';
-    const text = document.createElement('span');
-    const name = document.createElement('strong');
-    name.textContent = '每页渲染消息';
-    const note = document.createElement('small');
-    note.textContent = `可选 ${CHAT_PAGE_SIZE_MIN}–${CHAT_PAGE_SIZE_MAX} 条；iPhone / iPad 推荐 3–5 条`;
-    text.append(name, note);
     const input = document.createElement('input');
     input.type = 'number';
-    input.className = 'text_pole cla-page-size-input';
+    const { row: setting } = createPageSizeRow('每页渲染消息',
+        `可选 ${CHAT_PAGE_SIZE_MIN}–${CHAT_PAGE_SIZE_MAX} 条；iPhone / iPad 推荐 3–5 条`, input);
     input.min = String(CHAT_PAGE_SIZE_MIN);
     input.max = String(CHAT_PAGE_SIZE_MAX);
     input.step = '1';
@@ -196,26 +194,22 @@ function createChatDisplayPage(settings, onSettingChange, worldInfoControl) {
             input.disabled = false;
         }
     });
-    setting.append(text, input);
-
     const boundary = document.createElement('p');
     boundary.className = 'cla-setting-note';
-    boundary.textContent = '这只改变页面首次显示和“显示更多”的数量；下次打开聊天时应用，不重新读取当前聊天。不删除聊天，也不会减少发给模型的历史上下文。数量越大，复杂美化和正则越可能让手机卡顿。';
-    const worldInfoNote = document.createElement('p');
-    worldInfoNote.className = 'cla-setting-note';
-    worldInfoNote.textContent = '与酒馆原生世界书编辑器的分页同步，仅改变每页显示数量，不影响条目内容、触发或发送给模型的上下文。';
-    page.append(heading, setting, boundary, worldInfoControl.element, worldInfoNote);
+    boundary.textContent = '仅调整页面显示数量，不影响聊天上下文、世界书条目内容及触发规则。聊天分页在下次打开聊天时生效。';
+    page.append(heading, setting, worldInfoControl.element, boundary);
     return page;
 }
 
 export class SettingsPanel {
-    constructor({ settings, onSettingChange, onPerformanceChange, onRerender, onRepair, onCopyDiagnostics, getStatus, worldInfoPageSize = new WorldInfoPageSize() }) {
+    constructor({ settings, onSettingChange, onPerformanceChange, onRerender, onRepair, onCopyDiagnostics, performanceDiagnostics, getStatus, worldInfoPageSize = new WorldInfoPageSize() }) {
         this.settings = settings;
         this.onSettingChange = onSettingChange;
         this.onPerformanceChange = onPerformanceChange;
         this.onRerender = onRerender;
         this.onRepair = onRepair;
         this.onCopyDiagnostics = onCopyDiagnostics;
+        this.performanceDiagnostics = performanceDiagnostics;
         this.getStatus = getStatus;
         this.worldInfoPageSize = worldInfoPageSize;
         this.worldInfoControl = null;
@@ -227,6 +221,7 @@ export class SettingsPanel {
 
     mount() {
         if (this.root?.isConnected) return true;
+        if (this.root) this.performanceDiagnostics?.stop();
         const host = document.querySelector('#extensions_settings2');
         if (!host) return false;
         document.getElementById(ROOT_ID)?.remove();
@@ -289,7 +284,9 @@ export class SettingsPanel {
             globalThis.toastr?.success?.(`修复完成，已预热 ${result?.warmed || 0} 个资源`, '云酒馆加速器');
         }, 'cla-repair-button'));
         this.performance = createPerformancePanel(this.onPerformanceChange);
-        this.advanced = createAdvancedPanel({ onCopyDiagnostics: this.onCopyDiagnostics });
+        this.advanced = createAdvancedPanel({
+            onCopyDiagnostics: this.onCopyDiagnostics, performanceDiagnostics: this.performanceDiagnostics,
+        });
         mainPage.append(this.performance.element, actions, repairBox, this.advanced.element);
         this.worldInfoControl?.dispose();
         this.worldInfoControl = createWorldInfoPageSizeSetting(this.worldInfoPageSize);
@@ -344,6 +341,7 @@ export class SettingsPanel {
     }
 
     remove() {
+        this.performanceDiagnostics?.stop();
         this.worldInfoControl?.dispose();
         this.worldInfoControl = null;
         this.root?.remove();

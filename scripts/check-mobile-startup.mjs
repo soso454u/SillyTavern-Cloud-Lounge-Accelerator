@@ -9,7 +9,7 @@ const { chromium } = createRequire(import.meta.url)('playwright');
 const sources = new Map(await Promise.all([
     'index.js', 'client-core.js', 'settings.js', 'ui/panel.js', 'ui/advanced-panel.js',
     'ui/performance-panel.js', 'modules/performance-config.js', 'modules/startup-optimizer.js',
-    'utils/device-profile.js', 'modules/deferred-runtime.js', 'modules/startup-diagnostics.js', 'modules/interaction-diagnostics.js', 'modules/ui-render-optimizer.js',
+    'utils/device-profile.js', 'modules/deferred-runtime.js', 'modules/startup-diagnostics.js', 'modules/interaction-diagnostics.js',
     'modules/native-input.js', 'modules/interaction-recovery-guard.js', 'modules/mini-features.js',
 ].map(async path => [`/${path}`, await readFile(new URL(`../${path}`, import.meta.url), 'utf8')])));
 sources.set('/script.js', `
@@ -148,7 +148,6 @@ try {
         const classes = [
             ['interaction-diagnostics', 'InteractionDiagnostics'],
             ['native-input', 'InputRevealGuard'],
-            ['ui-render-optimizer', 'UiRenderOptimizer'],
             ['interaction-recovery-guard', 'InteractionRecoveryGuard'],
         ];
         for (const [path, name] of classes) {

@@ -1,0 +1,579 @@
+--- a/public/scripts/world-info.js
++++ b/public/scripts/world-info.js
+@@ -1,7 +1,7 @@
+ import { Fuse } from '../lib.js';
+
+ import { saveSettings, substituteParams, getRequestHeaders, chat_metadata, this_chid, characters, saveCharacterDebounced, menu_type, eventSource, event_types, getExtensionPromptByName, saveMetadata, getCurrentChatId, extension_prompt_roles, create_save, createOrEditCharacter, name1, getOneCharacter, select_selected_character } from '../script.js';
+-import { download, debounce, initScrollHeight, resetScrollHeight, parseJsonFile, extractDataFromPng, getFileBuffer, getCharaFilename, getSortableDelay, escapeRegex, PAGINATION_TEMPLATE, navigation_option, waitUntilCondition, isTrueBoolean, setValueByPath, flashHighlight, select2ModifyOptions, getSelect2OptionId, dynamicSelect2DataViaAjax, highlightRegex, select2ChoiceClickSubscribe, isFalseBoolean, getSanitizedFilename, checkOverwriteExistingData, getStringHash, parseStringArray, cancelDebounce, findChar, onlyUnique, equalsIgnoreCaseAndAccents, uuidv4, normalizeArray, getUniqueName, logSlashCommandWarn, addLongPressEvent, escapeHtml } from './utils.js';
++import { download, debounce, initScrollHeight, resetScrollHeight, parseJsonFile, extractDataFromPng, getFileBuffer, getCharaFilename, getSortableDelay, escapeRegex, PAGINATION_TEMPLATE, navigation_option, isTrueBoolean, setValueByPath, flashHighlight, select2ModifyOptions, getSelect2OptionId, dynamicSelect2DataViaAjax, highlightRegex, select2ChoiceClickSubscribe, isFalseBoolean, getSanitizedFilename, checkOverwriteExistingData, getStringHash, parseStringArray, cancelDebounce, findChar, onlyUnique, equalsIgnoreCaseAndAccents, uuidv4, normalizeArray, getUniqueName, logSlashCommandWarn, addLongPressEvent, escapeHtml } from './utils.js';
+ import { extension_settings, getContext } from './extensions.js';
+ import { NOTE_MODULE_NAME, metadata_keys, shouldWIAddPrompt } from './authors-note.js';
+ import { isMobile } from './RossAscends-mods.js';
+@@ -2009,6 +2009,8 @@
+ }
+
+
++let worldEditorRequest = 0;
++
+ /**
+  * Loads the given world into the World Editor.
+  *
+@@ -2021,8 +2023,9 @@
+         return;
+     }
+
++    const request = ++worldEditorRequest;
+     const wiData = await loadWorldInfo(name);
+-    await displayWorldEntries(name, wiData);
++    if (request === worldEditorRequest) await displayWorldEntries(name, wiData);
+ }
+
+ /**
+@@ -2084,6 +2087,7 @@
+ }
+
+ async function hideWorldEditor() {
++    worldEditorRequest++;
+     await displayWorldEntries(null, null);
+ }
+
+@@ -2213,105 +2217,66 @@
+     toastr.info('Create or import a new World Info file first.', 'World Info is not set', { timeOut: 10000, preventDuplicates: true });
+ }
+
+-/** @type {Select2Option[]} Cache all keys as selectable dropdown option */
+-const worldEntryKeyOptionsCache = [];
++const worldEntryKeys = new Map();
++/** @type {Select2Option[]|null} */
++let sortedWorldEntryKeys = null;
++const worldEntryRegexMarkup = new Map();
++const visibleEntryAutocompletes = new Set();
++let worldEntryRenderVersion = 0;
+
+-/**
+- * Update the cache and all select options for the keys with new values to display
+- * @param {string[]|Select2Option[]} keyOptions - An array of options to update
+- * @param {object} options - Optional arguments
+- * @param {boolean?} [options.remove=false] - Whether the option was removed, so the count should be reduced - otherwise it'll be increased
+- * @param {boolean?} [options.reset=false] - Whether the cache should be reset. Reset will also not trigger update of the controls, as we expect them to be redrawn anyway
+- */
+-function updateWorldEntryKeyOptionsCache(keyOptions, { remove = false, reset = false } = {}) {
+-    if (!keyOptions.length) return;
+-    /** @type {Select2Option[]} */
+-    const options = keyOptions.map(x => typeof x === 'string' ? { id: getSelect2OptionId(x), text: x } : x);
+-    if (reset) worldEntryKeyOptionsCache.length = 0;
+-    options.forEach(option => {
+-        // Update the cache list
+-        let cachedEntry = worldEntryKeyOptionsCache.find(x => x.id == option.id);
+-        if (cachedEntry) {
+-            cachedEntry.count += !remove ? 1 : -1;
+-        } else if (!remove) {
+-            worldEntryKeyOptionsCache.push(option);
+-            cachedEntry = option;
+-            cachedEntry.count = 1;
+-        }
+-    });
++function updateWorldEntryKeyOptionsCache(keyOptions, { remove = false } = {}) {
++    for (const key of keyOptions) {
++        const option = typeof key === 'string' ? { id: getSelect2OptionId(key), text: key } : key;
++        const id = String(option.id);
++        const cached = worldEntryKeys.get(id);
++        if (cached) cached.count += remove ? -1 : 1;
++        else if (!remove) worldEntryKeys.set(id, { id, text: option.text, count: 1 });
++    }
++    sortedWorldEntryKeys = null;
++}
+
+-    // Sort by count DESC and then alphabetically
+-    worldEntryKeyOptionsCache.sort((a, b) => b.count - a.count || a.text.localeCompare(b.text));
++function getWorldEntryKeyOptions() {
++    sortedWorldEntryKeys ??= Array.from(worldEntryKeys.values())
++        .sort((a, b) => b.count - a.count || a.text.localeCompare(b.text));
++    return sortedWorldEntryKeys;
+ }
+
+-function clearEntryList($list) {
+-    console.time('clearEntryList');
++function getWorldEntryRegexMarkup(text) {
++    if (typeof text !== 'string' || !text.startsWith('/')) return null;
++    if (worldEntryRegexMarkup.has(text)) return worldEntryRegexMarkup.get(text);
++    const markup = isValidRegex(text) ? highlightRegex(text) : null;
++    if (worldEntryRegexMarkup.size < 512 && text.length <= 512) worldEntryRegexMarkup.set(text, markup);
++    return markup;
++}
+
+-    // List already empty, skipping cleanup
+-    if (!$list.children().length) {
+-        console.timeEnd('clearEntryList');
+-        return;
+-    }
+-
+-    // Unsubscribe from toggle events, so that mass open won't create new drawers
+-    $list.find('.inline-drawer').off('inline-drawer-toggle');
+-
+-    // Step 1: Clean all <option> elements within <select>
+-    $list.find('option').each(function () {
+-        const $option = $(this);
+-        $option.off();
+-        $.cleanData([$option[0]]);
+-        $option.remove();
+-    });
+-
+-    // Step 2: Clean all <select> elements
+-    $list.find('select').each(function () {
+-        const $select = $(this);
+-        // Remove Select2-related data and container if present
+-        if ($select.data('select2')) {
+-            try {
+-                $select.select2('destroy');
+-            } catch (e) {
+-                console.debug('Select2 destroy failed:', e);
+-            }
++function clearEntryList($list) {
++    // jQuery's empty runs widget remove hooks, including autocomplete cleanup.
++    // Destroy Select2 first because it also owns dropdowns outside this list.
++    $list.find('.inline-drawer-content:animated').stop(true);
++    $list.find('select.select2-hidden-accessible').each(function () {
++        const select = $(this);
++        if (!select.data('select2')) return;
++        try {
++            select.select2('destroy');
++        } catch (error) {
++            console.debug('Select2 destroy failed:', error);
+         }
+-        const $container = $select.parent();
+-        if ($container.length) {
+-            $container.find('*').off();
+-            $.cleanData($container.find('*').get());
+-            $container.remove();
+-        }
+-
+-        $select.off();
+-        $.cleanData([$select[0]]);
+     });
+-
+-    // Step 3: Clean <div>, <span>, <input>
+-    $list.find('div, span, input').each(function () {
+-        const $elem = $(this);
+-        $elem.off();
+-        $.cleanData([$elem[0]]);
+-        $elem.remove();
+-    });
+-
+-    const totalElementsOfAnyKindLeftInList = $list.children().length;
+-
+-    // Final cleanup
+-    if (totalElementsOfAnyKindLeftInList) {
+-        console.time('empty');
+-        $list.empty();
+-        console.timeEnd('empty');
+-    }
+-
+-    console.timeEnd('clearEntryList');
++    $list.empty();
+ }
+
+ //MARK: displayWorldEntries
+-async function displayWorldEntries(name, data, navigation = navigation_option.none, flashOnNav = true) {
+-    updateEditor = async (navigation, flashOnNav = true) => await displayWorldEntries(name, data, navigation, flashOnNav);
++async function displayWorldEntries(name, data, navigation = navigation_option.none, flashOnNav = true, reopenEntry = false) {
++    worldEntryRenderVersion++;
++    updateEditor = async (navigation, flashOnNav = true, reopenEntry = false) => await displayWorldEntries(name, data, navigation, flashOnNav, reopenEntry);
+
+     const worldEntriesList = $('#world_popup_entries_list');
++    const pagination = $('#world_info_pagination');
++    if (worldEntriesList.sortable('instance')?.dragging) worldEntriesList.sortable('destroy');
+     clearEntryList(worldEntriesList);
++    worldEntryKeys.clear();
++    sortedWorldEntryKeys = null;
++    worldEntryRegexMarkup.clear();
+     worldEntriesList.show();
+
+     if (!data || !('entries' in data)) {
+@@ -2320,8 +2285,10 @@
+         $('#world_popup_export').off('click').on('click', nullWorldInfo);
+         $('#world_popup_delete').off('click').on('click', nullWorldInfo);
+         $('#world_duplicate').off('click').on('click', nullWorldInfo);
++        $('#world_backfill_memos, #world_apply_current_sorting').off('click.worldInfoEditor');
++        if (worldEntriesList.sortable('instance')) worldEntriesList.sortable('destroy');
++        if (pagination.data('pagination')?.initialized) pagination.pagination('destroy').removeData('pagination');
+         worldEntriesList.hide();
+-        $('#world_info_pagination').html('');
+         return;
+     }
+
+@@ -2355,7 +2322,7 @@
+     // Before printing the WI, we check if we should enable/disable search sorting
+     verifyWorldInfoSearchSortRule();
+
+-    function getDataArray(callback) {
++    function getDataArray() {
+         // Convert the data.entries object into an array
+         let entriesArray = Object.keys(data.entries).map(uid => {
+             const entry = data.entries[uid];
+@@ -2371,12 +2338,13 @@
+         entriesArray = worldInfoFilter.applyFilters(entriesArray);
+         entriesArray = sortWorldInfoEntries(entriesArray);
+
+-        // Cache keys
+-        const keys = entriesArray.flatMap(entry => [...entry.key, ...entry.keysecondary]);
+-        updateWorldEntryKeyOptionsCache(keys, { reset: true });
++        if (!isMobile() && power_user.wi_key_input_plaintext === false) {
++            for (const entry of entriesArray) {
++                updateWorldEntryKeyOptionsCache(entry.key);
++                updateWorldEntryKeyOptionsCache(entry.keysecondary);
++            }
++        }
+
+-        // Run the callback for printing this
+-        typeof callback === 'function' && callback(entriesArray);
+         return entriesArray;
+     }
+
+@@ -2385,18 +2353,19 @@
+     let startPage = 1;
+
+     if (navigation === navigation_option.previous) {
+-        startPage = $('#world_info_pagination').pagination('getCurrentPageNum');
++        startPage = pagination.pagination('getCurrentPageNum');
+     }
+
+-    if (typeof navigation === 'number' && Number(navigation) >= 0) {
+-        const data = getDataArray();
+-        const uidIndex = data.findIndex(x => x.uid === navigation);
++    const entries = getDataArray();
++    let navigateToEntry = typeof navigation === 'number' && navigation >= 0;
++    if (navigateToEntry) {
++        const uidIndex = entries.findIndex(x => x.uid === navigation);
+         const perPage = Number(accountStorage.getItem(storageKey)) || perPageDefault;
+-        startPage = Math.floor(uidIndex / perPage) + 1;
++        startPage = uidIndex < 0 ? 1 : Math.floor(uidIndex / perPage) + 1;
+     }
+
+-    $('#world_info_pagination').pagination({
+-        dataSource: getDataArray,
++    pagination.pagination({
++        dataSource: entries,
+         pageSize: Number(accountStorage.getItem(storageKey)) || perPageDefault,
+         sizeChangerOptions: [10, 25, 50, 100, 500, 1000],
+         showSizeChanger: true,
+@@ -2409,15 +2378,20 @@
+         formatNavigator: PAGINATION_TEMPLATE,
+         showNavigator: true,
+         callback: async function (/** @type {object[]} */ page) {
++            const renderVersion = ++worldEntryRenderVersion;
++            const goToEntry = navigateToEntry;
++            navigateToEntry = false;
+             try {
+                 clearEntryList(worldEntriesList);
+
+                 const keywordHeaders = await renderTemplateAsync('worldInfoKeywordHeaders');
++                if (renderVersion !== worldEntryRenderVersion) return;
+                 const blocks = [];
+
+                 for (const entry of page) {
+                     try {
+                         const block = await getWorldEntry(name, data, entry);
++                        if (renderVersion !== worldEntryRenderVersion) return;
+                         if (block) {
+                             blocks.push(block);
+                         }
+@@ -2433,8 +2407,27 @@
+                     });
+                 }
+
+-                worldEntriesList.append(keywordHeaders);
+-                worldEntriesList.append(blocks);
++                worldEntriesList.append(keywordHeaders, blocks);
++                // Pagination.js does not await async callbacks. Measure this page
++                // after insertion and group the reads before changing any height.
++                const heights = worldEntriesList.find('textarea[name="comment"]').get().map(element => ({
++                    element,
++                    height: parseFloat($(element).css('height')),
++                    scrollHeight: element.scrollHeight,
++                }));
++                for (const { element, height, scrollHeight } of heights) {
++                    if (scrollHeight - height >= 3) element.style.height = `${scrollHeight + 3}px`;
++                }
++
++                if (goToEntry) {
++                    const element = worldEntriesList.children(`[uid="${navigation}"]`).first();
++                    if (element.length) {
++                        const scrollOffset = element.offset().top - worldEntriesList.offset().top;
++                        $('#WorldInfo').scrollTop(scrollOffset);
++                        if (flashOnNav) flashHighlight(element);
++                        if (reopenEntry) element.find('.inline-drawer-icon').first().trigger('click');
++                    }
++                }
+             } catch (error) {
+                 console.error('Error while rendering WI entries:', error);
+             }
+@@ -2442,31 +2435,8 @@
+         afterSizeSelectorChange: function (e) {
+             accountStorage.setItem(storageKey, e.target.value);
+         },
+-        afterPaging: function () {
+-            $('#world_popup_entries_list textarea[name="comment"]').each(function () {
+-                initScrollHeight($(this));
+-            });
+-        },
+     });
+
+-    if (typeof navigation === 'number' && Number(navigation) >= 0) {
+-        const selector = `#world_popup_entries_list [uid="${navigation}"]`;
+-        waitUntilCondition(() => document.querySelector(selector) !== null).finally(() => {
+-            const element = $(selector);
+-
+-            if (element.length === 0) {
+-                console.log(`Could not find element for uid ${navigation}`);
+-                return;
+-            }
+-
+-            const elementOffset = element.offset();
+-            const parentOffset = element.parent().offset();
+-            const scrollOffset = elementOffset.top - parentOffset.top;
+-            $('#WorldInfo').scrollTop(scrollOffset);
+-            if (flashOnNav) flashHighlight(element);
+-        });
+-    }
+-
+     $('#world_popup_new').off('click').on('click', () => {
+         const entry = createWorldInfoEntry(name, data);
+         if (entry) updateEditor(entry.uid);
+@@ -2476,7 +2446,7 @@
+         await renameWorldInfo(name, data);
+     });
+
+-    $('#world_backfill_memos').off('click').on('click', async () => {
++    $('#world_backfill_memos').off('click.worldInfoEditor').on('click.worldInfoEditor', async () => {
+         let counter = 0;
+         for (const entry of Object.values(data.entries)) {
+             if (!entry.comment && Array.isArray(entry.key) && entry.key.length > 0) {
+@@ -2493,7 +2463,7 @@
+         }
+     });
+
+-    $('#world_apply_current_sorting').off('click').on('click', async () => {
++    $('#world_apply_current_sorting').off('click.worldInfoEditor').on('click.worldInfoEditor', async () => {
+         const entryCount = Object.keys(data.entries).length;
+         const moreThan100 = entryCount > 100;
+
+@@ -2567,12 +2537,6 @@
+         }
+     });
+
+-    // Check if a sortable instance exists
+-    if (worldEntriesList.sortable('instance') !== undefined) {
+-        // Destroy the instance
+-        worldEntriesList.sortable('destroy');
+-    }
+-
+     worldEntriesList.sortable({
+         items: '.world_entry',
+         delay: getSortableDelay(),
+@@ -2594,8 +2558,6 @@
+                 item.displayIndex = minDisplayIndex + index;
+                 setWIOriginalDataValue(data, uid, 'extensions.display_index', item.displayIndex);
+             });
+-
+-            console.table(Object.keys(data.entries).map(uid => data.entries[uid]).map(x => ({ uid: x.uid, key: x.key.join(','), displayIndex: x.displayIndex })));
+
+             await saveWorldInfo(name, data);
+         },
+@@ -2866,9 +2828,9 @@
+
+     function templateStyling(item, { searchStyle = false } = {}) {
+         const content = $('<span>').addClass('item').text(item.text).attr('title', `${item.text}\n\nClick to edit`);
+-        const isRegex = isValidRegex(item.text);
+-        if (isRegex) {
+-            content.html(highlightRegex(item.text));
++        const markup = getWorldEntryRegexMarkup(item.text);
++        if (markup !== null) {
++            content.html(markup);
+             content.addClass('regex_item').prepend($('<span>').addClass('regex_icon').text('•*').attr('title', 'Regex'));
+         }
+         if (searchStyle && item.count) {
+@@ -2882,7 +2844,23 @@
+     if (isFancyInput) {
+         select2ModifyOptions(input, entry[entryPropName], { select: true, changeEventArgs: { skipReset: true, noSave: true } });
+         input.select2({
+-            ajax: dynamicSelect2DataViaAjax(() => worldEntryKeyOptionsCache),
++            ajax: {
++                ...dynamicSelect2DataViaAjax(getWorldEntryKeyOptions),
++                processResults({ results }, params) {
++                    const pageSize = 50;
++                    const start = ((params.page || 1) - 1) * pageSize;
++                    const end = start + pageSize;
++                    return { results: results.slice(start, end), pagination: { more: end < results.length } };
++                },
++            },
++            createTag(params) {
++                const term = (params.term ?? '').trim();
++                if (!term) return null;
++                const normalized = term.toUpperCase();
++                // Keep Select2's duplicate-tag check across all candidate pages.
++                if (getWorldEntryKeyOptions().some(option => option.text.toUpperCase() === normalized)) return null;
++                return { id: term, text: term };
++            },
+             tags: true,
+             tokenSeparators: [','],
+             // @ts-ignore
+@@ -3447,31 +3425,30 @@
+         await moveWorldInfoEntry(sourceWorld, selectedValue, sourceUid, { deleteOriginal });
+     });
+
++    const editOutlet = headerTemplate.find('.inline-drawer-outlet');
+     let drawerInitialized = false;
+     let drawerDestroyTimeout = null;
+-    headerTemplate.find('.inline-drawer').on('inline-drawer-toggle', function () {
+-        if (drawerDestroyTimeout) {
+-            clearTimeout(drawerDestroyTimeout);
+-            drawerDestroyTimeout = null;
+-        }
+-        if (drawerInitialized) {
++
++    editOutlet.on('remove', () => clearTimeout(drawerDestroyTimeout));
++    headerTemplate.find('.inline-drawer').on('inline-drawer-toggle', function (event) {
++        if (event.target !== this) return;
++        clearTimeout(drawerDestroyTimeout);
++        drawerDestroyTimeout = null;
++        const opening = $(this).find('> .inline-drawer-header .inline-drawer-icon').hasClass('up');
++        if (opening) {
++            if (!drawerInitialized) {
++                drawerInitialized = true;
++                addEditorDrawerContent();
++            }
++        } else if (drawerInitialized) {
+             drawerDestroyTimeout = setTimeout(() => {
+-                // Drawer was reopened, so we don't destroy it
+-                if (editOutlet.is(':visible')) {
+-                    return;
+-                }
++                drawerDestroyTimeout = null;
+                 drawerInitialized = false;
+                 clearEntryList(editOutlet);
+-                drawerDestroyTimeout = null;
+             }, debounce_timeout.relaxed);
+-        } else {
+-            drawerInitialized = true;
+-            addEditorDrawerContent();
+         }
+     });
+
+-    const editOutlet = headerTemplate.find('.inline-drawer-outlet');
+-
+     function addEditorDrawerContent() {
+         const editTemplate = WI_ENTRY_EDIT_TEMPLATE.clone();
+
+@@ -3489,8 +3466,7 @@
+             power_user.wi_key_input_plaintext = !power_user.wi_key_input_plaintext;
+             saveSettingsDebounced();
+             const uid = ($(this).parents('.world_entry')).data('uid');
+-            updateEditor(uid, false);
+-            $(`.world_entry[uid="${uid}"] .inline-drawer-icon`).trigger('click');
++            updateEditor(uid, false, true);
+         }).each((_, icon) => {
+             $(icon).attr('title', $(icon).data(power_user.wi_key_input_plaintext ? 'tooltip-on' : 'tooltip-off'));
+             $(icon).text($(icon).data(power_user.wi_key_input_plaintext ? 'icon-on' : 'icon-off'));
+@@ -3588,9 +3564,11 @@
+         // Content
+         const counter = editTemplate.find('.world_entry_form_token_counter');
+         const countTokensDebounced = debounce(async function (counter, value) {
+-            const numberOfTokens = await getTokenCountAsync(value);
+-            $(counter).text(numberOfTokens);
++            if (!counter[0]?.isConnected) return;
++            const numberOfTokens = await getTokenCountAsync(value);
++            if (counter[0]?.isConnected) $(counter).text(numberOfTokens);
+         }, debounce_timeout.relaxed);
++        editTemplate.on('remove', () => cancelDebounce(countTokensDebounced));
+         const contentInputId = `world_entry_content_${entry.uid}`;
+         const contentInput = editTemplate.find('textarea[name="content"]');
+         contentInput.data('uid', entry.uid);
+@@ -3618,7 +3596,7 @@
+             !noSave && await saveWorldInfo(name, data);
+         });
+         outletNameInput.val(entry.outletName ?? '').trigger('input', { noSave: true });
+-        setTimeout(() => createEntryInputAutocomplete(outletNameInput, getOutletNameCallback(data), { allowMultiple: true }), 1);
++        createEntryInputAutocomplete(outletNameInput, getOutletNameCallback(data), { allowMultiple: true });
+
+         // Scan depth
+         const scanDepthInput = editTemplate.find('input[name="scanDepth"]');
+@@ -3654,7 +3632,7 @@
+             !noSave && await saveWorldInfo(name, data);
+         });
+         groupInput.val(entry.group ?? '').trigger('input', { noSave: true });
+-        setTimeout(() => createEntryInputAutocomplete(groupInput, getInclusionGroupCallback(data), { allowMultiple: true }), 1);
++        createEntryInputAutocomplete(groupInput, getInclusionGroupCallback(data), { allowMultiple: true });
+
+         // Inclusion priority
+         const groupOverrideInput = editTemplate.find('input[name="groupOverride"]');
+@@ -3744,7 +3722,7 @@
+             !noSave && await saveWorldInfo(name, data);
+         });
+         automationIdInput.val(entry.automationId ?? '').trigger('input', { noSave: true });
+-        setTimeout(() => createEntryInputAutocomplete(automationIdInput, getAutomationIdCallback(data)), 1);
++        createEntryInputAutocomplete(automationIdInput, getAutomationIdCallback(data));
+
+         // Generation Type Triggers
+         const generationTypeTriggers = editTemplate.find('select[name="triggers"]');
+@@ -3910,22 +3888,22 @@
+         }
+     };
+
+-    $(input).autocomplete({
+-        minLength: 0,
+-        source: function (request, response) {
+-            if (!allowMultiple) {
+-                callback(input, request, response);
+-            } else {
+-                const term = request.term.split(/,\s*/).pop();
+-                request.term = term;
+-                callback(input, request, response);
+-            }
+-        },
+-        select: handleSelect,
+-    });
+-
+-    $(input).on('focus click', function () {
+-        $(input).autocomplete('search', allowMultiple ? String($(input).val()).split(/,\s*/).pop() : String($(input).val()));
++    input.on('remove', () => visibleEntryAutocompletes.delete(input));
++    input.on('focus click', function () {
++        if (!input.autocomplete('instance')) {
++            input.autocomplete({
++                minLength: 0,
++                source(request, response) {
++                    if (allowMultiple) request.term = request.term.split(/,\s*/).pop();
++                    callback(input, request, response);
++                },
++                select: handleSelect,
++                open: () => visibleEntryAutocompletes.add(input),
++                close: () => visibleEntryAutocompletes.delete(input),
++            });
++        }
++        const value = String(input.val());
++        input.autocomplete('search', allowMultiple ? value.split(/,\s*/).pop() : value);
+     });
+ }
+
+@@ -6092,6 +6070,7 @@
+     });
+
+     $('#world_editor_select').on('change', async () => {
++        cancelDebounce(debouncedWorldInfoSearch);
+         $('#world_info_search').val('');
+         worldInfoFilter.setFilterData(FILTER_TYPES.WORLD_INFO_SEARCH, '', true);
+         const selectedIndex = String($('#world_editor_select').find(':selected').val());
+@@ -6278,12 +6257,6 @@
+     }
+
+     $('#WorldInfo').on('scroll', () => {
+-        $('.world_entry input[name="group"], .world_entry input[name="automationId"]').each((_, el) => {
+-            const instance = $(el).autocomplete('instance');
+-
+-            if (instance !== undefined) {
+-                $(el).autocomplete('close');
+-            }
+-        });
++        for (const input of visibleEntryAutocompletes) input.autocomplete('close');
+     });
+ }

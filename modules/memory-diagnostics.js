@@ -2,6 +2,15 @@ const NODE_LIMIT = 10000;
 const FRAME_LIMIT = 8;
 const DATA_LIMIT = 10000;
 const MESSAGE_LIMIT = 100;
+const REGION_LIMIT = 2000;
+const POPUP_ROOT_LIMIT = 8;
+const REGION_ROOTS = {
+    chat: 'chat',
+    worldInfo: 'WorldInfo',
+    presets: 'completion_prompt_manager',
+    regex: 'regex_container',
+    extensions: 'rm_extensions_block',
+};
 
 function positiveNumber(value) {
     return Number.isFinite(value) && value >= 0 ? Math.round(value) : null;
@@ -55,6 +64,37 @@ function readDocument(documentRef, limit = NODE_LIMIT, frames = []) {
     } catch { return null; }
 }
 
+function readRegion(documentRef, roots) {
+    const result = { elements: 0, iframes: 0, svg: 0, capped: false };
+    for (const root of roots) {
+        if (!root) continue;
+        const walk = documentRef.createTreeWalker(root, 1);
+        for (let node = root; node; node = walk.nextNode()) {
+            result.elements++;
+            if (node.nodeName === 'IFRAME') result.iframes++;
+            else if (node.localName === 'svg') result.svg++;
+            if (result.elements >= REGION_LIMIT) {
+                result.capped = true;
+                return result;
+            }
+        }
+    }
+    return result;
+}
+
+function readRegions(documentRef) {
+    if (!documentRef?.getElementById || !documentRef?.createTreeWalker) return null;
+    const regions = {};
+    for (const [name, id] of Object.entries(REGION_ROOTS)) {
+        const root = documentRef.getElementById(id);
+        regions[name] = root ? readRegion(documentRef, [root]) : null;
+    }
+    const dialogs = documentRef.querySelectorAll('dialog[open]');
+    const roots = Array.from({ length: Math.min(dialogs.length, POPUP_ROOT_LIMIT) }, (_, index) => dialogs[index]);
+    regions.openDialogs = { ...readRegion(documentRef, roots), roots: dialogs.length, rootsCapped: dialogs.length > POPUP_ROOT_LIMIT };
+    return regions;
+}
+
 function readDataShape(value) {
     const seen = new WeakSet();
     const pending = [value];
@@ -96,11 +136,11 @@ export function collectMemoryDiagnostics({
     let data;
     try { data = readDataShape(sample); } catch { data = null; }
     return {
-        heap: readHeap(performanceRef), dom, embedded,
+        heap: readHeap(performanceRef), dom, embedded, regions: readRegions(documentRef),
         coverage: {
             scope: 'live-documents-and-recent-chat-sample', detachedNodes: 'not-measured',
             tabTotalMemory: 'not-measured', cpu: 'not-measured', temperature: 'not-measured',
-            limits: { domElements: NODE_LIMIT, frameDocuments: FRAME_LIMIT, frameElements: 2000, chatMessages: MESSAGE_LIMIT, chatProperties: DATA_LIMIT },
+            limits: { domElements: NODE_LIMIT, frameDocuments: FRAME_LIMIT, frameElements: 2000, regionElements: REGION_LIMIT, popupRoots: POPUP_ROOT_LIMIT, chatMessages: MESSAGE_LIMIT, chatProperties: DATA_LIMIT },
         },
         chat: { messages: Array.isArray(chat) ? chat.length : 0, sampledMessages: sample.length, data },
         characterCount: Array.isArray(characters) ? characters.length : null,

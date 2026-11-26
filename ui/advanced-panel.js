@@ -12,7 +12,7 @@ function row(label, key) {
     return element;
 }
 
-export function createAdvancedPanel({ onCopyDiagnostics = null } = {}) {
+export function createAdvancedPanel({ onCopyDiagnostics = null, performanceDiagnostics } = {}) {
     const details = document.createElement('details');
     details.className = 'cla-advanced';
     const summary = document.createElement('summary');
@@ -30,6 +30,22 @@ export function createAdvancedPanel({ onCopyDiagnostics = null } = {}) {
         row('启动诊断', 'startupDiagnostic'),
         row('交互诊断', 'interactionDiagnostic'),
     );
+    if (performanceDiagnostics) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'menu_button cla-copy-diagnostics';
+        button.textContent = '记录 30 秒性能数据';
+        button.addEventListener('click', () => {
+            if (performanceDiagnostics.active) {
+                performanceDiagnostics.stop();
+            } else if (performanceDiagnostics.start(() => {
+                button.textContent = '重新记录 30 秒性能数据';
+            })) {
+                button.textContent = '结束性能记录';
+            }
+        });
+        body.append(button);
+    }
     if (typeof onCopyDiagnostics === 'function') {
         const button = document.createElement('button');
         button.type = 'button';

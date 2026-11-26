@@ -2,6 +2,7 @@ import { preservePresetAnchor } from './preset-scroll-anchor.js';
 
 const DURATION = 180;
 const LIMIT = 16;
+const MEASURE_LIMIT = 80;
 const SIZE = ['height', 'margin-top', 'margin-bottom', 'padding-top', 'padding-bottom', 'border-top-width', 'border-bottom-width'];
 const VALUES = [...SIZE, 'opacity'];
 const OVERRIDES = ['display', 'box-sizing', 'min-height', 'max-height', 'overflow-x', 'overflow-y', 'pointer-events', 'flex-grow', 'flex-shrink', 'flex-basis',
@@ -31,7 +32,9 @@ export class PresetFoldMotion {
     }
 
     update(anchor, update) {
-        if (this.win.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        if (this.list.childElementCount > MEASURE_LIMIT
+            || this.list.ownerDocument.body.classList.contains('reduced-motion')
+            || this.win.matchMedia('(prefers-reduced-motion: reduce)').matches) {
             this.finish(); return preservePresetAnchor(anchor, update);
         }
         const before = this.snapshot();
