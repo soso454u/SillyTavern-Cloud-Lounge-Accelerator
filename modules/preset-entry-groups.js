@@ -471,6 +471,7 @@ export class PresetEntryGroups {
                     alive.add(node.id);
                     const record = this.drawFolder(node);
                     if (record.element.dataset.claPresetTone !== nextTone) record.element.dataset.claPresetTone = nextTone;
+                    if (record.end.dataset.claPresetTone !== nextTone) record.end.dataset.claPresetTone = nextTone;
                     record.ancestors = ancestors;
                     record.folded = query ? (this.searchFolders.get(node.id) ?? false) : !expanded.has(node.id);
                     const firstEntry = node.id && rows.get(JSON.parse(node.id)[0]);

@@ -859,14 +859,19 @@ body .cla-preset-folder-menu button.menu_button[data-cla-preset-action] {
     --cla-preset-row-tint: 30%;
 }
 
+#completion_prompt_manager_list.cla-preset-grouped-list > [data-cla-preset-tone] {
+    --cla-preset-row-fill: color-mix(in srgb, var(--cla-preset-row-color) var(--cla-preset-row-tint), transparent);
+}
+
 html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-grouped-list
     > li[data-pm-identifier][data-cla-preset-tone] {
     margin-block: 3px !important;
+    box-shadow: 0 0 0 3px var(--cla-preset-row-fill) !important;
 }
 
 html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-grouped-list
     > li[data-pm-identifier][data-cla-preset-tone]:not(.cla-preset-entry-selected) {
-    background-color: color-mix(in srgb, var(--cla-preset-row-color) var(--cla-preset-row-tint), transparent) !important;
+    background-color: var(--cla-preset-row-fill) !important;
     /* The tint also shows through a theme's opaque background gradient. */
     background-blend-mode: multiply;
 }
@@ -895,6 +900,10 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
     box-shadow: none !important;
     background: none !important;
     pointer-events: none;
+}
+#completion_prompt_manager #completion_prompt_manager_list.cla-preset-grouped-list
+    > .cla-preset-folder-end[data-cla-preset-tone] {
+    background: var(--cla-preset-row-fill) !important;
 }
 #completion_prompt_manager #completion_prompt_manager_list > .cla-preset-folder-end[hidden] { display: none !important; }
 #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
