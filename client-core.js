@@ -1,4 +1,4 @@
-export const CLIENT_VERSION = '2.2.6';
+export const CLIENT_VERSION = '2.2.7';
 export const CHAT_PAGE_SIZE = 5;
 export const CHAT_PAGE_SIZE_MIN = 1;
 export const CHAT_PAGE_SIZE_MAX = 50;

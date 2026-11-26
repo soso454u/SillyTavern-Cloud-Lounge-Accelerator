@@ -866,6 +866,10 @@ body .cla-preset-folder-menu button.menu_button[data-cla-preset-action] {
 html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-grouped-list
     > li[data-pm-identifier][data-cla-preset-tone] {
     margin-block: 3px !important;
+}
+
+html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-grouped-list
+    > li[data-pm-identifier][data-cla-preset-tone]:not(:has(+ .cla-preset-folder-end)) {
     box-shadow: 0 0 0 3px var(--cla-preset-row-fill) !important;
 }
 
@@ -891,19 +895,15 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
     display: block !important;
     box-sizing: border-box;
     width: 100%;
-    flex: 0 0 12px;
-    min-height: 12px !important;
-    height: 12px !important;
+    flex: 0 0 20px;
+    min-height: 20px !important;
+    height: 20px !important;
     margin: 0 !important;
     padding: 0 !important;
     border: 0 !important;
     box-shadow: none !important;
     background: none !important;
     pointer-events: none;
-}
-#completion_prompt_manager #completion_prompt_manager_list.cla-preset-grouped-list
-    > .cla-preset-folder-end[data-cla-preset-tone] {
-    background: var(--cla-preset-row-fill) !important;
 }
 #completion_prompt_manager #completion_prompt_manager_list > .cla-preset-folder-end[hidden] { display: none !important; }
 #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
