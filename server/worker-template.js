@@ -1,4 +1,4 @@
-export const ACCELERATOR_VERSION = '2.2.3';
+export const ACCELERATOR_VERSION = '2.2.4';
 export const CACHE_PREFIX = 'cloud-lounge-static-v2-';
 export const LEGACY_CACHE_PREFIX = 'cloud-lounge-static-';
 

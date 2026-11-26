@@ -10,12 +10,39 @@ const flatten = nodes => nodes.flatMap(node => node.entry ? [node.entry] : flatt
 
 test('nested pairs leave every native row in order, including rows outside groups', () => {
     const prompts = entries('身份1', '身份2', '『 写作规则', '正文', '====↓[内层]↓====', '内文', '====↑[内层]↑====', '写作规则 』', '收尾');
-    const layout = folderLayout(prompts);
+    const layout = folderLayout(prompts, [], {}, [], { automaticSubgroups: true });
     assert.deepEqual(layout.map(node => node.entry?.name ?? node.name), ['身份1', '身份2', '写作规则', '收尾']);
     assert.equal(layout[2].children[2].name, '内层');
     assert.deepEqual(flatten(layout), prompts);
 });
 
+test('automatic children stay flat by default and explicitly created children remain visible', () => {
+    const prompts = entries('↓外层↓', '甲', '↓内层↓', '乙', '↑内层↑', '丙', '丁', '↑外层↑', '↓相邻↓', '戊', '↑相邻↑');
+    const manual = [{ start: '5', end: '6', name: '我的子分类' }];
+    const [outer, neighbour] = folderLayout(prompts, manual);
+    assert.deepEqual(outer.children.map(node => node.name ?? node.entry.name),
+        ['↓外层↓', '甲', '↓内层↓', '乙', '↑内层↑', '我的子分类', '↑外层↑']);
+    assert.equal(neighbour.name, '相邻');
+    assert.deepEqual(flatten([outer, neighbour]), prompts);
+    const [enabled] = folderLayout(prompts, manual, {}, [], { automaticSubgroups: true });
+    assert.deepEqual(enabled.children.filter(node => node.children).map(node => node.name), ['内层', '我的子分类']);
+});
+
+test('the auto-subgroup preference is preset-scoped, with existing metadata read in place', () => {
+    const a = { key: 'a', presetName: 'A' };
+    const b = { key: 'b', presetName: 'B' };
+    const extensionSettings = {};
+    const groups = new PresetEntryGroups({ extensionSettings });
+    const parent = JSON.stringify(['1', '6']);
+    const manual = [{ start: '2', end: '3', name: '已保存' }];
+    groups.saveMeta(a, { manual, names: {}, hidden: [] }, { expand: parent });
+    assert.equal(groups.meta(a).automaticSubgroups, false);
+    groups.saveMeta(a, { ...groups.meta(a), automaticSubgroups: true });
+    assert.equal(groups.meta(b).automaticSubgroups, false);
+    assert.equal(groups.meta(a).automaticSubgroups, true);
+    assert.deepEqual(groups.meta(a).manual, manual);
+    assert.deepEqual([...groups.expanded(a)], [parent]);
+});
 test('unpaired, mismatched and crossed boundaries do not create folders', () => {
     const prompts = entries('=== 基调等 ===', '『 写作规则', '====↓[A]↓====', '写作规则 』',
         '====↑[A]↑====', '↓没有结尾↓', '正文', '↑不同名↑', '末尾');

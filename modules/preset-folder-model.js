@@ -16,22 +16,23 @@ export function resolveSections(entries, manual = []) {
     return removeCrossed(auto);
 }
 
-export function folderLayout(entries, manual = [], names = {}, hidden = []) {
+export function folderLayout(entries, manual = [], names = {}, hidden = [], { automaticSubgroups = false } = {}) {
     const skip = new Set(hidden);
     const roots = [];
     const open = [];
     const starts = new Map();
     for (const section of resolveSections(entries, manual)) {
-        if (skip.has(JSON.stringify([entries[section.start].identifier, entries[section.end].identifier]))) continue;
+        if (!section.manual && skip.has(JSON.stringify([entries[section.start].identifier, entries[section.end].identifier]))) continue;
         if (!starts.has(section.start)) starts.set(section.start, []);
         starts.get(section.start).push(section);
     }
     for (const list of starts.values()) list.sort((a, b) => b.end - a.end);
     for (const [index, entry] of entries.entries()) {
         for (const section of starts.get(index) || []) {
+            if (!automaticSubgroups && !section.manual && open.length) continue;
             const id = JSON.stringify([entry.identifier, entries[section.end].identifier]);
             const original = section.name;
-            const folder = { id, name: names[id] || original, original, manual: !!section.manual, rank: section.rank ?? 2, total: section.end - index + 1, children: [] };
+            const folder = { id, name: section.manual ? original : (names[id] || original), original, manual: !!section.manual, rank: section.rank ?? 2, total: section.end - index + 1, children: [] };
             (open.at(-1)?.folder.children ?? roots).push(folder);
             open.push({ end: section.end, folder });
         }

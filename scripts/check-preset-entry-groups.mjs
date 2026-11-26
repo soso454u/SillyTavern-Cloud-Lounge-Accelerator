@@ -109,6 +109,9 @@ try {
         await checkLayout();
         await checkDisabled();
         await act(settings.locator('summary'));
+        const automaticSubgroups = settings.getByRole('checkbox', { name: '自动识别子分类' });
+        assert.equal(await automaticSubgroups.isChecked(), false);
+        await act(automaticSubgroups);
         await act(settings.getByRole('button', { name: '全部展开', exact: true }));
         assert.equal(await page.locator('.cla-preset-folder.collapsed').count(), 0);
         assert.deepEqual(await rowOrder(), nativeOrder);

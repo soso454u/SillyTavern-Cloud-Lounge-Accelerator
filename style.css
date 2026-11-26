@@ -811,13 +811,68 @@ body .cla-preset-entry-menu button.menu_button[data-cla-preset-action] {
 }
 
 .cla-preset-folder-tools { margin: 4px 0; }
+.cla-preset-auto-subgroups { width: fit-content; }
 .cla-preset-group-feedback { color: var(--SmartThemeQuoteColor, #f99); }
+
+body .cla-preset-folder-menu button.menu_button[data-cla-preset-action] {
+    color: var(--SmartThemeBodyColor, inherit) !important;
+    -webkit-text-fill-color: currentColor !important;
+}
+
+.cla-preset-subgroup-fields,
+.cla-preset-subgroup-fields > label {
+    display: grid;
+    gap: 0.3em;
+    min-inline-size: 0;
+    text-align: start;
+}
+
+.cla-preset-subgroup-fields {
+    gap: 0.65em;
+    inline-size: min(24rem, 100%);
+    margin-inline: auto;
+}
+
+.cla-preset-subgroup-fields :is(select, input) {
+    box-sizing: border-box;
+    inline-size: 100%;
+    min-inline-size: 0;
+    margin: 0;
+}
 
 #completion_prompt_manager_list.cla-preset-grouped-list {
     display: flex !important;
     flex-direction: column !important;
     min-height: 0;
-    --cla-preset-folder-border: color-mix(in srgb, var(--SmartThemeBodyColor, currentColor) 70%, var(--SmartThemeQuoteColor, currentColor));
+    --cla-preset-group-color: var(--SmartThemeQuoteColor, var(--SmartThemeBodyColor, currentColor));
+    --cla-preset-group-base: var(--SmartThemeBlurTintColor, transparent);
+}
+
+#completion_prompt_manager_list.cla-preset-grouped-list > [data-cla-preset-tone="soft"] {
+    --cla-preset-folder-tint: 23%;
+    --cla-preset-row-tint: 10%;
+    --cla-preset-enabled-tint: 14%;
+}
+
+#completion_prompt_manager_list.cla-preset-grouped-list > [data-cla-preset-tone="strong"] {
+    --cla-preset-folder-tint: 34%;
+    --cla-preset-row-tint: 21%;
+    --cla-preset-enabled-tint: 25%;
+}
+
+html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-grouped-list
+    > li[data-pm-identifier][data-cla-preset-tone] {
+    margin-block: 3px !important;
+}
+
+html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-grouped-list
+    > li[data-pm-identifier][data-cla-preset-tone]:not(.cla-preset-entry-selected) {
+    background-color: color-mix(in srgb, var(--cla-preset-group-color) var(--cla-preset-enabled-tint), var(--cla-preset-group-base)) !important;
+}
+
+html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-grouped-list
+    > li.completion_prompt_manager_prompt_disabled[data-pm-identifier][data-cla-preset-tone]:not(.cla-preset-entry-selected) {
+    background-color: color-mix(in srgb, var(--cla-preset-group-color) var(--cla-preset-row-tint), var(--cla-preset-group-base)) !important;
 }
 
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder {
@@ -835,13 +890,13 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
     display: block !important;
     box-sizing: border-box;
     width: 100%;
-    min-height: 7px;
-    margin: 0 0 12px !important;
+    flex: 0 0 12px;
+    min-height: 12px !important;
+    height: 12px !important;
+    margin: 0 !important;
     padding: 0 !important;
     border: 0 !important;
-    border-block-end: 2px solid var(--cla-preset-folder-border) !important;
-    border-inline-start: 2px solid var(--cla-preset-folder-border) !important;
-    border-radius: 0 0 7px 7px;
+    box-shadow: none !important;
     background: none !important;
     pointer-events: none;
 }
@@ -867,11 +922,10 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
     min-width: 0;
     min-height: 36px;
     padding: 0 4px;
-    margin-block: 12px 5px;
-    border: 1px solid var(--cla-preset-folder-border);
-    border-block-start-width: 3px;
-    border-radius: 0.38rem 0.38rem 0.22rem 0.22rem;
-    background: color-mix(in srgb, var(--SmartThemeBodyColor, currentColor) 14%, var(--SmartThemeBlurTintColor, transparent));
+    margin-block: 10px 5px;
+    border: 0;
+    border-radius: 0.45rem;
+    background: color-mix(in srgb, var(--cla-preset-group-color) var(--cla-preset-folder-tint), var(--cla-preset-group-base));
     color: var(--SmartThemeBodyColor, inherit);
     box-sizing: border-box;
 }
@@ -913,20 +967,9 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
 
 .cla-preset-fold-count {
     flex: 0 0 auto;
-    padding: 0.1em 0.45em;
-    border-radius: 1em;
-    background: color-mix(in srgb, currentColor 14%, transparent);
     font-variant-numeric: tabular-nums;
+    opacity: 0.72;
 }
-
-.cla-preset-fold-chevron {
-    flex: 0 0 auto;
-    margin-inline-start: auto;
-    padding-inline: 2px;
-    font-size: 0.8em;
-}
-
-.cla-preset-fold-toggle[aria-expanded="true"] .cla-preset-fold-chevron { rotate: 90deg; }
 
 @media (pointer: coarse) {
     #completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header { min-height: 44px !important; }
@@ -1228,25 +1271,45 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
     touch-action: manipulation;
 }
 
+html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-grouped-list
+    > li[data-pm-identifier]:has(.cla-preset-entry-more) {
+    --cla-pm-controls: calc(var(--cla-pm-action) + var(--cla-pm-control-gap) + var(--cla-pm-toggle));
+}
+
+html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-grouped-list
+    .prompt_manager_prompt_controls:has(> .cla-preset-entry-more) {
+    grid-template-columns: var(--cla-pm-action) var(--cla-pm-toggle) !important;
+}
+
+html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-grouped-list
+    .prompt_manager_prompt_controls:has(> .cla-preset-entry-more) > :is(.prompt-manager-edit-action, .prompt-manager-detach-action) {
+    display: none !important;
+}
+
+#completion_prompt_manager_list.cla-preset-grouped-list
+    .prompt_manager_prompt_controls:has(> .cla-preset-entry-more) > .prompt-manager-toggle-action {
+    grid-column: 2;
+}
+
 @container (max-width: 23rem) {
-    html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
+    html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable:not(.cla-preset-grouped-list)
         > li[data-pm-identifier] > .completion_prompt_manager_prompt_name {
         grid-area: 1 / 2 / 2 / 5 !important;
         padding-block: 3px;
     }
 
-    html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
+    html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable:not(.cla-preset-grouped-list)
         > li[data-pm-identifier] > span:has(> .prompt_manager_prompt_controls) {
         grid-area: 2 / 3 / 3 / 4 !important;
     }
 
-    #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable
+    #completion_prompt_manager #completion_prompt_manager_list.cla-preset-readable:not(.cla-preset-grouped-list)
         > li[data-pm-identifier] > .prompt_manager_prompt_tokens {
         grid-area: 2 / 4 / 3 / 5 !important;
     }
 }
 
-/* Folder header icon buttons: rename, fold children, group toggle, delete manual group */
+/* Keep all secondary folder actions behind one menu. */
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header > button.cla-preset-fold-icon {
     display: inline-flex !important;
     flex: 0 0 30px !important;
@@ -1262,12 +1325,7 @@ html body #completion_prompt_manager #completion_prompt_manager_list.cla-preset-
     #completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header > button.cla-preset-fold-icon { flex-basis: 38px !important; width: 38px !important; }
 }
 
-/* Open sections use the same boundary color as their end marker. */
 .cla-preset-folder-arrow { flex: 0 0 18px; text-align: center; }
-#completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder:not(.collapsed) > .cla-preset-fold-header {
-    border-inline-start-width: 3px;
-    background: color-mix(in srgb, var(--SmartThemeQuoteColor, currentColor) 22%, var(--SmartThemeBlurTintColor, transparent));
-}
 
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-fold-header { touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 #completion_prompt_manager #completion_prompt_manager_list .cla-preset-folder-drag-handle {

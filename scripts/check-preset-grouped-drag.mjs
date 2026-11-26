@@ -46,6 +46,7 @@ actions.manager = {listElement:list,activeCharacter:{id:1},serviceSettings:{prom
     async saveServiceSettings(){ window.saves++; if(window.failSave) throw Error('offline'); if(window.delaySave) await new Promise((resolve,reject)=>pendingSaves.push({resolve,reject})); },
     render(){ window.renders++; draw(); }};
 actions.groups.getPresetName = () => 'drag fixture';
+document.addEventListener('click', actions.onClick, true);
 window.order = () => actions.context().order.map(p=>p.identifier);
 window.draw = () => {
     if($(list).sortable('instance')) $(list).sortable('destroy');
@@ -133,6 +134,11 @@ try {
         if(mobile) await summary.tap(); else await summary.click();
         assert.equal(await settings.evaluate(node=>node.open),true);
         assert.equal(await settings.getByRole('button',{name:'全部展开',exact:true}).isVisible(),true);
+        const automaticSubgroups = settings.getByRole('checkbox',{name:'自动识别子分类'});
+        assert.equal(await automaticSubgroups.isChecked(),false);
+        assert.equal(await folder('Inner').count(),0);
+        if (mobile) await automaticSubgroups.tap(); else await automaticSubgroups.click();
+        assert.equal(await folder('Inner').count(),1);
         await page.screenshot({path:`/tmp/cla-toolbar-${version}-${mobile?'touch':'desktop'}-open.png`,clip:{x:0,y:0,width:mobile?390:650,height:650}});
         if(mobile) await summary.tap(); else {await summary.focus();await page.keyboard.press('Enter');}
         assert.equal(await settings.evaluate(node=>node.open),false);
@@ -149,7 +155,8 @@ try {
             // Also reject a late synthetic click from a touch compatibility layer.
             await target.dispatchEvent('click');
             if (mobile) assert.ok(await page.locator('#scroll').evaluate(node => node.scrollTop)>before, 'folder controls allow native scrolling');
-            assert.equal(await folder('Next').count(),1,'swiping × must not delete the group');
+            assert.equal(await folder('Next').count(),1);
+            assert.equal(await page.locator('.cla-preset-entry-menu').count(),0,'swiping must not open the folder menu');
             assert.equal(await folder('Next').locator('.cla-preset-fold-toggle').getAttribute('aria-expanded'),'false');
             assert.deepEqual(await page.evaluate(() => order()),initial);
             assert.equal(await page.evaluate(() => saves),0);
@@ -157,8 +164,7 @@ try {
             await page.waitForTimeout(100);
         };
         await swipe(folder('Next').locator('.cla-preset-fold-name'));
-        await swipe(folder('Next').locator('[title="删除分组（条目保留在原位）"]'));
-        await swipe(folder('Next').locator('[title="改名"]'));
+        await swipe(folder('Next').getByRole('button',{name:'Next的分类操作'}));
         // A fresh deliberate tap still toggles normally after a swipe.
         const toggle = folder('Next').locator('.cla-preset-fold-toggle');
         if (mobile) await toggle.tap(); else await toggle.click();
@@ -234,7 +240,7 @@ try {
         assert.equal(await page.evaluate(() => saves),8);
         assert.equal(await page.evaluate(() => JSON.stringify(actions.context().prompts)),data);
         assert.equal(new Set(await page.evaluate(() => order())).size,240);
-        // A visible end marker separates an expanded group from the next row.
+        // An empty spacer separates an expanded group from the next row.
         const boundary = await page.evaluate(() => {
             const g=actions.groups,context=g.context(),ids=context.order.slice(0,5).map(p=>p.identifier);
             ids.forEach((id,i)=>{context.prompts.find(p=>p.identifier===id).name='身份'+(i+1)});
@@ -247,15 +253,15 @@ try {
             const record=g.folderNodes.get(id),last=[...list.querySelectorAll('[data-pm-identifier]')].find(row=>row.dataset.pmIdentifier===ids[4]);
             document.querySelector('#scroll').scrollTop=0;window.scrollTo(0,0);
             return {collapsed,text:record.end.textContent,hidden:record.end.hidden,afterLast:last.nextElementSibling===record.end,
-                gap:record.end.nextElementSibling.getBoundingClientRect().top-record.end.getBoundingClientRect().bottom};
+                line:getComputedStyle(record.end).borderBottomWidth,
+                gap:record.end.nextElementSibling.getBoundingClientRect().top-last.getBoundingClientRect().bottom};
         });
-        assert.deepEqual({...boundary,gap:undefined},{collapsed:true,text:'',hidden:false,afterLast:true,gap:undefined});
+        assert.deepEqual({...boundary,gap:undefined},{collapsed:true,text:'',hidden:false,afterLast:true,line:'0px',gap:undefined});
         assert.ok(boundary.gap>=12,JSON.stringify(boundary));
         await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
         await page.evaluate(()=>{document.querySelector('#scroll').scrollTop=0;window.scrollTo(0,0)});
         await page.screenshot({path:`/tmp/cla-preset-${version}-boundary-${mobile?'touch':'desktop'}.png`,clip:{x:0,y:0,width:mobile?390:650,height:700}});
-        // Short folders grow through intermediate heights; throttled frame
-        // sampling also verifies native rows, anchor, and cleanup stay intact.
+        // A large preset switches directly, with the reading anchor intact.
         await page.emulateMedia({reducedMotion:'reduce'});
         const motionSetup = await page.evaluate(() => {
             const g=actions.groups,record=[...g.folderNodes.values()].find(r=>r.folder.name==='新分组');
@@ -285,8 +291,8 @@ try {
                 direct:[...list.querySelectorAll('[data-pm-identifier]')].every(node=>node.parentElement===list)};
         });
         await cdp.send('Emulation.setCPUThrottlingRate',{rate:1});
-        assert.ok(motion.count>0&&motion.count<=16,JSON.stringify(motion));
-        assert.ok(motion.heights.some(height=>height>1&&height<motion.final-1),'opening has intermediate heights');
+        assert.equal(motion.count,0,JSON.stringify(motion));
+        assert.ok(motion.heights.every(height=>height===motion.final),'large presets switch directly');
         assert.equal(motion.remaining,0);assert.equal(motion.direct,true);assert.ok(motion.drift<=2,JSON.stringify(motion));
         await page.evaluate(async () => {
             const g=actions.groups,record=window.motionFolder;
@@ -304,7 +310,7 @@ try {
         assert.deepEqual(cleanup.order,await page.evaluate(()=>motionOrder));
         assert.equal(cleanup.prompts,await page.evaluate(()=>motionPrompts));
         assert.deepEqual([cleanup.remaining,cleanup.clean,cleanup.saves,cleanup.renders],[0,true,8,0],JSON.stringify(cleanup.changed));
-        console.log(`${mobile?'Touch':'Desktop'} fold motion: ${motion.count} animated nodes, intermediate heights, anchor drift ${motion.drift.toFixed(1)}px; 4x CPU frame median ${motion.frames.slice().sort((a,b)=>a-b)[Math.floor(motion.frames.length/2)].toFixed(1)}ms; reduced motion, rapid reversals and exact style cleanup passed.`);
+        console.log(`${mobile?'Touch':'Desktop'} large preset folding: direct switch, anchor drift ${motion.drift.toFixed(1)}px; reduced motion, rapid reversals and exact style cleanup passed.`);
         assert.deepEqual(errors,[]);
         console.log(`${mobile?'Touch':'Desktop'}: native helper follows pointer; visible placeholder; immediate/rapid drops with pending saves; single/multi/folder moves preserve 240 rows; cancel, rollback and raw view passed (${await page.evaluate(() => renders)} full rerenders).`);
         await page.close();

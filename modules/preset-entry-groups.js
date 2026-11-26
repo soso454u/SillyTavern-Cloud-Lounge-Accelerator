@@ -28,12 +28,21 @@ export class PresetEntryGroups {
     meta(context) {
         const saved = this.extensionSettings[PRESET_GROUPS_KEY];
         const item = saved?.schema === PRESET_GROUPS_SCHEMA ? saved.presets?.[this.presetKey(context)] : null;
-        return { names: { ...(item?.names || {}) }, manual: [...(item?.manual || [])], hidden: [...(item?.hidden || [])] };
+        return {
+            names: { ...(item?.names || {}) }, manual: [...(item?.manual || [])], hidden: [...(item?.hidden || [])],
+            automaticSubgroups: item?.automaticSubgroups === true,
+        };
     }
-    saveMeta(context, meta) {
+    saveMeta(context, meta, { expand } = {}) {
         const previous = this.extensionSettings[PRESET_GROUPS_KEY];
         const base = previous?.schema === PRESET_GROUPS_SCHEMA ? previous : { schema: PRESET_GROUPS_SCHEMA, expandedByPreset: {} };
-        this.writeSettings({ ...base, presets: { ...(base.presets || {}), [this.presetKey(context)]: meta } });
+        const next = { ...base, presets: { ...base.presets, [this.presetKey(context)]: meta } };
+        if (expand) {
+            const expanded = this.expanded(context);
+            expanded.add(expand);
+            next.expandedByPreset = { ...base.expandedByPreset, [context.key]: [...expanded] };
+        }
+        this.writeSettings(next);
     }
     async ask(title, value) {
         if (this.host.prompt) { const result = await this.host.prompt(title, value); return typeof result === 'string' ? result : null; }
@@ -59,6 +68,44 @@ export class PresetEntryGroups {
             meta.manual.push({ start: order[0], end: order.at(-1), name: value.trim().slice(0, 60) || '新分组' });
             this.saveMeta(context, meta); this.render(); return true;
         });
+    }
+    async createSubgroup(context, folderId) {
+        const record = this.folderNodes.get(folderId);
+        if (!record || record.ids.length < 2 || !this.valid(context)) return false;
+        const fields = this.node('div', '', 'cla-preset-subgroup-fields');
+        fields.append(this.node('strong', `在「${record.folder.name}」下新建子分类`));
+        const name = this.input('子分类名称');
+        name.maxLength = 60;
+        const prompts = new Map(this.entries(context).map(entry => [entry.identifier, entry.name]));
+        const options = record.ids.map((id, index) => [id, `${index + 1}. ${prompts.get(id) || '未命名条目'}`]);
+        const start = this.select(options, '起始条目');
+        const end = this.select(options, '结束条目');
+        for (const [label, control] of [['名称', name], ['起始条目', start], ['结束条目', end]]) {
+            const field = this.node('label');
+            field.append(this.node('span', label), control);
+            fields.append(field);
+        }
+        if (!await this.host.confirm(fields, { okButton: '新建' }) || !this.valid(context)) return false;
+        const current = this.folderNodes.get(folderId);
+        if (!current) return false;
+        const positions = new Map(current.ids.map((id, index) => [id, index]));
+        const first = positions.get(start.value), last = positions.get(end.value);
+        if (first === undefined || last === undefined) throw new Error('分类范围已变化，请重新选择');
+        if (first > last) throw new Error('请选择起始条目或后续条目作为结束');
+        if (first === 0 && last === current.ids.length - 1) throw new Error('子分类范围需小于当前分类');
+        for (const id of current.subs) {
+            const child = this.folderNodes.get(id);
+            const a = positions.get(child?.ids[0]), b = positions.get(child?.ids.at(-1));
+            if (a === undefined || b === undefined || b < first || a > last) continue;
+            if (a <= first && last <= b) throw new Error(`请从「${child.folder.name}」的菜单新建子分类`);
+            if (first > a || last < b) throw new Error(`请选择「${child.folder.name}」的完整范围，或选择其范围以外的条目`);
+        }
+        const meta = this.meta(context);
+        meta.manual.push({ start: start.value, end: end.value, name: name.value.trim() || '新子分类' });
+        this.saveMeta(context, meta, { expand: folderId });
+        this.searchFolders.delete(folderId);
+        this.render();
+        return true;
     }
     removeGroup(folder) {
         const context = this.context(); if (!this.valid(context)) return;
@@ -166,6 +213,40 @@ export class PresetEntryGroups {
         const button = this.node('button', label, className); button.type = 'button';
         button.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); this.run(action); }); return button;
     }
+    handleFolderAction(action, button) {
+        const context = button.claGroupContext;
+        const record = this.folderNodes.get(button.dataset.claFolderId);
+        if (!record?.element.isConnected || record.element.hidden || !this.valid(context)) return;
+        this.run(() => {
+            if (action === 'folder-create-child') return this.createSubgroup(context, record.folder.id);
+            if (action === 'folder-rename') return this.renameFolder(record.folder);
+            if (action === 'folder-remove') return this.removeGroup(record.folder);
+            if (action === 'folder-toggle-children') {
+                const folded = record.subs.every(id => this.folderNodes.get(id)?.folded);
+                return this.setFold(context, record.subs, !folded, record.header);
+            }
+        });
+    }
+    openFolderMenu(record, context) {
+        const menu = this.node('div', '', 'cla-preset-entry-menu cla-preset-folder-menu');
+        menu.setAttribute('role', 'menu');
+        const append = (action, label, disabled = false) => {
+            const item = this.host.button(label, action);
+            item.setAttribute('role', 'menuitem');
+            item.dataset.claFolderId = record.folder.id;
+            item.claGroupContext = context;
+            item.disabled = disabled;
+            menu.append(item);
+        };
+        append('folder-create-child', '新建子分类', record.ids.length < 2);
+        if (record.subs.length) {
+            const folded = record.subs.every(id => this.folderNodes.get(id)?.folded);
+            append('folder-toggle-children', folded ? '展开全部子分类' : '折叠全部子分类');
+        }
+        append('folder-rename', '改名');
+        append('folder-remove', '删除分组');
+        this.host.showMenu(menu, record.more);
+    }
     input(label, type = 'text') { const input = this.node('input', '', 'text_pole'); input.type = type; input.placeholder = label; input.setAttribute('aria-label', label); return input; }
     select(options, label) {
         const select = this.node('select', '', 'text_pole'); select.setAttribute('aria-label', label);
@@ -206,7 +287,10 @@ export class PresetEntryGroups {
         this.statusObserver?.disconnect(); this.statusObserver = null;
         for (const node of this.folderNodes.values()) { node.element.remove(); node.end.remove(); }
         this.folderNodes.clear();
-        for (const row of this.rowMembership.keys()) row.classList.remove('cla-preset-fold-hidden');
+        for (const row of this.rowMembership.keys()) {
+            row.classList.remove('cla-preset-fold-hidden');
+            delete row.dataset.claPresetTone;
+        }
         this.rowMembership.clear();
         for (const [row, styles] of this.rowStyles) for (const { property, value, priority } of styles) {
             if (value) row.style.setProperty(property, value, priority); else row.style.removeProperty(property);
@@ -246,7 +330,7 @@ export class PresetEntryGroups {
             this.updateFolds();
         });
     }
-    renderToolbar(list, context) {
+    renderToolbar(list, context, autoSubgroups) {
         if (!this.root?.isConnected || this.toolbarKey !== context.key) {
             this.root?.remove();
             this.toolbarKey = context.key;
@@ -275,6 +359,21 @@ export class PresetEntryGroups {
             summary.append(this.node('span', '折叠操作', 'cla-preset-settings-label'), chevron); settings.append(summary);
             views.append(this.groupViewButton, this.rawViewButton);
             const tools = this.node('div', '', 'cla-preset-group-tools cla-preset-folder-tools');
+            const automatic = this.node('label', '', 'cla-preset-group-tools cla-preset-auto-subgroups');
+            this.automaticSubgroups = this.node('input');
+            this.automaticSubgroups.type = 'checkbox';
+            this.automaticSubgroups.addEventListener('change', () => {
+                const ctx = this.context();
+                if (!currentScope() || !this.valid(ctx)) return;
+                const meta = this.meta(ctx);
+                const enabled = this.automaticSubgroups.checked;
+                this.run(() => {
+                    this.saveMeta(ctx, { ...meta, automaticSubgroups: enabled });
+                    this.render();
+                });
+                this.automaticSubgroups.checked = this.meta(ctx).automaticSubgroups;
+            });
+            automatic.append(this.automaticSubgroups, this.node('span', '自动识别子分类'));
             const toggleAll = folded => {
                 if (currentScope()) this.setFold(this.context(), [...this.folderNodes.keys()], folded);
             };
@@ -284,12 +383,13 @@ export class PresetEntryGroups {
                 const meta = this.meta(ctx); meta.hidden = []; this.saveMeta(ctx, meta); this.render();
             }));
             this.feedback = this.node('small', '', 'cla-preset-group-feedback'); this.feedback.setAttribute('role', 'status');
-            settings.append(bar, views, tools); this.root.append(settings, this.feedback);
+            settings.append(bar, views, automatic, tools); this.root.append(settings, this.feedback);
         }
         const toolbarAnchor = list.parentElement?.querySelector('[class$="prompt_manager_header"]') || list;
         if (this.root.parentElement !== toolbarAnchor.parentElement || this.root.nextElementSibling !== toolbarAnchor) toolbarAnchor.before(this.root);
         if (this.search.value !== this.query) this.search.value = this.query;
         this.statusFilter.value = this.filter;
+        this.automaticSubgroups.checked = autoSubgroups;
         this.groupViewButton.setAttribute('aria-pressed', String(!this.rawOrder)); this.rawViewButton.setAttribute('aria-pressed', String(this.rawOrder));
     }
     render() {
@@ -319,7 +419,8 @@ export class PresetEntryGroups {
             this.rowMembership.clear();
         }
         const entries = this.entries(context);
-        this.renderToolbar(list, context);
+        const meta = this.meta(context);
+        this.renderToolbar(list, context, meta.automaticSubgroups);
         list.classList.add('cla-preset-readable');
         const rows = new Map([...list.querySelectorAll('[data-pm-identifier]')].map(row => [row.dataset.pmIdentifier, row]));
         const known = new Set(entries.map(prompt => prompt.identifier));
@@ -341,18 +442,21 @@ export class PresetEntryGroups {
             }
         } else {
             list.classList.add('cla-preset-grouped-list');
-            const meta = this.meta(context);
-            const layout = [...folderLayout(entries, meta.manual, meta.names, meta.hidden), ...displayEntries.slice(entries.length).map(entry => ({ entry }))];
+            const layout = [...folderLayout(entries, meta.manual, meta.names, meta.hidden, meta), ...displayEntries.slice(entries.length).map(entry => ({ entry }))];
             const alive = new Set();
+            const endAnchors = new Set();
             const expanded = this.expanded(context);
             this.rowMembership.clear();
-            const draw = (nodes, ancestors = [], groupNames = '') => {
+            const draw = (nodes, ancestors = [], groupNames = '', tone = '') => {
                 let matches = false;
+                let nextTone = tone === 'soft' ? 'strong' : 'soft';
                 for (const node of nodes) {
                     if (node.entry) {
                         const row = rows.get(node.entry.identifier);
                         if (!row) continue;
                         this.rowMembership.set(row, ancestors);
+                        if (tone && row.dataset.claPresetTone !== tone) row.dataset.claPresetTone = tone;
+                        else if (!tone) delete row.dataset.claPresetTone;
                         if (this.rowStyles.has(row)) {
                             for (const item of this.rowStyles.get(row)) {
                                 if (item.value) row.style.setProperty(item.property, item.value, item.priority);
@@ -366,6 +470,7 @@ export class PresetEntryGroups {
                     }
                     alive.add(node.id);
                     const record = this.drawFolder(node);
+                    if (record.element.dataset.claPresetTone !== nextTone) record.element.dataset.claPresetTone = nextTone;
                     record.ancestors = ancestors;
                     record.folded = query ? (this.searchFolders.get(node.id) ?? false) : !expanded.has(node.id);
                     const firstEntry = node.id && rows.get(JSON.parse(node.id)[0]);
@@ -374,8 +479,11 @@ export class PresetEntryGroups {
                     const walk = list => { for (const child of list) { if (child.entry) ids.push(child.entry.identifier); else { subs.push(child.id); walk(child.children); } } };
                     walk(node.children); record.ids = ids; record.subs = subs; record.folder = node;
                     const lastEntry = rows.get(ids.at(-1));
+                    record.hasSpacer = lastEntry && !endAnchors.has(lastEntry);
+                    if (lastEntry) endAnchors.add(lastEntry);
                     if (lastEntry && lastEntry.nextElementSibling !== record.end) lastEntry.after(record.end);
-                    const childMatches = draw(node.children, [...ancestors, node.id], `${groupNames} ${node.name}`);
+                    const childMatches = draw(node.children, [...ancestors, node.id], `${groupNames} ${node.name}`, nextTone);
+                    nextTone = nextTone === 'soft' ? 'strong' : 'soft';
                     record.filtered = filtering && !childMatches;
                     if (childMatches) matches = true;
                 }
@@ -402,13 +510,12 @@ export class PresetEntryGroups {
         const ancestorFolded = ids => ids.some(id => this.folderNodes.get(id)?.folded);
         for (const record of this.folderNodes.values()) {
             record.element.hidden = record.filtered || ancestorFolded(record.ancestors);
-            record.end.hidden = record.element.hidden || record.folded;
+            record.end.hidden = record.element.hidden || record.folded || !record.hasSpacer;
             // Themes may force every native li to display even with [hidden].
             record.end.style.setProperty('display', record.end.hidden ? 'none' : 'block', 'important');
             record.element.classList.toggle('collapsed', record.folded);
             record.button.setAttribute('aria-expanded', String(!record.folded));
             record.arrow.className = `cla-preset-folder-arrow fa-solid ${record.folded ? 'fa-folder' : 'fa-folder-open'}`;
-            record.subFold.hidden = !record.subs?.length;
         }
         for (const [row, ancestors] of this.rowMembership) {
             row.classList.toggle('cla-preset-fold-hidden', ancestorFolded(ancestors));
@@ -419,29 +526,34 @@ export class PresetEntryGroups {
         if (!record) {
             const element = this.node('li', '', 'cla-preset-folder'); element.dataset.claPresetGroup = folder.id;
             const end = this.node('li', '', 'cla-preset-folder-end'); end.dataset.claPresetEnd = folder.id;
-            end.setAttribute('role', 'separator');
+            end.setAttribute('aria-hidden', 'true');
             const header = this.node('div', '', 'cla-preset-fold-header'); header.dataset.claPresetGroup = folder.id;
             const button = this.button('', () => this.setFold(this.context(), [folder.id], !element.classList.contains('collapsed'), header), 'cla-preset-fold-toggle');
             const dragHandle = this.node('span', '', 'cla-preset-folder-drag-handle'); dragHandle.setAttribute('aria-hidden', 'true');
             dragHandle.title = '按住文件夹图标拖动分组';
             const arrow = this.node('i', '', 'cla-preset-folder-arrow'); dragHandle.append(arrow);
             const name = this.node('span', '', 'cla-preset-fold-name'), count = this.node('small', '', 'cla-preset-fold-count');
-            const chevron = this.node('i', '', 'cla-preset-fold-chevron fa-solid fa-chevron-right');
-            chevron.setAttribute('aria-hidden', 'true');
-            button.append(name, count, chevron);
-            const icon = (cls, title, action) => { const b = this.button('', action, 'cla-preset-fold-icon'); b.append(b.glyph = this.node('i', '', `fa-solid ${cls}`)); b.glyph.setAttribute('aria-hidden', 'true'); b.title = title; b.setAttribute('aria-label', title); return b; };
-            const rename = icon('fa-pen', '改名', () => this.renameFolder(record.folder));
-            const subFold = icon('fa-angles-up', '折叠/展开全部子分组', () => {
-                const subs = record.subs || []; const allFolded = subs.every(id => this.folderNodes.get(id)?.folded);
-                this.setFold(this.context(), subs, !allFolded, header);
-            });
-            const remove = icon('fa-xmark', '删除分组（条目保留在原位）', () => this.removeGroup(record.folder));
-            header.append(dragHandle, button, rename, subFold, remove); element.append(header);
-            record = { element, end, header, button, arrow, name, count, subFold, remove }; this.folderNodes.set(folder.id, record);
+            button.append(name, count);
+            const more = this.button('', () => {
+                if (this.host.busy) return;
+                const context = this.context();
+                const wasOpen = this.host.menuButton === more;
+                this.host.closeMenu();
+                if (!wasOpen && this.valid(context)) this.openFolderMenu(record, context);
+            }, 'cla-preset-fold-icon');
+            more.dataset.claPresetAction = 'folder-menu';
+            more.title = '分类操作';
+            more.setAttribute('aria-haspopup', 'menu');
+            more.setAttribute('aria-expanded', 'false');
+            const glyph = this.node('i', '', 'fa-solid fa-ellipsis');
+            glyph.setAttribute('aria-hidden', 'true');
+            more.append(glyph);
+            header.append(dragHandle, button, more); element.append(header);
+            record = { element, end, header, button, arrow, name, count, more }; this.folderNodes.set(folder.id, record);
         }
         record.name.textContent = folder.name; record.count.textContent = String(folder.total);
-        record.end.setAttribute('aria-label', `${folder.name}分组结束`);
         record.button.setAttribute('aria-label', `${folder.name}，${folder.total} 条`);
+        record.more.setAttribute('aria-label', `${folder.name}的分类操作`);
         return record;
     }
     clear() {
